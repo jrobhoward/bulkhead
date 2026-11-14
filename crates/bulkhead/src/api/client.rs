@@ -125,6 +125,10 @@ pub struct Client {
 struct Remote {
     address: String,
     tls: tokio_rustls::TlsConnector,
+    /// The operator's key, which signs each request (ROADMAP DA7).
+    signer: std::sync::Arc<bulkhead_keys::signature::Signer>,
+    /// The node's admin key, as pinned: each signature names it.
+    node: bulkhead_keys::PublicKey,
 }
 
 impl std::fmt::Debug for Client {
@@ -150,19 +154,24 @@ impl Client {
 
     /// A client for the node whose remote admin API listens at `address`
     /// (`host:port`), reached with `tls` (from
-    /// `bulkhead_host::transport::quic::admin_client_tls`: the operator's
-    /// key, and the node's pinned key).
+    /// `bulkhead_keys::admin_client_tls`: the operator's key, and the
+    /// node's pinned key), each request signed by `signer` (the same
+    /// operator's key) for the node whose admin key is `node`.
     #[cfg(feature = "tls")]
     #[must_use]
     pub fn remote(
         address: impl Into<String>,
         tls: std::sync::Arc<tokio_rustls::rustls::ClientConfig>,
+        signer: std::sync::Arc<bulkhead_keys::signature::Signer>,
+        node: bulkhead_keys::PublicKey,
     ) -> Self {
         Self {
             socket: PathBuf::new(),
             remote: Some(Remote {
                 address: address.into(),
                 tls: tokio_rustls::TlsConnector::from(tls),
+                signer,
+                node,
             }),
         }
     }
@@ -617,7 +626,19 @@ impl Client {
             let name = tokio_rustls::rustls::pki_types::ServerName::try_from("bulkhead")
                 .map_err(|e| ClientError::Http(e.to_string()))?;
             let tls = remote.tls.connect(name, stream).await.map_err(failed)?;
-            return exchange(tls, method, path, body).await;
+            let signed = bulkhead_keys::signature::Signed {
+                node: &remote.node,
+                method: method.as_str(),
+                target: path,
+                body: bulkhead_keys::signature::body_hash(
+                    body.as_ref().map_or(&[][..], |(_, b)| b.as_slice()),
+                ),
+            };
+            let auth = remote
+                .signer
+                .header(&signed)
+                .map_err(|e| ClientError::Http(e.to_string()))?;
+            return exchange(tls, method, path, body, Some(auth)).await;
         }
         self.send_local(method, path, body).await
     }
@@ -635,7 +656,7 @@ impl Client {
                 path: self.socket.clone(),
                 source,
             })?;
-        exchange(stream, method, path, body).await
+        exchange(stream, method, path, body, None).await
     }
 
     #[cfg(not(unix))]
@@ -650,13 +671,15 @@ impl Client {
 }
 
 /// One HTTP/1.1 request over `stream`, and its response with the body
-/// unread. Used by the Unix socket and TLS transports.
+/// unread. Used by the Unix socket and TLS transports; `auth` is the
+/// remote request's signature.
 #[cfg(any(unix, feature = "tls"))]
 async fn exchange<S>(
     stream: S,
     method: Method,
     path: &str,
     body: Option<(&str, Vec<u8>)>,
+    auth: Option<String>,
 ) -> Result<Response<Incoming>, ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -677,6 +700,9 @@ where
         .method(method)
         .uri(path)
         .header(hyper::header::HOST, "bulkhead");
+    if let Some(auth) = auth {
+        request = request.header(bulkhead_keys::signature::HEADER, auth);
+    }
     let payload = match body {
         Some((content_type, bytes)) => {
             request = request.header(hyper::header::CONTENT_TYPE, content_type);

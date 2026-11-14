@@ -23,6 +23,10 @@ pub enum NodeError {
     /// The node failed (storage, compilation).
     #[error("{0}")]
     Internal(String),
+    /// A remote request without a valid operator's signature (ROADMAP
+    /// DA7).
+    #[error("{0}")]
+    Unauthorized(String),
 }
 
 impl NodeError {
@@ -35,6 +39,7 @@ impl NodeError {
             Self::Invalid(_) => "invalid",
             Self::Refused(_) => "refused",
             Self::Internal(_) => "internal",
+            Self::Unauthorized(_) => "unauthorized",
         }
     }
 
@@ -47,6 +52,7 @@ impl NodeError {
             Self::Invalid(_) => 400,
             Self::Refused(_) => 422,
             Self::Internal(_) => 500,
+            Self::Unauthorized(_) => 401,
         }
     }
 }
@@ -61,6 +67,7 @@ impl NodeError {
             Self::Invalid(m) => Self::Invalid(add(m)),
             Self::Refused(m) => Self::Refused(add(m)),
             Self::Internal(m) => Self::Internal(add(m)),
+            Self::Unauthorized(m) => Self::Unauthorized(add(m)),
         }
     }
 }

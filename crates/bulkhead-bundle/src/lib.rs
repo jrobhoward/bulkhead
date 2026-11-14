@@ -29,15 +29,14 @@
 
 mod error;
 mod grant;
-mod key_file;
 mod load;
 pub mod manifest;
 mod policy;
 mod program;
 
+pub use bulkhead_keys::check_key_permissions;
 pub use error::BundleError;
 pub use grant::{EffectiveGrant, effective_grant};
-pub use key_file::check_key_permissions;
 pub use load::{PRIV_DIR, VerifiedBundle};
 pub use policy::{Granted, Grants, OperatorPolicy, SignerGrants};
 pub use program::{NATIVE_PLATFORMS, check_program};

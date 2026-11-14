@@ -8,6 +8,23 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Remote admin requests are signed (ROADMAP DA7, step 1): the CLI signs
+  each request with the operator's key (header `Bulkhead-Auth`, Ed25519
+  over the method, path and query, the body's SHA-256, the node's admin
+  public key, the time and a nonce), and the node checks it against its own
+  reading of the operators file before acting: within 60 s of its clock, a
+  nonce not seen in the last 120 s, the body as sent. An unsigned or
+  refused request is answered 401 (`unauthorized`) and recorded in the
+  audit log as `remote_admin_refused`; `remote_admin` records name the
+  operator the signature proves. A CLI from before this change cannot use
+  the remote admin API. New crate `bulkhead-keys`: the pinned keys, the
+  TLS with raw public keys, the operators file and the signature, moved
+  from `bulkhead_host::transport::quic::identity` (re-exported there) and
+  `bulkhead_bundle::check_key_permissions` (re-exported); its
+  `admin_server_tls` takes a loaded key (`load_key`, or `load_key_pem`
+  from bytes, which checks no file's mode). `Client::remote` takes the
+  signer and the node's key.
+
 - Every member node starts `bulkhead-resolve` (ROADMAP DA9, step 2), an
   app of its own of that name: beside the runner, or `[native] resolve`;
   a member without it refuses to start (a witness runs none). It gets the

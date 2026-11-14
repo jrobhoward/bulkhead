@@ -31,6 +31,22 @@ pub const MAX_BODY: usize = 512 << 20;
 pub const KEEPALIVE: Duration = Duration::from_secs(15);
 
 type Body = BoxBody<Bytes, Infallible>;
+
+/// A request body the admin API reads: hyper's from a connection, or one
+/// already read whole (a remote request, its signature checked first).
+pub(crate) trait AdminBody:
+    hyper::body::Body<Data = Bytes, Error: Into<Box<dyn std::error::Error + Send + Sync>>>
+    + Send
+    + 'static
+{
+}
+
+impl<T> AdminBody for T where
+    T: hyper::body::Body<Data = Bytes, Error: Into<Box<dyn std::error::Error + Send + Sync>>>
+        + Send
+        + 'static
+{
+}
 type Reply = Response<Body>;
 
 /// A whole body.
@@ -260,7 +276,7 @@ pub(crate) fn metrics_text(text: String) -> Reply {
     response
 }
 
-fn error(e: &NodeError) -> Reply {
+pub(crate) fn error(e: &NodeError) -> Reply {
     let status = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     json(
         status,
@@ -279,7 +295,7 @@ fn respond<T: Serialize>(result: Result<T, NodeError>) -> Reply {
 }
 
 /// `key=value` pairs from a query string.
-fn query(req: &Request<Incoming>) -> Vec<(String, String)> {
+fn query<B>(req: &Request<B>) -> Vec<(String, String)> {
     req.uri()
         .query()
         .unwrap_or("")
@@ -349,7 +365,7 @@ fn steps(text: &str) -> Result<Vec<u8>, NodeError> {
         .collect()
 }
 
-async fn body(req: Request<Incoming>) -> Result<(String, Vec<u8>), NodeError> {
+async fn body<B: AdminBody>(req: Request<B>) -> Result<(String, Vec<u8>), NodeError> {
     let content_type = req
         .headers()
         .get(hyper::header::CONTENT_TYPE)
@@ -364,7 +380,7 @@ async fn body(req: Request<Incoming>) -> Result<(String, Vec<u8>), NodeError> {
     Ok((content_type, bytes.to_vec()))
 }
 
-pub(crate) async fn handle(node: &Node, req: Request<Incoming>) -> Reply {
+pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
@@ -486,14 +502,19 @@ async fn failover(node: &Node, q: &[(String, String)]) -> Reply {
     }
 }
 
-async fn deploy(node: &Node, req: Request<Incoming>) -> Reply {
+async fn deploy<B: AdminBody>(node: &Node, req: Request<B>) -> Reply {
     match body(req).await {
         Ok((_, bundle)) => respond(node.deploy(&bundle).await),
         Err(e) => error(&e),
     }
 }
 
-async fn upgrade(node: &Node, app: &str, q: &[(String, String)], req: Request<Incoming>) -> Reply {
+async fn upgrade<B: AdminBody>(
+    node: &Node,
+    app: &str,
+    q: &[(String, String)],
+    req: Request<B>,
+) -> Reply {
     match (rollout(q), body(req).await) {
         (Ok(p), Ok((_, bundle))) => respond(node.upgrade(app, &bundle, &p).await),
         (Err(e), _) | (_, Err(e)) => error(&e),
@@ -501,13 +522,13 @@ async fn upgrade(node: &Node, app: &str, q: &[(String, String)], req: Request<In
 }
 
 /// `call` or `cast` to an app, an instance by pid, or a registered name.
-async fn send(
+async fn send<B: AdminBody>(
     node: &Node,
     kind: &str,
     id: &str,
     verb: &str,
     q: &[(String, String)],
-    req: Request<Incoming>,
+    req: Request<B>,
 ) -> Reply {
     let target = match kind {
         "apps" => Target::App(id.to_string()),
@@ -525,11 +546,11 @@ async fn send(
     }
 }
 
-async fn call(
+async fn call<B: AdminBody>(
     node: &Node,
     target: &Target,
     q: &[(String, String)],
-    req: Request<Incoming>,
+    req: Request<B>,
 ) -> Reply {
     let timeout = match param::<u64>(q, "timeout_ms") {
         Ok(t) => Duration::from_millis(t.unwrap_or(5_000)),

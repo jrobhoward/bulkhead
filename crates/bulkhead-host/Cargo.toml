@@ -48,6 +48,7 @@ deadpool-postgres = { workspace = true, optional = true }
 tokio-postgres-rustls = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 bulkhead-bundle = { workspace = true }
+bulkhead-keys = { workspace = true }
 bulkhead-native = { workspace = true, features = ["channel"] }
 bulkhead-priv-wire = { workspace = true }
 redb = { workspace = true }

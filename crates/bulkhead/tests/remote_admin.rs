@@ -1,6 +1,7 @@
-//! The remote admin API: TLS 1.3 with pinned keys both ways,
-//! the same routes as the admin socket, changes audited with the
-//! operator's name, and the operators file read again on reload.
+//! The remote admin API: TLS 1.3 with pinned keys both ways, each request
+//! signed by the operator's key and checked by the node (ROADMAP DA7), the
+//! same routes as the admin socket, changes audited with the operator's
+//! name, and the operators file read again on reload.
 
 #![cfg(unix)]
 #![allow(non_snake_case)]
@@ -72,8 +73,41 @@ impl Remote {
     }
 
     fn client(&self, operator: &Path, node_key: PublicKey) -> Client {
-        let tls = admin_client_tls(operator, node_key).unwrap();
-        Client::remote(self.address.clone(), Arc::new(tls))
+        let tls = admin_client_tls(operator, node_key.clone()).unwrap();
+        let signer = bulkhead_keys::signature::Signer::from_file(operator).unwrap();
+        Client::remote(
+            self.address.clone(),
+            Arc::new(tls),
+            Arc::new(signer),
+            node_key,
+        )
+    }
+
+    /// A `GET /v1/apps` over TLS as `operator` with `auth` as its
+    /// signature header, if any: its status.
+    async fn raw(&self, operator: &Path, auth: Option<&str>) -> u16 {
+        use http_body_util::Empty;
+        let tls = admin_client_tls(operator, self.node_key.clone()).unwrap();
+        let stream = tokio::net::TcpStream::connect(&self.address).await.unwrap();
+        let name = tokio_rustls::rustls::pki_types::ServerName::try_from("bulkhead").unwrap();
+        let tls = tokio_rustls::TlsConnector::from(Arc::new(tls))
+            .connect(name, stream)
+            .await
+            .unwrap();
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tls))
+                .await
+                .unwrap();
+        tokio::spawn(connection);
+        let mut request = hyper::Request::get("/v1/apps").header("host", "bulkhead");
+        if let Some(auth) = auth {
+            request = request.header(bulkhead_keys::signature::HEADER, auth);
+        }
+        let response = sender
+            .send_request(request.body(Empty::<bytes::Bytes>::new()).unwrap())
+            .await
+            .unwrap();
+        response.status().as_u16()
     }
 }
 
@@ -200,5 +234,91 @@ async fn shell____connect_to_a_contact____commands_go_to_that_node() {
             .any(|a| a["event"] == "remote_admin" && a["operator"] == "alice"),
         "{audited:?}"
     );
+    r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____listed_operator_without_a_signature____401_and_audited() {
+    let mut r = Remote::start().await;
+
+    let status = r.raw(&r.alice.clone(), None).await;
+
+    assert_eq!(status, 401);
+    let refused: Vec<_> = r
+        .node
+        .audit()
+        .into_iter()
+        .filter(|a| a["event"] == "remote_admin_refused")
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0]["error"].as_str().unwrap().contains("unsigned"),
+        "{refused:?}"
+    );
+    r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____a_signed_request_sent_twice____the_second_refused() {
+    use bulkhead_keys::signature::{Signed, Signer, body_hash, now_ms};
+    let mut r = Remote::start().await;
+    let signer = Signer::from_file(&r.alice).unwrap();
+    let header = signer.header_at(
+        &Signed {
+            node: &r.node_key,
+            method: "GET",
+            target: "/v1/apps",
+            body: body_hash(b""),
+        },
+        now_ms(),
+        [9; 16],
+    );
+
+    let first = r.raw(&r.alice.clone(), Some(&header)).await;
+    let second = r.raw(&r.alice.clone(), Some(&header)).await;
+
+    assert_eq!((first, second), (200, 401));
+    r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____signed_for_another_path____refused() {
+    use bulkhead_keys::signature::{Signed, Signer, body_hash, now_ms};
+    let mut r = Remote::start().await;
+    let signer = Signer::from_file(&r.alice).unwrap();
+    let header = signer.header_at(
+        &Signed {
+            node: &r.node_key,
+            method: "GET",
+            target: "/v1/instances",
+            body: body_hash(b""),
+        },
+        now_ms(),
+        [8; 16],
+    );
+
+    let status = r.raw(&r.alice.clone(), Some(&header)).await;
+
+    assert_eq!(status, 401);
+    r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____deploy_a_bundle____its_body_signed_and_the_app_runs() {
+    let mut r = Remote::start().await;
+    let alice = r.client(&r.alice, r.node_key.clone());
+    let bundle = common::app_bundle(
+        &r.node.key,
+        "echoer",
+        "1.0.0",
+        &common::native_app(),
+        common::fast(serde_json::json!({})),
+    );
+
+    let deployed = alice.deploy(bundle).await;
+    let apps = alice.list().await.unwrap();
+
+    assert!(deployed.is_ok(), "{deployed:?}");
+    assert!(apps.iter().any(|a| a.name == "echoer"), "{apps:?}");
     r.node.shutdown().await;
 }

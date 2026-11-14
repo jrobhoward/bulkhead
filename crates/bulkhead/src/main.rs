@@ -542,12 +542,20 @@ fn client(args: &Cli) -> anyhow::Result<Client> {
 /// `node_key`, as the operator whose private key is at `key`.
 #[cfg(feature = "tls")]
 fn remote_client(address: &str, node_key: &str, key: &std::path::Path) -> anyhow::Result<Client> {
-    let node_key = node_key
+    let node_key: bulkhead_keys::PublicKey = node_key
         .parse()
         .map_err(|e| anyhow::anyhow!("node key {node_key}: {e}"))?;
-    let tls = bulkhead_host::transport::quic::admin_client_tls(key, node_key)
+    let tls = bulkhead_keys::admin_client_tls(key, node_key.clone())
         .with_context(|| format!("key {}", key.display()))?;
-    Ok(Client::remote(address, std::sync::Arc::new(tls)))
+    // The same key signs each request, which the node checks itself.
+    let signer = bulkhead_keys::signature::Signer::from_file(key)
+        .with_context(|| format!("key {}", key.display()))?;
+    Ok(Client::remote(
+        address,
+        std::sync::Arc::new(tls),
+        std::sync::Arc::new(signer),
+        node_key,
+    ))
 }
 
 /// Without TLS there is no remote admin client.

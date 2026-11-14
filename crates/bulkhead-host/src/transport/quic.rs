@@ -53,7 +53,7 @@ pub use identity::{
     parse_operators, presented_key, public_key_of,
 };
 
-use identity::{Loaded, PinnedKeys};
+use identity::Loaded;
 
 use super::lane::{Class, Lane, LaneStats, Ticket};
 use super::liveness::NodeEvent;
@@ -171,7 +171,7 @@ fn configs(
     idle_timeout: Duration,
 ) -> Result<(quinn::ServerConfig, quinn::ClientConfig), HostError> {
     let provider = Arc::new(default_provider());
-    let pinned = Arc::new(PinnedKeys::new(loaded.clone()));
+    let pinned = Arc::new(identity::pinned(loaded.clone()));
     let mut server = rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(tls_error)?

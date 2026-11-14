@@ -14,6 +14,7 @@ members = [
     "crates/bulkhead-fixture-sdk",
     "crates/bulkhead-host",
     "crates/bulkhead-ingress",
+    "crates/bulkhead-keys",
     "crates/bulkhead-resolve",
     "crates/bulkhead-modbus",
     "crates/bulkhead-modbus-client",
@@ -88,6 +89,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 # Parses peers' raw public keys (rustls' own verifier crate).
 rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
+# Apache-2.0 AND ISC. Already in the tree through rustls; the admin API's
+# request signatures (Ed25519) and their body hashes (SHA-256).
+ring = "0.17"
 base64 = "0.23"
 # SQL datasources: Postgres, pooled, TLS on rustls with ring.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
@@ -120,6 +124,7 @@ bulkhead-modbus-client = { path = "crates/bulkhead-modbus-client" }
 bulkhead-native = { path = "crates/bulkhead-native", default-features = false }
 bulkhead-priv-wire = { path = "crates/bulkhead-priv-wire" }
 bulkhead-sdk = { path = "crates/bulkhead-sdk" }
+bulkhead-keys = { path = "crates/bulkhead-keys" }
 bulkhead-sdk-macros = { path = "crates/bulkhead-sdk-macros" }
 # rustbridge's `experiment/wasm` branch adds bundle format 1.2 (manifest
 # extensions, trusted-key verification, signed file checksums; Bulkhead refuses

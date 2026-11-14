@@ -281,6 +281,10 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   app. Its `tests/` run it on a runtime of their own, as the node does;
   `examples/http-counter` is its example, `crates/bulkhead/tests/http.rs`
   runs it through a node.
+- `crates/bulkhead-keys`: pinned Ed25519 keys (nodes', operators'), TLS 1.3
+  with raw public keys, the operators file, and the remote admin request
+  signature (`signature`: the CLI signs, the node verifies, ROADMAP DA7).
+  Shared by the node, the CLI and drivers; no tokio.
 - `crates/bulkhead-resolve`: host names resolved outside the node (ROADMAP
   DA9): `config` (the nameservers, `resolv.conf` and hosts as text, into
   hickory's configuration, TCP only), `lookup` (the `bulkhead/resolve`

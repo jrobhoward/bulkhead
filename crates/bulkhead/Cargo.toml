@@ -58,6 +58,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 minisign = { workspace = true }
 bulkhead-bundle = { workspace = true }
+bulkhead-keys = { workspace = true }
 bulkhead-host = { workspace = true, optional = true }
 bulkhead-modbus = { workspace = true, optional = true }
 bulkhead-priv-wire = { workspace = true, optional = true }

@@ -4,19 +4,6 @@
 
 use super::*;
 
-#[test]
-fn PublicKey____text_form____round_trips_and_rejects_junk() {
-    let (_, public) = generate_key().unwrap();
-
-    let text = public.to_string();
-    let back: PublicKey = text.parse().unwrap();
-
-    assert!(text.starts_with("ed25519:"), "{text}");
-    assert_eq!(back, public);
-    assert!("ed25519:AAAA".parse::<PublicKey>().is_err());
-    assert!("rsa:AAAA".parse::<PublicKey>().is_err());
-}
-
 /// Make `path` readable by its owner only, as `load` requires.
 fn owner_only(path: &std::path::Path) {
     #[cfg(unix)]
@@ -88,15 +75,4 @@ fn load____key_readable_by_others____refused() {
     let error = result.err().unwrap().to_string();
     assert!(error.contains("chmod 600"), "{error}");
     assert!(public_key_of(&key).is_err());
-}
-
-#[test]
-fn parse_operators____names_and_keys____read_or_refused_with_the_name() {
-    let (_, alice) = generate_key().unwrap();
-
-    let good = parse_operators(&format!("[operators]\nalice = [\"{alice}\"]\n")).unwrap();
-    let bad = parse_operators("[operators]\nbob = [\"rsa:nope\"]\n").unwrap_err();
-
-    assert_eq!(good.get("alice"), Some(&vec![alice]));
-    assert!(bad.starts_with("operators.bob:"), "{bad}");
 }

@@ -262,6 +262,7 @@ dependencies = [
  "anyhow",
  "bulkhead-bundle",
  "bulkhead-host",
+ "bulkhead-keys",
  "bulkhead-modbus",
  "bulkhead-native",
  "bulkhead-priv-wire",
@@ -297,6 +298,7 @@ dependencies = [
 name = "bulkhead-bundle"
 version = "0.3.0"
 dependencies = [
+ "bulkhead-keys",
  "minisign",
  "proptest",
  "rstest",
@@ -392,6 +394,7 @@ dependencies = [
  "base64 0.23.1",
  "bulkhead-bundle",
  "bulkhead-host",
+ "bulkhead-keys",
  "bulkhead-native",
  "bulkhead-priv-wire",
  "bytes",
@@ -453,6 +456,23 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bulkhead-keys"
+version = "0.3.0"
+dependencies = [
+ "base64 0.23.1",
+ "rcgen",
+ "ring",
+ "rstest",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]
