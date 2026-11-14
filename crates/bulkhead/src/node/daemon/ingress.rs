@@ -458,6 +458,6 @@ fn granted_routes(spec: &InstanceSpec) -> bool {
         .contains(&bulkhead_bundle::manifest::Capability::HttpIncoming)
 }
 
-#[cfg(all(test, feature = "http"))]
+#[cfg(test)]
 #[path = "ingress_tests.rs"]
 mod tests;

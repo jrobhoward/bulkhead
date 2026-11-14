@@ -1,3 +1,5 @@
+// The driver's manifest exists only with the ingress.
+#![cfg(feature = "http")]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
