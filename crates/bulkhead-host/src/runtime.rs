@@ -38,6 +38,21 @@ pub type Elsewhere = Arc<dyn Fn(&str) -> Option<u32> + Send + Sync>;
 /// [`Elsewhere`] as the runtime holds it.
 type WeakElsewhere = std::sync::Weak<dyn Fn(&str) -> Option<u32> + Send + Sync>;
 
+/// Serves the node's end of a stream a driver opened into the admin API
+/// ([`Runtime::set_admin_streams`]).
+#[cfg(unix)]
+pub type AdminStreams = Arc<dyn Fn(std::os::unix::net::UnixStream) + Send + Sync>;
+
+/// [`AdminStreams`] as the runtime holds it.
+#[cfg(unix)]
+type WeakAdminStreams = std::sync::Weak<dyn Fn(std::os::unix::net::UnixStream) + Send + Sync>;
+
+/// The node's metrics as text ([`Runtime::set_metrics_text`]).
+pub type MetricsText = Arc<dyn Fn() -> String + Send + Sync>;
+
+/// [`MetricsText`] as the runtime holds it.
+type WeakMetricsText = std::sync::Weak<dyn Fn() -> String + Send + Sync>;
+
 /// A driver's call to `app` on the failover partner, where it runs now
 /// (`Request::CallApp`'s `partner`, ROADMAP DA2): `access-denied` unless
 /// the driver's profile forwards and its `may_call` lists the app;
@@ -83,6 +98,11 @@ pub(crate) struct RuntimeInner {
     /// partner (ROADMAP DA2). Weak: the closure holds the node's parts,
     /// the runtime among them, and its owner keeps it.
     elsewhere: RwLock<Option<WeakElsewhere>>,
+    /// Who serves a driver's admin streams, held weakly as `elsewhere` is.
+    #[cfg(unix)]
+    admin_streams: RwLock<Option<WeakAdminStreams>>,
+    /// Who renders the metrics a driver reads, held weakly.
+    metrics_text: RwLock<Option<WeakMetricsText>>,
 
     pub(crate) extensions: Vec<Arc<dyn Extension>>,
     transport: std::sync::OnceLock<Arc<dyn Transport>>,
@@ -134,6 +154,42 @@ impl RuntimeInner {
             .as_ref()?
             .upgrade()?;
         f(app)
+    }
+
+    /// A stream into the node's admin API for a driver: the node's end
+    /// handed to [`Runtime::set_admin_streams`]'s server, the other
+    /// returned to pass to the driver.
+    #[cfg(unix)]
+    pub(crate) fn admin_stream(&self) -> Result<std::os::unix::net::UnixStream, String> {
+        let serve = self
+            .admin_streams
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or("this node serves no admin streams")?;
+        let (node, driver) =
+            std::os::unix::net::UnixStream::pair().map_err(|e| format!("admin stream: {e}"))?;
+        serve(node);
+        Ok(driver)
+    }
+
+    /// The node's metrics as text: [`Runtime::set_metrics_text`]'s, or the
+    /// runtime's own.
+    pub(crate) fn metrics_text(self: &Arc<Self>) -> String {
+        let render = self
+            .metrics_text
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        match render {
+            Some(render) => render(),
+            None => Runtime {
+                inner: self.clone(),
+            }
+            .render_metrics(),
+        }
     }
 
     /// The HTTP route table as JSON, once an ingress has set one.
@@ -299,6 +355,9 @@ impl Runtime {
             http_routes: RwLock::default(),
             route_owners: RwLock::default(),
             elsewhere: RwLock::default(),
+            #[cfg(unix)]
+            admin_streams: RwLock::default(),
+            metrics_text: RwLock::default(),
             extensions,
             transport: std::sync::OnceLock::new(),
             pending_calls: PendingCalls::default(),
@@ -782,6 +841,28 @@ impl Runtime {
             .elsewhere
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::downgrade(elsewhere));
+    }
+
+    /// Serve the streams drivers open into the admin API (ROADMAP DA7):
+    /// `serve` gets the node's end of each and must answer only requests
+    /// an operator signed. Held weakly, as [`Runtime::set_elsewhere`]'s.
+    #[cfg(unix)]
+    pub fn set_admin_streams(&self, serve: &AdminStreams) {
+        *self
+            .inner
+            .admin_streams
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::downgrade(serve));
+    }
+
+    /// Render the metrics a driver reads (ROADMAP DA7), in place of
+    /// [`Runtime::render_metrics`]: the node adds its own. Held weakly.
+    pub fn set_metrics_text(&self, render: &MetricsText) {
+        *self
+            .inner
+            .metrics_text
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::downgrade(render));
     }
 
     /// Set this node's failover role (`primary`, `standby`, `down`) and tell

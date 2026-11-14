@@ -34,7 +34,10 @@
 //! [`Request::OpenSender`]: a channel of its own for one of the app's
 //! threads (ROADMAP AP1, spike S39). Version 14 added
 //! [`Request::CallApp`]: a call to an app by name, the node picking its
-//! instance as its HTTP ingress does (ROADMAP DA1).
+//! instance as its HTTP ingress does (ROADMAP DA1), later
+//! [`Request::Elsewhere`] and `CallApp`'s `partner` (DA2), and
+//! [`Request::AdminStream`] and [`Request::MetricsText`] (DA7), for the
+//! node's own drivers.
 //!
 //! A sender channel carries the same frames as the app's own channel, from
 //! one thread at any time, not only during a callback: `Request`s (only
@@ -607,6 +610,18 @@ pub enum Request {
         /// The app's name.
         app: String,
     },
+    /// A stream into the node's admin API, which requires each request's
+    /// operator signature (ROADMAP DA7): [`Answer::AdminStream`], the
+    /// descriptor passed on the descriptor socket before it. Only for a
+    /// driver whose profile has `admin` (the remote admin driver); refused
+    /// with [`NetError::Denied`] otherwise. Allowed on a sender channel
+    /// too.
+    AdminStream,
+    /// The node's metrics in the Prometheus text format:
+    /// [`Answer::MetricsText`]. Only for a driver whose profile has
+    /// `metrics` (the metrics driver, ROADMAP DA7); refused with
+    /// [`NetError::Denied`] otherwise. Allowed on a sender channel too.
+    MetricsText,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if takes a reference.
@@ -1276,6 +1291,11 @@ pub enum Answer {
     /// The node an app runs on now, if the failover partner
     /// ([`Request::Elsewhere`]).
     Elsewhere(Option<u32>),
+    /// A stream into the node's admin API ([`Request::AdminStream`]), its
+    /// descriptor passed before this answer.
+    AdminStream(Result<FdRef, NetError>),
+    /// The node's metrics ([`Request::MetricsText`]).
+    MetricsText(Result<String, NetError>),
 }
 
 /// A frame that could not be read.

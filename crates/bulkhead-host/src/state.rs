@@ -65,6 +65,10 @@ pub struct InstanceState {
     /// Whether to announce the HTTP route table: a driver app whose
     /// profile asks for it (ROADMAP DA1).
     announce_routes: bool,
+    /// A driver that may open admin streams (ROADMAP DA7).
+    pub(crate) admin: bool,
+    /// A driver that may read the node's metrics (ROADMAP DA7).
+    pub(crate) metrics: bool,
     /// The node's failover lease, for an instance bound to it
     /// ([`InstanceSpec::bound_to_lease`]).
     pub(crate) lease: Option<watch::Receiver<RunUntil>>,
@@ -102,6 +106,8 @@ impl InstanceState {
             host_objects,
             announce_role: spec.announce_role,
             announce_routes: spec.driver.as_ref().is_some_and(|d| d.routes),
+            admin: spec.driver.as_ref().is_some_and(|d| d.admin),
+            metrics: spec.driver.as_ref().is_some_and(|d| d.metrics),
             lease,
             services,
         })

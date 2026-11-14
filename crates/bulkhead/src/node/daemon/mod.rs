@@ -637,6 +637,8 @@ fn bind_drivers(
                     routes: d.routes,
                     calls_routed: false,
                     forward: false,
+                    admin: false,
+                    metrics: false,
                 },
             ))
         })

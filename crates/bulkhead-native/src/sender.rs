@@ -27,7 +27,8 @@ use crate::channel::{AppEnd, FromNode, Spin, ToNode};
 use crate::hot::{KvFrame, KvOp, KvReply};
 use crate::protocol::{
     self, Answer, Bytes, CallError, CastError, Envelope, FromApp, KvAnswer, KvError, KvRequest,
-    MetricError, MetricKind, MetricUpdate, Pid, Request, SenderChannel, SenderError, ToApp,
+    MetricError, MetricKind, MetricUpdate, NetError, Pid, Request, SenderChannel, SenderError,
+    ToApp,
 };
 
 /// One thread's channel to the node.
@@ -96,6 +97,36 @@ impl Sender {
     pub fn try_clone(&mut self) -> Result<Self, SenderError> {
         match self.request(Request::OpenSender) {
             Answer::Sender(result) => Self::from_channel(result?),
+            other => unexpected(&other),
+        }
+    }
+
+    /// A stream into the node's admin API (ROADMAP DA7), for a driver
+    /// whose profile has `admin`: each request on it must carry an
+    /// operator's signature.
+    ///
+    /// # Errors
+    ///
+    /// `denied` without the profile's flag, or why the node could not
+    /// make or pass it.
+    pub fn admin_stream(&mut self) -> Result<std::os::fd::OwnedFd, NetError> {
+        match self.request(Request::AdminStream) {
+            Answer::AdminStream(result) => {
+                take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => unexpected(&other),
+        }
+    }
+
+    /// The node's metrics in the Prometheus text format (ROADMAP DA7), for
+    /// a driver whose profile has `metrics`.
+    ///
+    /// # Errors
+    ///
+    /// `denied` without the profile's flag.
+    pub fn metrics_text(&mut self) -> Result<String, NetError> {
+        match self.request(Request::MetricsText) {
+            Answer::MetricsText(result) => result,
             other => unexpected(&other),
         }
     }

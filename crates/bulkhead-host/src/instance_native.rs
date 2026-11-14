@@ -932,6 +932,21 @@ impl InstanceTask {
                     let answer = Answer::Sender(port.open_sender());
                     port.send(&ToApp::Answer { id, answer });
                 }
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                Some(Incoming::Frame(FromApp::Request {
+                    id,
+                    request: request @ (Request::AdminStream | Request::MetricsText),
+                })) => {
+                    let allowed = crate::native::driver::Allowed {
+                        admin: state.admin,
+                        metrics: state.metrics,
+                    };
+                    let rt = state.ctx.rt.clone();
+                    let answer = crate::native::driver::answer(&rt, allowed, &request, |fd| {
+                        port.send_fd(fd, crate::native::Passed::Stream)
+                    });
+                    port.send(&ToApp::Answer { id, answer });
+                }
                 #[cfg(unix)]
                 Some(Incoming::Frame(FromApp::Request {
                     id,

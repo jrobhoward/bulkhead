@@ -434,6 +434,19 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 .native_register(kind, &name, &help, &labels, &buckets),
         )),
         Request::OpenSender => Handled::Now(Answer::Sender(Hub::open(hub))),
+        request @ (Request::AdminStream | Request::MetricsText) => {
+            let profile = ctx.spec.driver.as_ref();
+            let allowed = crate::native::driver::Allowed {
+                admin: profile.is_some_and(|d| d.admin),
+                metrics: profile.is_some_and(|d| d.metrics),
+            };
+            Handled::Now(crate::native::driver::answer(
+                &ctx.rt,
+                allowed,
+                &request,
+                |fd| hub.fds.send(fd, Passed::Stream),
+            ))
+        }
         Request::Elsewhere { app } => {
             let ctx = &hub.ctx;
             let routes = ctx.spec.driver.as_ref().is_some_and(|d| d.routes);

@@ -8,6 +8,16 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Protocol 14 gains `Request::AdminStream` and `Request::MetricsText`
+  (ROADMAP DA7, step 2), answered `Answer::AdminStream` (a descriptor
+  passed before it) and `Answer::MetricsText`, from a callback or a sender
+  channel, for a driver whose profile has the new `DriverProfile` flags
+  `admin` and `metrics` (`denied` otherwise). The node says who serves an
+  admin stream and renders the metrics with `Runtime::set_admin_streams`
+  and `Runtime::set_metrics_text` (held weakly). `app::Ctx`, `Sender` and
+  `AsyncSender` gain `admin_stream` and `metrics_text`. Nothing gives the
+  flags yet (steps 3 and 4).
+
 - Remote admin requests are signed (ROADMAP DA7, step 1): the CLI signs
   each request with the operator's key (header `Bulkhead-Auth`, Ed25519
   over the method, path and query, the body's SHA-256, the node's admin

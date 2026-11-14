@@ -142,6 +142,8 @@ pub(super) fn bind(
         routes: true,
         calls_routed: true,
         forward,
+        admin: false,
+        metrics: false,
     };
     let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
     Ok(Some((profile, args)))

@@ -217,6 +217,8 @@ pub async fn serve(
                 routes: true,
                 calls_routed: true,
                 forward: true,
+                admin: false,
+                metrics: false,
             },
         )]),
         ..RuntimeConfig::default()

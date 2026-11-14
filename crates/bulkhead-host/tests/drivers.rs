@@ -300,3 +300,103 @@ async fn driver____calls_routed____the_route_owners_past_accept_from_and_no_othe
     shop.kill();
     plain.kill();
 }
+
+/// A runtime whose app `drv` is a driver with the `admin` and `metrics`
+/// flags as given, the node's side of each played here: an admin stream
+/// answered `admin:<what it was sent>`, metrics rendered as one line.
+/// The hooks are returned to keep: the runtime holds them weakly.
+fn node_admin(
+    admin: bool,
+    metrics: bool,
+) -> (
+    Runtime,
+    LoadedApp,
+    bulkhead_host::AdminStreams,
+    bulkhead_host::MetricsText,
+) {
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native: native_config(),
+        drivers: BTreeMap::from([(
+            "drv".to_string(),
+            DriverProfile {
+                admin,
+                metrics,
+                ..DriverProfile::default()
+            },
+        )]),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let streams: bulkhead_host::AdminStreams = Arc::new(|mut stream| {
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut got = String::new();
+            stream.read_to_string(&mut got).unwrap();
+            stream.write_all(format!("admin:{got}").as_bytes()).unwrap();
+        });
+    });
+    let text: bulkhead_host::MetricsText = Arc::new(|| "node_metric 1\n".to_string());
+    rt.set_admin_streams(&streams);
+    rt.set_metrics_text(&text);
+    let code = rt.load_native(NativeCode {
+        path: native_fixtures().1.clone(),
+        kind: NativeProgram::Executable,
+    });
+    (rt, code, streams, text)
+}
+
+fn spawn(rt: &Runtime, code: &LoadedApp, app: &str) -> InstanceHandle {
+    let spec = InstanceSpec {
+        memory_max: 64 << 20,
+        callback_deadline: Duration::from_secs(5),
+        init_timeout: Duration::from_secs(5),
+        ..InstanceSpec::new(app, "1.0.0")
+    };
+    rt.spawn(code, spec).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____admin_and_metrics_flags____a_stream_to_the_node_and_its_metrics() {
+    let (rt, code, _streams, _text) = node_admin(true, true);
+    let d = spawn(&rt, &code, "drv");
+
+    let answered = ask(&d, "admin-stream GET /v1/apps").await;
+    let text = ask(&d, "metrics-text").await;
+    let from_sender = ask(&d, "sender-metrics-text").await;
+
+    assert_eq!(answered, "admin:GET /v1/apps");
+    assert_eq!(text, "node_metric 1\n");
+    assert_eq!(from_sender, "node_metric 1\n");
+    d.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____without_the_flags____admin_streams_and_metrics_denied() {
+    let (rt, code, _streams, _text) = node_admin(false, false);
+    let d = spawn(&rt, &code, "drv");
+
+    let stream = ask(&d, "admin-stream GET /v1/apps").await;
+    let text = ask(&d, "metrics-text").await;
+    let from_sender = ask(&d, "sender-metrics-text").await;
+
+    assert_eq!(stream, "err:Denied");
+    assert_eq!(text, "err:Denied");
+    assert_eq!(from_sender, "err:Denied");
+    d.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app____not_a_driver____admin_streams_and_metrics_denied() {
+    let (rt, code, _streams, _text) = node_admin(true, true);
+    let app = spawn(&rt, &code, "shop");
+
+    let stream = ask(&app, "admin-stream GET /v1/apps").await;
+    let text = ask(&app, "metrics-text").await;
+
+    assert_eq!(
+        (stream.as_str(), text.as_str()),
+        ("err:Denied", "err:Denied")
+    );
+    app.kill();
+}

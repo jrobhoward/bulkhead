@@ -482,6 +482,9 @@ impl Fixture {
                 Some((_, fd)) => accept_and_greet(std::os::fd::AsFd::as_fd(fd)),
                 None => "err:no such listener".into(),
             },
+            "admin-stream" | "metrics-text" | "sender-metrics-text" => {
+                driver_request(ctx, verb, rest)
+            }
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             "accept-fd" => {
                 let n: i32 = rest.parse().unwrap_or(-1);
@@ -922,4 +925,45 @@ fn forks(n: usize, mib: usize) -> String {
         pids.len(),
         pids.last().copied().unwrap_or(0)
     )
+}
+
+/// The node's own drivers' requests (ROADMAP DA7): `admin-stream <text>`
+/// writes `text` into a stream to the node's admin API and answers what
+/// the node sent back until it closed; `metrics-text` and
+/// `sender-metrics-text` (through a sender channel of a thread of its own)
+/// answer the node's metrics.
+fn driver_request(ctx: &mut Ctx, verb: &str, rest: &str) -> String {
+    match verb {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        "admin-stream" => match ctx.admin_stream() {
+            Ok(fd) => {
+                use std::io::{Read, Write};
+                let mut stream = std::os::unix::net::UnixStream::from(fd);
+                let mut got = String::new();
+                match stream
+                    .write_all(rest.as_bytes())
+                    .and_then(|()| stream.shutdown(std::net::Shutdown::Write))
+                    .and_then(|()| stream.read_to_string(&mut got))
+                {
+                    Ok(_) => got,
+                    Err(e) => format!("err:{e}"),
+                }
+            }
+            Err(e) => format!("err:{e:?}"),
+        },
+        "metrics-text" => match ctx.metrics_text() {
+            Ok(text) => text,
+            Err(e) => format!("err:{e:?}"),
+        },
+        "sender-metrics-text" => match ctx.sender() {
+            Ok(mut sender) => std::thread::spawn(move || match sender.metrics_text() {
+                Ok(text) => text,
+                Err(e) => format!("err:{e:?}"),
+            })
+            .join()
+            .unwrap_or_else(|_| "err:thread".into()),
+            Err(e) => format!("err:{e:?}"),
+        },
+        other => format!("err:unknown {other}"),
+    }
 }

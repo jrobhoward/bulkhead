@@ -291,6 +291,17 @@ pub struct DriverProfile {
     /// It may call an app on the failover partner where the app runs now
     /// (`Request::CallApp`'s `partner`), for a listener that forwards.
     pub forward: bool,
+    /// It may open streams into the node's admin API, each request on them
+    /// needing an operator's signature (`Request::AdminStream`, the remote
+    /// admin driver, ROADMAP DA7; [`Runtime::set_admin_streams`]).
+    ///
+    /// [`Runtime::set_admin_streams`]: crate::Runtime::set_admin_streams
+    pub admin: bool,
+    /// It may read the node's metrics (`Request::MetricsText`, the metrics
+    /// driver, ROADMAP DA7; [`Runtime::set_metrics_text`]).
+    ///
+    /// [`Runtime::set_metrics_text`]: crate::Runtime::set_metrics_text
+    pub metrics: bool,
 }
 
 /// A listening socket of a driver app's, by name.

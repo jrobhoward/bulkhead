@@ -519,6 +519,36 @@ impl Ctx {
         }
     }
 
+    /// A stream into the node's admin API (ROADMAP DA7), for a driver
+    /// whose profile has `admin`: each request on it must carry an
+    /// operator's signature.
+    ///
+    /// # Errors
+    ///
+    /// `denied` without the profile's flag, or why the node could not
+    /// make or pass it.
+    pub fn admin_stream(&mut self) -> Result<std::os::fd::OwnedFd, NetError> {
+        match self.request(Request::AdminStream) {
+            Answer::AdminStream(result) => {
+                take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => unexpected(&other),
+        }
+    }
+
+    /// The node's metrics in the Prometheus text format (ROADMAP DA7), for
+    /// a driver whose profile has `metrics`.
+    ///
+    /// # Errors
+    ///
+    /// `denied` without the profile's flag.
+    pub fn metrics_text(&mut self) -> Result<String, NetError> {
+        match self.request(Request::MetricsText) {
+            Answer::MetricsText(result) => result,
+            other => unexpected(&other),
+        }
+    }
+
     /// Call the app called `app` on this node, the instance its
     /// `instances.routing` picks for `msg` (a hash of the message's routing
     /// key, or round robin), and wait up to `timeout_ms` for the reply.

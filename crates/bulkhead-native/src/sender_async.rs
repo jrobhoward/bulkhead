@@ -160,6 +160,35 @@ impl AsyncSender {
         Casted(self.ask(Request::Cast { to, msg }))
     }
 
+    /// A stream into the node's admin API (ROADMAP DA7), as
+    /// [`Sender::admin_stream`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Sender::admin_stream`].
+    pub async fn admin_stream(&self) -> Result<std::os::fd::OwnedFd, crate::protocol::NetError> {
+        use crate::protocol::NetError;
+        match Answered(self.ask(Request::AdminStream)).await {
+            Answer::AdminStream(result) => {
+                crate::app::take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => protocol_error(&format!("AdminStream answered with {other:?}")),
+        }
+    }
+
+    /// The node's metrics as text (ROADMAP DA7), as
+    /// [`Sender::metrics_text`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Sender::metrics_text`].
+    pub async fn metrics_text(&self) -> Result<String, crate::protocol::NetError> {
+        match Answered(self.ask(Request::MetricsText)).await {
+            Answer::MetricsText(result) => result,
+            other => protocol_error(&format!("MetricsText answered with {other:?}")),
+        }
+    }
+
     /// Where the app called `app`, which does not run here, runs now, if
     /// on the failover partner (`Request::Elsewhere`): for a driver given
     /// the route table (ROADMAP DA2).
@@ -360,6 +389,17 @@ impl Drop for Asked {
         if let Some(Slot::Waiting(_)) = state.slots.get(&self.id) {
             state.slots.insert(self.id, Slot::Abandoned);
         }
+    }
+}
+
+/// A request's answer as it came, awaited.
+struct Answered(Asked);
+
+impl Future for Answered {
+    type Output = Answer;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Answer> {
+        self.0.poll_answer(cx)
     }
 }
 
