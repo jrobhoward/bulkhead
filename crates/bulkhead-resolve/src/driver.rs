@@ -26,13 +26,15 @@ use bulkhead_native::sender_async::AsyncSender;
 use bulkhead_sdk::net::TcpStream;
 use bulkhead_sdk::{App, CallRef, Ctx, Envelope, Reply};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::proto::op::Query;
+use hickory_resolver::proto::rr::{Name, RecordType};
 use hickory_resolver::{Hosts, Resolver};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::lookup::{self, Answer, Failure, RESOLVE_SCHEMA, Request};
-use crate::provider::{NodeStreams, Opened, Wanted};
+use crate::provider::{NodeStreams, OneStream, Opened, Wanted};
 
 /// The worker's lookup answered, cast to its own instance.
 pub const RESOLVED_SCHEMA: &str = "bulkhead/resolve-answered";
@@ -276,7 +278,10 @@ async fn run(start: Start) {
     tokio::task::spawn_local(sender.clone().pump());
     let (wanted_tx, mut wanted) = mpsc::unbounded_channel::<Wanted>();
     let (closed_tx, mut closed) = mpsc::unbounded_channel::<u64>();
-    let mut builder = Resolver::builder_with_config(config, NodeStreams::new(wanted_tx, closed_tx));
+    let mut builder = Resolver::builder_with_config(
+        config,
+        OneStream::new(NodeStreams::new(wanted_tx, closed_tx)),
+    );
     *builder.options_mut() = options;
     let mut resolver = match builder.build() {
         Ok(r) => r,
@@ -285,7 +290,8 @@ async fn run(start: Start) {
             std::process::exit(70);
         }
     };
-    resolver.set_hosts(Arc::new(hosts));
+    let hosts = Arc::new(hosts);
+    resolver.set_hosts(hosts.clone());
     let resolver = Rc::new(resolver);
 
     // Streams hickory wants: asked of the callback thread by id, answered
@@ -339,9 +345,9 @@ async fn run(start: Start) {
         });
     }
     while let Some(job) = jobs.recv().await {
-        let (sender, resolver) = (sender.clone(), resolver.clone());
+        let (sender, resolver, hosts) = (sender.clone(), resolver.clone(), hosts.clone());
         tokio::task::spawn_local(async move {
-            let answer = resolve(&resolver, &job.host).await;
+            let answer = resolve(&resolver, &hosts, &job.host).await;
             if let Some(m) = metrics {
                 sender.metric_add(m.lookups, 1.0);
                 if answer.failure.is_some() {
@@ -359,14 +365,36 @@ async fn run(start: Start) {
     }
 }
 
-/// `host`'s addresses, through hickory.
-async fn resolve(resolver: &Resolver<NodeStreams>, host: &str) -> Answer {
+/// `host`'s addresses: the hosts file's if it names the host, as libc's
+/// `files` source answers before DNS; otherwise through hickory.
+async fn resolve(resolver: &Resolver<OneStream>, hosts: &Hosts, host: &str) -> Answer {
     let name = match lookup::name(host) {
         Ok(name) => name,
         Err(e) => return Answer::failed(Failure::Invalid, e),
     };
+    if let Some(found) = from_hosts(hosts, &name) {
+        return Answer::found(found);
+    }
     match resolver.lookup_ip(name).await {
         Ok(found) => Answer::found(found.iter().collect()),
         Err(e) => Answer::failed(lookup::failure(&e), e.to_string()),
     }
+}
+
+/// `name`'s addresses in the hosts file, IPv4 and IPv6, if it names it.
+fn from_hosts(hosts: &Hosts, name: &Name) -> Option<Vec<std::net::IpAddr>> {
+    let mut fqdn = name.clone();
+    fqdn.set_fqdn(true);
+    let found: Vec<std::net::IpAddr> = [RecordType::A, RecordType::AAAA]
+        .into_iter()
+        .filter_map(|t| hosts.lookup_static_host(&Query::query(fqdn.clone(), t)))
+        .flat_map(|lookup| {
+            lookup
+                .answers()
+                .iter()
+                .filter_map(|r| r.data.ip_addr())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    (!found.is_empty()).then_some(found)
 }

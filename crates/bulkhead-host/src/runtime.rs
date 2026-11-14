@@ -521,6 +521,27 @@ impl Runtime {
         delivery::cast_wait(&self.inner, Origin::Host, to, msg, timeout).await
     }
 
+    /// `host`'s addresses on `port`, as apps' `connect_host`, egress and
+    /// datasources get them: through [`RuntimeConfig::resolver`]
+    /// (ROADMAP DA9), within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// [`ResolveError`](crate::ResolveError): no such name, no answer in
+    /// time, or no resolver.
+    pub async fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<Vec<std::net::SocketAddr>, crate::ResolveError> {
+        self.inner
+            .services
+            .names()
+            .resolve(host, port, timeout)
+            .await
+    }
+
     /// Call the app called `app` on node `node`, from this node's host. That
     /// node's pool for the app picks the instance under its
     /// `instances.routing`, as for one of its own callers.

@@ -264,3 +264,53 @@ async fn sql____session_state_set_by_one_call____not_seen_by_the_next() {
         "no transaction carried over: {savepoint}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sql____datasource_by_host_name____resolved_through_the_runtime_and_connected() {
+    let Some(pg) = Scratch::start_tcp() else {
+        return;
+    };
+    let mut ds = SqlDatasource::new("db.test", "postgres", "bulkhead");
+    ds.port = pg.port();
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        datasources: BTreeMap::from([("main".to_string(), ds)]),
+        native: common::native_config(),
+        // As a node's resolver driver would answer (ROADMAP DA9).
+        resolver: bulkhead_host::Resolver::Table(BTreeMap::from([(
+            "db.test".to_string(),
+            vec!["127.0.0.1".parse().unwrap()],
+        )])),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let app = common::sdk_app(&rt);
+    let a = up(&rt, &app, "a", 1);
+
+    let answered = ask(&a, &sql(&["query", "main", "SELECT 41 + 1"])).await;
+
+    assert!(answered.contains("42"), "{answered}");
+    a.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sql____datasource_host_name_unknown____unavailable_naming_it() {
+    let mut ds = SqlDatasource::new("nowhere.test", "postgres", "bulkhead");
+    ds.connect_timeout = Duration::from_millis(500);
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        datasources: BTreeMap::from([("main".to_string(), ds)]),
+        native: common::native_config(),
+        resolver: bulkhead_host::Resolver::Table(BTreeMap::new()),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let app = common::sdk_app(&rt);
+    let a = up(&rt, &app, "a", 1);
+
+    let answered = ask(&a, &sql(&["query", "main", "SELECT 1"])).await;
+
+    assert!(answered.starts_with("err:Unavailable"), "{answered}");
+    assert!(answered.contains("nowhere.test"), "{answered}");
+    a.kill();
+}

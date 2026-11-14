@@ -28,6 +28,11 @@ cat > /usr/local/etc/bulkhead/node.toml <<TOML
 node = 1
 data_dir = "/var/db/bulkhead"
 
+# The node's resolver (bulkhead-resolve) beside the helper's runner, in
+# every instance's jail.
+[native]
+runner = "/usr/local/libexec/bulkhead/bulkhead-runner"
+
 [priv]
 TOML
 cat > /usr/local/etc/bulkhead/priv.conf <<CONF

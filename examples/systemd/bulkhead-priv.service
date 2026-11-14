@@ -13,7 +13,9 @@
 #   install -m 0644 examples/systemd/bulkhead-priv.service /etc/systemd/system/bulkhead.service
 #   systemctl daemon-reload && systemctl enable --now bulkhead
 #
-# node.toml sets [priv] and leaves [native] cgroup unset. In place of
+# node.toml sets [priv], leaves [native] cgroup unset, and sets [native]
+# runner to the helper's runner, beside which the node finds
+# bulkhead-resolve and bulkhead-ingress. In place of
 # bulkhead.service (the node started directly), not beside it.
 [Unit]
 Description=Bulkhead node, under its privileged helper

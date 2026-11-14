@@ -6,8 +6,10 @@
 //! up.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bulkhead_bundle::manifest::AppManifest;
+use bulkhead_host::{AppDeployment, AppStatus, Apps, Runtime};
 
 use crate::node::config::NodeConfig;
 use crate::node::error::NodeError;
@@ -21,6 +23,75 @@ use crate::node::error::NodeError;
 pub(super) const INTENSITY: u32 = 20;
 pub(super) const PERIOD_MS: u64 = 10_000;
 pub(super) const BACKOFF_MS: (u64, u64) = (100, 1_000);
+
+/// How long a built-in driver's first instance has to start.
+const PREFLIGHT: Duration = Duration::from_secs(20);
+
+/// Start the built-in driver `deployment` on `apps`. One instance is
+/// started on its own first and must start within [`PREFLIGHT`]: the
+/// app's supervisor never gives up, so without this a broken install (a
+/// program the helper will not start, a library missing) would restart
+/// for good while the node waited, instead of being the node's error
+/// at start. That instance is then stopped, gracefully, and the app
+/// started under its supervisor.
+///
+/// # Errors
+///
+/// The first instance did not start (its exit reason), or the app did not.
+pub(super) async fn start(
+    rt: &Runtime,
+    apps: &Apps,
+    deployment: AppDeployment,
+) -> Result<(), NodeError> {
+    let name = deployment.manifest.app.name.clone();
+    let first = rt
+        .spawn(&deployment.app, deployment.spec.clone())
+        .map_err(|e| NodeError::Invalid(format!("{name} did not start: {e}")))?;
+    let mut state = first.subscribe_state();
+    let started = tokio::time::timeout(PREFLIGHT, async {
+        loop {
+            if state.borrow_and_update().handles_messages() {
+                return Ok(());
+            }
+            if let Some(reason) = first.exit_reason() {
+                return Err(reason);
+            }
+            if state.changed().await.is_err() {
+                return Err(first.wait().await);
+            }
+        }
+    })
+    .await;
+    first.shutdown(bulkhead_host::ExitReason::Shutdown);
+    if tokio::time::timeout(PREFLIGHT, first.wait()).await.is_err() {
+        first.kill();
+        let _ = first.wait().await;
+    }
+    match started {
+        Ok(Ok(())) => {}
+        Ok(Err(reason)) => {
+            return Err(NodeError::Invalid(format!(
+                "{name} did not start: {reason}"
+            )));
+        }
+        Err(_) => {
+            return Err(NodeError::Invalid(format!(
+                "{name} did not start within {} s",
+                PREFLIGHT.as_secs()
+            )));
+        }
+    }
+    let app = apps
+        .add(deployment)
+        .await
+        .map_err(|e| NodeError::Invalid(format!("{name} did not start: {e}")))?;
+    if let AppStatus::Failed(reason) = app.status() {
+        return Err(NodeError::Invalid(format!(
+            "{name} did not start: {reason}"
+        )));
+    }
+    Ok(())
+}
 
 /// Where the program `name` is: `explicit` (its `[native]` key), or
 /// beside the runner.

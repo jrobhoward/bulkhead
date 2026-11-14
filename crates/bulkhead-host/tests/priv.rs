@@ -515,3 +515,91 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     assert_eq!(renewed, "the renewed key");
     d.kill();
 }
+
+/// `bulkhead-resolve`, built where the node's tests build it (as the
+/// ordinary user, before a root run with `CARGO=/bin/true`).
+fn resolve_program() -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let target = root.join("target/fixtures/native");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let status = std::process::Command::new(cargo)
+        .current_dir(&root)
+        .args(["build", "-p", "bulkhead-resolve", "--target-dir"])
+        .arg(&target)
+        .status()
+        .unwrap();
+    assert!(status.success(), "building bulkhead-resolve failed");
+    target.join("debug/bulkhead-resolve")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____resolver____answers_from_hosts_and_reaches_its_nameserver_through_the_node() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let Some(started) = helper("helper____resolver") else {
+        return;
+    };
+    // A nameserver that accepts and hangs up: the driver's stream to it
+    // is the node's to open, from outside the instance's fences.
+    let nameserver = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let ns = nameserver.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counted = accepted.clone();
+    std::thread::spawn(move || {
+        for stream in nameserver.incoming() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        resolver: bulkhead_host::Resolver::App("bulkhead-resolve".into()),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let dir = privhelper::dir_owned(&started.dir.path().join("prog"), started.node_uid, 0o755);
+    let code = rt.load_native(NativeCode {
+        path: privhelper::copy_owned(&resolve_program(), &dir, started.node_uid),
+        kind: NativeProgram::Executable,
+    });
+    // As the node's manifest for it (`node/daemon/resolve.rs`).
+    let spec = serde_json::json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "lifecycle": { "start_args": {
+            "nameservers": [ns.to_string()],
+            "resolv_conf": "options timeout:1 attempts:1\n",
+            "hosts": "10.1.2.3 db.internal\n",
+        } },
+        "limits": { "memory_max": "64MiB" },
+        "messaging_acl": { "accept_from": ["bulkhead-resolve"], "may_call": ["bulkhead-resolve"] },
+        "capabilities": { "bulkhead:sockets": {
+            "connect": [{ "cidr": format!("{}/32", ns.ip()), "ports": ns.port().to_string() }],
+        } },
+    });
+    let apps = rt.start_apps(Vec::new()).await.unwrap();
+    apps.add(bulkhead_host::AppDeployment::new(
+        common::app_manifest("bulkhead-resolve", spec),
+        code,
+    ))
+    .await
+    .unwrap();
+
+    let hosted = rt.resolve("db.internal", 5432, LONG).await;
+    let elsewhere = rt.resolve("svc.test", 80, LONG).await;
+
+    assert_eq!(hosted, Ok(vec!["10.1.2.3:5432".parse().unwrap()]));
+    assert!(
+        matches!(elsewhere, Err(bulkhead_host::ResolveError::Temporary(_))),
+        "{elsewhere:?}"
+    );
+    assert!(
+        accepted.load(Ordering::SeqCst) >= 1,
+        "no stream reached the nameserver"
+    );
+    apps.stop().await;
+}

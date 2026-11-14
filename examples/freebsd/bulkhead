@@ -9,6 +9,9 @@
 #   as examples/systemd/priv.conf but with no cgroup)
 #   sysrc bulkhead_enable=YES && service bulkhead start
 #
+# node.toml sets [priv] and [native] runner to the helper's runner,
+# beside which the node finds bulkhead-resolve (and bulkhead-ingress).
+#
 # PROVIDE: bulkhead
 # REQUIRE: NETWORKING
 # KEYWORD: shutdown

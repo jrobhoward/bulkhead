@@ -143,8 +143,8 @@ impl Names {
             .collect())
     }
 
-    /// A call to the driver `app`; while it is not running (a restart),
-    /// tried again until `timeout`.
+    /// A call to the driver `app`; while it is not running, or if it ends
+    /// before answering, tried again until `timeout`.
     async fn ask(
         &self,
         app: &str,
@@ -170,10 +170,15 @@ impl Names {
             drop(rt);
             match result {
                 Ok(reply) => break reply,
-                Err(CallError::Noproc) if Instant::now() + RETRY_EVERY < deadline => {
+                // Not running, or ended while it looked the name up (a
+                // crash, a restart with changed files): a lookup changes
+                // nothing, so it is asked again.
+                Err(CallError::Noproc | CallError::Exited(_))
+                    if Instant::now() + RETRY_EVERY < deadline =>
+                {
                     tokio::time::sleep(RETRY_EVERY).await;
                 }
-                Err(CallError::Noproc) => {
+                Err(CallError::Noproc | CallError::Exited(_)) => {
                     return Err(ResolveError::Temporary(format!(
                         "{host}: the resolver ({app}) is not running"
                     )));

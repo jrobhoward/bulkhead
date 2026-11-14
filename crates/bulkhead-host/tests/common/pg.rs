@@ -35,15 +35,32 @@ pub fn pg_bin() -> Option<PathBuf> {
 }
 
 /// A Postgres server of its own, in a temporary directory, listening on a
-/// Unix socket only; stopped when dropped.
+/// Unix socket (and on loopback TCP if asked); stopped when dropped.
 pub struct Scratch {
     bin: PathBuf,
     dir: tempfile::TempDir,
+    /// Its port: [`PORT`] on the socket alone, a free one with TCP.
+    port: u16,
 }
 
 impl Scratch {
     /// Start one, or `None` (with a note) when Postgres is not installed.
     pub fn start() -> Option<Self> {
+        Self::start_on(None)
+    }
+
+    /// Start one listening on 127.0.0.1 too, on a free port
+    /// ([`Scratch::port`]); `None` without Postgres.
+    pub fn start_tcp() -> Option<Self> {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        Self::start_on(Some(port))
+    }
+
+    fn start_on(tcp: Option<u16>) -> Option<Self> {
         let Some(bin) = pg_bin() else {
             eprintln!(
                 "skipped: no Postgres (initdb, pg_ctl) found; install it or set BULKHEAD_PG_BIN"
@@ -67,8 +84,12 @@ impl Scratch {
             "initdb: {}",
             String::from_utf8_lossy(&ok.stderr)
         );
+        let (listen, port) = match tcp {
+            Some(port) => ("127.0.0.1", port),
+            None => ("", PORT),
+        };
         let opts = format!(
-            "-k {} -c listen_addresses='' -c fsync=off -p {PORT}",
+            "-k {} -c listen_addresses='{listen}' -c fsync=off -p {port}",
             dir.path().display()
         );
         let ok = Command::new(bin.join("pg_ctl"))
@@ -84,7 +105,12 @@ impl Scratch {
             "pg_ctl start: {}",
             String::from_utf8_lossy(&ok.stderr)
         );
-        Some(Self { bin, dir })
+        Some(Self { bin, dir, port })
+    }
+
+    /// Its port, on the socket and on TCP if it listens there.
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// The directory holding its Unix socket, as `host` for a client.

@@ -9,7 +9,7 @@
 #
 #   cargo build -p bulkhead -p bulkhead-priv -p example-board   # as a user
 #   cargo build -p bulkhead-native --bin bulkhead-runner
-#   cargo build -p bulkhead-resolve
+#   cargo build -p bulkhead-resolve -p bulkhead-ingress
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
@@ -21,6 +21,7 @@ install -m 0755 $T/bulkhead /usr/local/bin/bulkhead
 install -d -m 0755 /usr/local/libexec/bulkhead
 install -m 0755 $T/bulkhead-runner /usr/local/libexec/bulkhead/bulkhead-runner
 install -m 0755 $T/bulkhead-resolve /usr/local/libexec/bulkhead/bulkhead-resolve
+install -m 0755 $T/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress
 install -d -m 0755 /etc/bulkhead
 systemctl stop bulkhead 2>/dev/null || true
 rm -rf /var/lib/bulkhead
@@ -48,6 +49,11 @@ address = "127.0.0.1:8080"
 
 [buckets.board]
 durability = "disk"
+
+# The node's own drivers (bulkhead-resolve, bulkhead-ingress) beside the
+# helper's runner, in every instance's root.
+[native]
+runner = "/usr/local/libexec/bulkhead/bulkhead-runner"
 
 [priv]
 TOML

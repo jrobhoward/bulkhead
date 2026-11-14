@@ -172,11 +172,12 @@ impl Inner {
             path: self.program.clone(),
             kind: NativeProgram::Executable,
         });
-        self.apps
-            .add(AppDeployment::new(manifest(snapshot)?, code))
-            .await
-            .map_err(|e| NodeError::Invalid(format!("the resolver did not start: {e}")))?;
-        Ok(())
+        builtin::start(
+            &self.rt,
+            &self.apps,
+            AppDeployment::new(manifest(snapshot)?, code),
+        )
+        .await
     }
 }
 
@@ -239,7 +240,8 @@ impl Resolver {
         if *current == next {
             return Ok(false);
         }
-        inner.apps.kill(RESOLVE_APP).await;
+        // Lookups in flight end with it; the runtime asks the new one.
+        inner.apps.take_out(RESOLVE_APP).await;
         inner.start(&next).await.map_err(|e| e.to_string())?;
         *current = next;
         Ok(true)

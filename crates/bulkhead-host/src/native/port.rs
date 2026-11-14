@@ -811,9 +811,15 @@ mod process {
             .into_iter()
             .map(|(k, v)| Ok((k.to_string(), text(v)?)))
             .collect::<Result<_, String>>()?;
+        // The helper shows its runner's directory in every root: a
+        // program there (the node's own drivers, ROADMAP DA2, DA9) needs
+        // no bind of its own, and the directory is outside the helper's
+        // binds. Node config's `[native] runner` names the helper's.
+        let runner_dir = runner(config).parent().map(std::path::Path::to_path_buf);
         let binds = launch
             .dirs
             .into_iter()
+            .filter(|(path, writable)| *writable || Some(path) != runner_dir.as_ref())
             .map(|(path, writable)| {
                 Ok(bulkhead_priv_wire::Bind {
                     path: text(path.into_os_string())?,

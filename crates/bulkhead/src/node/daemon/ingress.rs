@@ -211,9 +211,7 @@ impl Ingress {
             kind: bulkhead_bundle::manifest::NativeProgram::Executable,
         });
         let deployment = AppDeployment::new(ingress_manifest(args)?, code);
-        apps.add(deployment)
-            .await
-            .map_err(|e| NodeError::Invalid(format!("the HTTP ingress did not start: {e}")))?;
+        super::builtin::start(rt, apps, deployment).await?;
         ingress.serving = true;
         tracing::info!(listeners = config.http.len(), "HTTP ingress driver started");
         Ok(ingress)
@@ -355,7 +353,7 @@ impl Ingress {
         if self.serving
             && let Some(apps) = &self.apps
         {
-            apps.kill(INGRESS_APP).await;
+            apps.take_out(INGRESS_APP).await;
         }
     }
 }

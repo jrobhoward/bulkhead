@@ -733,6 +733,27 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- Under the privileged helper the node's own drivers (`bulkhead-ingress`,
+  `bulkhead-resolve`) did not start: the node asked the helper to bind
+  their program's directory, the runner's, which every instance's root
+  shows and the helper's binds do not hold. The node no longer asks for
+  the runner's directory; node config under `[priv]` names the helper's
+  runner in `[native] runner`, beside which the node finds its drivers
+  (the e2e scripts and unit headers say so, and install
+  `bulkhead-ingress`). A built-in driver that cannot start is now the
+  node's error at start: one instance is started on its own first and
+  must start within 20 s, since the driver's supervisor never gives up
+  and the node would otherwise wait about two minutes and run on without
+  it. The ingress is stopped gracefully at shutdown, and the resolver on
+  a reload, rather than killed.
+- The resolver driver (ROADMAP DA9, step 4) answers a name the hosts file
+  holds from the file alone, as libc's `files` source does, keeps one
+  stream per nameserver for all its lookups (a burst of first lookups
+  opened one each, past its `max_sockets`), and replaces a stream the
+  nameserver closed. A lookup whose driver exits before answering is
+  asked again until its timeout. `Runtime::resolve` resolves through
+  `RuntimeConfig::resolver`.
+
 - Under the privileged helper a driver app could not read its files (a
   key the node's user owns, mode 0640): it runs as a user of its own. The
   node now shares each driver file with its driver through the helper at
