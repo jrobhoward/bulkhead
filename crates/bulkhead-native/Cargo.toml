@@ -29,6 +29,10 @@ runner = [
     "rustix/event",
 ]
 
+# `bulkhead_native::sender_async`: sender channels awaited on tokio
+# (spike S41, ROADMAP DA2), for a driver app.
+tokio = ["app", "dep:tokio"]
+
 [[bin]]
 name = "bulkhead-runner"
 path = "src/bin/bulkhead-runner.rs"
@@ -40,6 +44,7 @@ serde.workspace = true
 rustix = { workspace = true, optional = true }
 rustbridge-consumer = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "net", "sync"] }
 
 # The runner's sandbox, which is Linux only.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -53,6 +58,7 @@ libc = { version = "0.2", optional = true }
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["rt", "net", "sync", "time"] }
 rstest.workspace = true
 proptest.workspace = true
 

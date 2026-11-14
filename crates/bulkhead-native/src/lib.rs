@@ -39,5 +39,8 @@ pub mod app;
 #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "app"))]
 pub mod sender;
 
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "tokio"))]
+pub mod sender_async;
+
 #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "runner"))]
 pub mod runner;

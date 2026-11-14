@@ -937,6 +937,69 @@ impl AppEnd {
         }
     }
 
+    /// [`AppEnd::read_from_node`] without waiting, for an app that waits
+    /// on [`AppEnd::door`] itself (`sender_async`): `None` when nothing
+    /// is there yet, `Some(0)` once the node closed the ring and
+    /// everything is read.
+    ///
+    /// # Errors
+    ///
+    /// The node broke the ring.
+    pub fn try_read_from_node(&self, out: &mut [u8]) -> io::Result<Option<usize>> {
+        let ring = self.channel.to_app();
+        let n = ring.read(out)?;
+        if n > 0 || out.is_empty() {
+            if take_waiting(ring.writer_waiting()) {
+                self.ring_bell();
+            }
+            return Ok(Some(n));
+        }
+        if ring.is_closed() && !ring.is_readable() {
+            return Ok(Some(0));
+        }
+        Ok(None)
+    }
+
+    /// Whether the node wrote something not read yet, or closed the ring.
+    #[must_use]
+    pub fn is_readable(&self) -> bool {
+        let ring = self.channel.to_app();
+        ring.is_readable() || ring.is_closed()
+    }
+
+    /// Say this side sleeps until the node writes, before waiting for
+    /// [`AppEnd::door`] to be readable: the node then writes a byte to the
+    /// door after its next frame. `false`, and nothing said, when there is
+    /// something to read already. As [`Spin::block_until`] does before it
+    /// sleeps.
+    #[must_use]
+    pub fn arm_reader(&self) -> bool {
+        let ring = self.channel.to_app();
+        ring.reader_waiting().store(1, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if ring.is_readable() || ring.is_closed() {
+            ring.reader_waiting().store(0, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    /// Take back [`AppEnd::arm_reader`] after the wait.
+    pub fn disarm_reader(&self) {
+        self.channel
+            .to_app()
+            .reader_waiting()
+            .store(0, Ordering::SeqCst);
+    }
+
+    /// The door: the pipe the node writes a byte to when this side said
+    /// it sleeps, and closes when it has gone. An app that waits on it
+    /// itself makes it non-blocking.
+    #[must_use]
+    pub fn door(&self) -> BorrowedFd<'_> {
+        self.door.as_fd()
+    }
+
     /// Write some of `bytes` to the node, blocking until there is room.
     ///
     /// # Errors

@@ -52,6 +52,14 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `bulkhead_native::sender_async::AsyncSender` (feature `tokio`): a sender
+  channel whose calls are awaited on a tokio current-thread runtime, many
+  in flight from one thread's tasks, its answers read by a pump task that
+  spins for `sender_spin_us` and then waits for the door in tokio's
+  reactor (spike S41, ROADMAP DA2). `AppEnd::try_read_from_node`,
+  `arm_reader`, `disarm_reader`, `is_readable` and `door` for an app that
+  waits on the door itself.
+
 - `bulkhead_sdk::files::{read, write, open, create_dir, remove_file}` and
   `bulkhead_native::preopens::{open, create_dir, remove_file, Mode}`: files
   by guest path, opened under the preopen's directory descriptor on FreeBSD

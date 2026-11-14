@@ -1,0 +1,14 @@
+### S37, driver hyper (load 0.95 2.71 3.45, 17:19)
+GET ingress conns=1 body=0 tls=false: 14952 req/s, p50 65.6 µs, p99 97.2 µs, 80.6 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 10775 req/s, p50 92.0 µs, p99 116.7 µs, 175.2 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 51402 req/s, p50 421.5 µs, p99 2541.8 µs, 54.1 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 40069 req/s, p50 641.5 µs, p99 3405.8 µs, 77.2 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 44752 req/s, p50 511.6 µs, p99 2844.1 µs, 59.9 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 36510 req/s, p50 729.4 µs, p99 3667.1 µs, 82.7 µs CPU/req (node+instances), errors 0
+GET ingress conns=1 body=0 tls=false: 14982 req/s, p50 65.5 µs, p99 97.1 µs, 80.4 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 10716 req/s, p50 92.4 µs, p99 117.6 µs, 175.4 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 51784 req/s, p50 416.9 µs, p99 2500.4 µs, 53.8 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 41259 req/s, p50 648.7 µs, p99 3002.2 µs, 75.6 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 45045 req/s, p50 520.8 µs, p99 2801.6 µs, 59.6 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 35408 req/s, p50 744.0 µs, p99 3927.3 µs, 84.5 µs CPU/req (node+instances), errors 0
+### done

@@ -2977,6 +2977,25 @@ At 32 and 256 connections the driver serves 142 to 176% of the node's own reques
 - **`native_cost` and `cluster_throughput`** (run with each setting; neither has sender channels in its calls) moved within their run-to-run spread: on the Pi calls in flight within 2% and sequential calls within 11%, a request from a sender thread 2.9 µs throughout; on the 16-core machine within its usual 10 to 15%.
 - **Not measured:** FreeBSD (function checks only); a node side that spins only while its worker has nothing else to do (below, "Not measured yet").
 
+## 2026-11-13: the ingress driver on hyper and tokio (S41)
+
+S37's harness with S41's driver (`spikes/s37/driver-hyper`: hyper and rustls on a tokio current-thread runtime per worker thread, calls through `bulkhead_native::sender_async`) and DA1's driver, each beside the node's own ingress, two rounds each. Raspberry Pi 5 (Linux 7.0), nice 10, load under 1 at each start; the 16-core machine, no VM running, kernel tasks stuck on a USB device holding the load near 2 at no CPU (load under 3 at each start). Results: `spikes/s37/results/{pi5,x86}-s41-*2026-11-13.txt`; the spike's README has the table and what profiling changed.
+
+| | DA1's loop | S41's driver |
+| --- | --- | --- |
+| Pi, GET, 32 connections (share of the node's requests, CPU against the node's) | 84–91%, 1.18–1.27× | 75–76%, 1.46–1.48× |
+| Pi, HTTPS GET, 32 | 86–95%, 1.18–1.29× | 75%, 1.48× |
+| Pi, POST 1 KiB, 32 | 87–89%, 1.24–1.25× | 70%, 1.58× |
+| Pi, GET, 1 connection, p50 (the node's: 66 µs) | 83 µs | 91–92 µs |
+| 16-core, GET, 32 | 159–160%, 1.05× | 147–153%, 1.07–1.08× |
+| 16-core, GET, 1 connection, p50 (the node's: 94 µs) | 96–100 µs | 106–107 µs |
+
+- **On the 16-core machine** S41's driver is 4 to 10% behind DA1's loop at 32 connections and within Phase 7's target but for one round of HTTPS on one connection (21% above the node's p50).
+- **On the Pi** it is 11 to 21% behind DA1's loop at 32 connections, meets the target for GET and HTTPS there, not for POST (1.58 times the CPU), and one connection's p50 is 26 to 39% above the node's (DA1's loop: 18 to 27%).
+- **Two bugs in the first build** cost most of the gap: a 64 KiB `memset` at each look at the ring (6.5% of all CPU on the Pi), and the pump asleep when each answer came. Before them: 63 to 65% at 32 connections on the Pi, at 1.72 to 1.98 times the CPU.
+- **Chosen for DA2** with the user. What is left (tokio waking its reactor after each answer, a second task per answer) is ROADMAP PF2.
+- **Not measured:** FreeBSD (function checks only).
+
 ## Not measured yet
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.

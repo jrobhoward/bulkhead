@@ -33,7 +33,7 @@ use crate::protocol::{
 /// One thread's channel to the node.
 #[derive(Debug)]
 pub struct Sender {
-    end: AppEnd,
+    pub(crate) end: AppEnd,
     next_id: u64,
     /// Bucket handles the node gave this sender, by bucket name.
     handles: HashMap<String, u32>,
@@ -70,6 +70,20 @@ impl Sender {
             inbuf: Vec::new(),
             _one_thread: PhantomData,
         })
+    }
+
+    /// A sender on `end`, for tests that play the node.
+    #[cfg(test)]
+    pub(crate) fn for_tests(end: AppEnd) -> Self {
+        Self {
+            end,
+            next_id: 0,
+            handles: HashMap::new(),
+            started: HashMap::new(),
+            out: Vec::new(),
+            inbuf: Vec::new(),
+            _one_thread: PhantomData,
+        }
     }
 
     /// Another sender, for another thread, asked of the node through this
@@ -419,7 +433,7 @@ impl Sender {
         }
     }
 
-    fn send_request(&mut self, request: Request) -> u64 {
+    pub(crate) fn send_request(&mut self, request: Request) -> u64 {
         self.next_id += 1;
         let id = self.next_id;
         self.send(&FromApp::Request { id, request });
@@ -507,14 +521,14 @@ fn unexpected(answer: &Answer) -> ! {
     protocol_error(&format!("unexpected answer {answer:?}"))
 }
 
-fn unexpected_frame(frame: &ToApp) -> ! {
+pub(crate) fn unexpected_frame(frame: &ToApp) -> ! {
     protocol_error(&format!("unexpected frame on a sender: {frame:?}"))
 }
 
-fn protocol_error(why: &str) -> ! {
+pub(crate) fn protocol_error(why: &str) -> ! {
     crate::app::protocol_error(&format!("sender: {why}"))
 }
 
-fn gone() -> ! {
+pub(crate) fn gone() -> ! {
     crate::app::gone()
 }

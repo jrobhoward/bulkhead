@@ -1,0 +1,107 @@
+### S37, driver da1 (load 0.95 2.85 3.43, 17:23)
+# S37 run: Linux 7.0.0-1023-raspi aarch64, 4 CPUs, pool 4, drivers 4 (s37-driver-da1), 4 node and client workers
+# start load: 0.95 2.85 3.43
+## round 1 (load 0.95)
+GET ingress conns=1 body=0 tls=false: 14908 req/s, p50 66.3 µs, p99 97.4 µs, 80.4 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 11869 req/s, p50 83.0 µs, p99 107.2 µs, 161.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 53049 req/s, p50 387.6 µs, p99 2514.9 µs, 53.0 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 48446 req/s, p50 430.7 µs, p99 3136.3 µs, 61.5 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=false: 51100 req/s, p50 3941.7 µs, p99 16791.7 µs, 57.5 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=false: 43688 req/s, p50 5229.4 µs, p99 17591.0 µs, 72.2 µs CPU/req (node+instances), errors 0
+GET ingress conns=1 body=0 tls=true: 12733 req/s, p50 76.7 µs, p99 112.8 µs, 88.7 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=true: 10500 req/s, p50 94.8 µs, p99 119.6 µs, 169.6 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 45010 req/s, p50 509.7 µs, p99 2798.1 µs, 59.5 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 43683 req/s, p50 514.5 µs, p99 3014.3 µs, 68.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=true: 45653 req/s, p50 4576.1 µs, p99 19273.7 µs, 61.8 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=true: 37112 req/s, p50 5801.2 µs, p99 23221.7 µs, 82.4 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1024 tls=false: 12680 req/s, p50 78.5 µs, p99 95.3 µs, 104.7 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1024 tls=false: 10576 req/s, p50 93.0 µs, p99 122.1 µs, 177.8 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1024 tls=false: 39702 req/s, p50 592.4 µs, p99 3062.8 µs, 70.5 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1024 tls=false: 36202 req/s, p50 655.8 µs, p99 3553.8 µs, 84.5 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=65536 tls=false: 1846 req/s, p50 467.1 µs, p99 883.3 µs, 604.6 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=65536 tls=false: 1435 req/s, p50 615.2 µs, p99 1037.4 µs, 870.8 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=65536 tls=false: 1862 req/s, p50 3261.4 µs, p99 62135.1 µs, 1540.0 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=65536 tls=false: 1158 req/s, p50 9924.5 µs, p99 62095.1 µs, 2716.3 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1048576 tls=false: 127 req/s, p50 7854.4 µs, p99 9103.8 µs, 8825.8 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1048576 tls=false: 89 req/s, p50 11144.9 µs, p99 12195.2 µs, 13176.2 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1048576 tls=false: 113 req/s, p50 309844.1 µs, p99 500061.1 µs, 28792.2 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1048576 tls=false: 72 req/s, p50 467743.1 µs, p99 807653.6 µs, 46901.8 µs CPU/req (node+instances), errors 0
+## round 2 (load 5.30)
+GET ingress conns=1 body=0 tls=false: 14702 req/s, p50 66.9 µs, p99 98.2 µs, 81.5 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 11805 req/s, p50 83.3 µs, p99 108.5 µs, 161.5 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 52920 req/s, p50 364.8 µs, p99 2576.7 µs, 52.7 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 45075 req/s, p50 492.5 µs, p99 3306.9 µs, 66.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=false: 51613 req/s, p50 3697.3 µs, p99 17887.7 µs, 56.2 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=false: 41073 req/s, p50 5156.6 µs, p99 20628.6 µs, 76.4 µs CPU/req (node+instances), errors 0
+GET ingress conns=1 body=0 tls=true: 12940 req/s, p50 76.5 µs, p99 102.6 µs, 87.0 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=true: 10377 req/s, p50 95.4 µs, p99 122.4 µs, 173.9 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 46218 req/s, p50 426.3 µs, p99 2838.4 µs, 58.9 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 39656 req/s, p50 593.8 µs, p99 3368.9 µs, 74.8 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=true: 45225 req/s, p50 4570.5 µs, p99 20179.0 µs, 62.7 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=true: 37842 req/s, p50 5898.9 µs, p99 20387.8 µs, 81.0 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1024 tls=false: 12635 req/s, p50 78.6 µs, p99 95.7 µs, 105.2 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1024 tls=false: 10690 req/s, p50 92.5 µs, p99 120.0 µs, 178.3 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1024 tls=false: 40924 req/s, p50 537.2 µs, p99 3046.5 µs, 68.1 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1024 tls=false: 35639 req/s, p50 661.4 µs, p99 3642.0 µs, 85.4 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=65536 tls=false: 1823 req/s, p50 468.6 µs, p99 880.1 µs, 614.5 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=65536 tls=false: 1395 req/s, p50 638.2 µs, p99 1051.4 µs, 894.0 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=65536 tls=false: 1881 req/s, p50 3181.7 µs, p99 62158.9 µs, 1515.2 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=65536 tls=false: 1135 req/s, p50 25946.8 µs, p99 58996.6 µs, 2912.6 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1048576 tls=false: 146 req/s, p50 6772.6 µs, p99 8366.6 µs, 7770.9 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1048576 tls=false: 104 req/s, p50 9682.2 µs, p99 9994.3 µs, 11256.0 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1048576 tls=false: 122 req/s, p50 216482.1 µs, p99 698016.7 µs, 26642.0 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1048576 tls=false: 81 req/s, p50 447659.3 µs, p99 568826.2 µs, 40508.1 µs CPU/req (node+instances), errors 0
+### S37, driver hyper (load 0.93 3.67 3.97, 17:34)
+# S37 run: Linux 7.0.0-1023-raspi aarch64, 4 CPUs, pool 4, drivers 4 (s37-driver-hyper), 4 node and client workers
+# start load: 0.93 3.67 3.97
+## round 1 (load 0.93)
+GET ingress conns=1 body=0 tls=false: 15196 req/s, p50 64.6 µs, p99 94.9 µs, 78.2 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 10829 req/s, p50 92.3 µs, p99 115.4 µs, 174.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 53914 req/s, p50 366.3 µs, p99 2479.2 µs, 51.8 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 40808 req/s, p50 630.3 µs, p99 3382.7 µs, 76.2 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=false: 52476 req/s, p50 3702.2 µs, p99 17439.8 µs, 55.1 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=false: 37116 req/s, p50 5722.9 µs, p99 23025.8 µs, 86.0 µs CPU/req (node+instances), errors 0
+GET ingress conns=1 body=0 tls=true: 13128 req/s, p50 74.1 µs, p99 111.6 µs, 86.0 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=true: 10205 req/s, p50 97.9 µs, p99 123.9 µs, 178.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 46832 req/s, p50 482.0 µs, p99 2777.3 µs, 57.1 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 34794 req/s, p50 753.5 µs, p99 3904.6 µs, 86.0 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=true: 46287 req/s, p50 4421.7 µs, p99 18920.3 µs, 60.8 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=true: 33474 req/s, p50 6450.4 µs, p99 23772.1 µs, 92.9 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1024 tls=false: 12739 req/s, p50 77.4 µs, p99 97.1 µs, 103.5 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1024 tls=false: 10026 req/s, p50 97.9 µs, p99 131.9 µs, 186.3 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1024 tls=false: 41202 req/s, p50 548.0 µs, p99 3039.9 µs, 67.6 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1024 tls=false: 28592 req/s, p50 928.2 µs, p99 4192.7 µs, 108.2 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=65536 tls=false: 2307 req/s, p50 433.9 µs, p99 518.4 µs, 483.8 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=65536 tls=false: 1480 req/s, p50 677.0 µs, p99 765.1 µs, 840.0 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=65536 tls=false: 2143 req/s, p50 11650.6 µs, p99 42667.0 µs, 1381.4 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=65536 tls=false: 1192 req/s, p50 23512.6 µs, p99 65927.0 µs, 2839.3 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1048576 tls=false: 114 req/s, p50 8733.7 µs, p99 9748.3 µs, 9685.0 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1048576 tls=false: 81 req/s, p50 12279.9 µs, p99 13183.6 µs, 14471.7 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1048576 tls=false: 112 req/s, p50 278568.6 µs, p99 437228.0 µs, 28612.4 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1048576 tls=false: 66 req/s, p50 485480.4 µs, p99 586818.9 µs, 54793.9 µs CPU/req (node+instances), errors 0
+## round 2 (load 6.06)
+GET ingress conns=1 body=0 tls=false: 14918 req/s, p50 65.0 µs, p99 99.9 µs, 80.0 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=false: 11018 req/s, p50 91.0 µs, p99 113.9 µs, 174.5 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=false: 53865 req/s, p50 345.3 µs, p99 2494.6 µs, 51.4 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=false: 39885 req/s, p50 645.8 µs, p99 3449.2 µs, 77.3 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=false: 52852 req/s, p50 3744.5 µs, p99 17053.2 µs, 54.9 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=false: 36380 req/s, p50 5829.7 µs, p99 23462.7 µs, 87.2 µs CPU/req (node+instances), errors 0
+GET ingress conns=1 body=0 tls=true: 13140 req/s, p50 74.6 µs, p99 110.3 µs, 85.5 µs CPU/req (node+instances), errors 0
+GET driver conns=1 body=0 tls=true: 10217 req/s, p50 97.5 µs, p99 124.0 µs, 176.9 µs CPU/req (node+instances), errors 0
+GET ingress conns=32 body=0 tls=true: 46724 req/s, p50 416.0 µs, p99 2836.1 µs, 56.9 µs CPU/req (node+instances), errors 0
+GET driver conns=32 body=0 tls=true: 34876 req/s, p50 763.6 µs, p99 3705.2 µs, 86.1 µs CPU/req (node+instances), errors 0
+GET ingress conns=256 body=0 tls=true: 46615 req/s, p50 4327.6 µs, p99 19631.1 µs, 60.7 µs CPU/req (node+instances), errors 0
+GET driver conns=256 body=0 tls=true: 33345 req/s, p50 6506.0 µs, p99 23604.3 µs, 93.3 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1024 tls=false: 12911 req/s, p50 76.6 µs, p99 92.8 µs, 101.9 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1024 tls=false: 10040 req/s, p50 98.0 µs, p99 129.9 µs, 183.6 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1024 tls=false: 41284 req/s, p50 523.9 µs, p99 3048.0 µs, 67.4 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1024 tls=false: 28650 req/s, p50 936.2 µs, p99 4141.6 µs, 108.1 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=65536 tls=false: 2340 req/s, p50 432.3 µs, p99 520.1 µs, 480.3 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=65536 tls=false: 1544 req/s, p50 649.9 µs, p99 727.9 µs, 807.4 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=65536 tls=false: 2146 req/s, p50 12646.6 µs, p99 40439.6 µs, 1382.0 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=65536 tls=false: 1194 req/s, p50 21786.5 µs, p99 67209.3 µs, 2836.0 µs CPU/req (node+instances), errors 0
+POST ingress conns=1 body=1048576 tls=false: 127 req/s, p50 7888.5 µs, p99 9041.7 µs, 8806.0 µs CPU/req (node+instances), errors 0
+POST driver conns=1 body=1048576 tls=false: 99 req/s, p50 10041.5 µs, p99 11058.4 µs, 11935.2 µs CPU/req (node+instances), errors 0
+POST ingress conns=32 body=1048576 tls=false: 115 req/s, p50 282918.3 µs, p99 547639.6 µs, 27932.2 µs CPU/req (node+instances), errors 0
+POST driver conns=32 body=1048576 tls=false: 68 req/s, p50 466005.5 µs, p99 706329.5 µs, 52867.6 µs CPU/req (node+instances), errors 0
+### done (load 5.61 5.43 4.79, 17:43)
