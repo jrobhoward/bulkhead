@@ -15,7 +15,7 @@ use bulkhead_host::Envelope;
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, Limited};
-use hyper::body::{Frame, Incoming};
+use hyper::body::Frame;
 use hyper::{Method, Request, Response, StatusCode};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -222,48 +222,6 @@ fn json<T: Serialize>(status: StatusCode, value: &T) -> Reply {
         hyper::header::HeaderValue::from_static("application/json"),
     );
     response
-}
-
-/// Serve `GET /metrics` (and `GET /`) with `render`'s text on `listener`
-/// until `stop` turns true. Unauthenticated, like most Prometheus
-/// endpoints: bind it to loopback or a management network.
-pub(crate) async fn serve_metrics(
-    listener: tokio::net::TcpListener,
-    render: impl Fn() -> String + Send + Sync + 'static,
-    mut stop: tokio::sync::watch::Receiver<bool>,
-) {
-    let render = Arc::new(render);
-    loop {
-        let accepted = tokio::select! {
-            _ = stop.wait_for(|s| *s) => return,
-            accepted = listener.accept() => accepted,
-        };
-        let Ok((stream, _)) = accepted else {
-            continue;
-        };
-        let render = render.clone();
-        tokio::spawn(async move {
-            let service = hyper::service::service_fn(move |req: Request<Incoming>| {
-                let render = render.clone();
-                async move {
-                    let reply = match (req.method(), req.uri().path()) {
-                        (&Method::GET, "/metrics" | "/") => metrics_text(render()),
-                        _ => {
-                            let mut r = Response::new(full(Bytes::from_static(b"GET /metrics\n")));
-                            *r.status_mut() = StatusCode::NOT_FOUND;
-                            r
-                        }
-                    };
-                    Ok::<_, Infallible>(reply)
-                }
-            });
-            let _ = hyper::server::conn::http1::Builder::new()
-                .timer(hyper_util::rt::TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(10))
-                .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
-                .await;
-        });
-    }
 }
 
 /// A Prometheus text body.

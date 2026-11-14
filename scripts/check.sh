@@ -154,7 +154,7 @@ absent() {
 check_deps() {
     local status=0
     # The HTTP ingress driver is a program the node starts, never a library.
-    absent "bulkhead (every feature)" 'bulkhead-ingress' -p bulkhead --all-features || status=1
+    absent "bulkhead (every feature)" 'bulkhead-ingress|bulkhead-metrics' -p bulkhead --all-features || status=1
     # The node with its HTTP ingress and nothing else: the ingress's TLS
     # (tokio-rustls) is the driver's.
     absent "bulkhead (node, http)" 'tokio-rustls|bulkhead-ingress' \

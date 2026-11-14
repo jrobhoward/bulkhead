@@ -8,6 +8,15 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The metrics endpoint runs outside the node (ROADMAP DA7, step 3): for
+  `[metrics]` the node binds the address and starts `bulkhead-metrics` as
+  an app of its own (beside the runner, or `[native] metrics`; a node
+  without it refuses to start), which serves `GET /metrics` (and `/`) with
+  hyper and asks the node for the text on each scrape; other paths are 404.
+  The text is the same as before. `bulkhead-metrics` is a reserved app
+  name, and `bulkhead ps` lists its instance. A witness with `[metrics]`
+  needs the runner and `bulkhead-metrics` too.
+
 - Protocol 14 gains `Request::AdminStream` and `Request::MetricsText`
   (ROADMAP DA7, step 2), answered `Answer::AdminStream` (a descriptor
   passed before it) and `Answer::MetricsText`, from a callback or a sender

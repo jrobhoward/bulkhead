@@ -168,6 +168,11 @@ impl Node {
                 "{name} is the node's own HTTP ingress; no bundle may take its name"
             )));
         }
+        if name == crate::node::config::METRICS_APP {
+            return Err(NodeError::Refused(format!(
+                "{name} is the node's own metrics endpoint; no bundle may take its name"
+            )));
+        }
         if name == crate::node::config::RESOLVE_APP {
             return Err(NodeError::Refused(format!(
                 "{name} is the node's own resolver of host names; no bundle may take its name"

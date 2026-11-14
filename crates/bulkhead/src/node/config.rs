@@ -659,6 +659,10 @@ pub const MAX_DRIVER_LISTENERS: usize = 6;
 /// which no bundle and no `[drivers.<app>]` may take.
 pub const INGRESS_APP: &str = "bulkhead-ingress";
 
+/// The app name of the node's own metrics endpoint (ROADMAP DA7), which
+/// no bundle and no `[drivers.<app>]` may take.
+pub const METRICS_APP: &str = "bulkhead-metrics";
+
 /// The app name of the node's own resolver of host names (ROADMAP DA9),
 /// which no bundle and no `[drivers.<app>]` may take.
 pub const RESOLVE_APP: &str = "bulkhead-resolve";
@@ -900,6 +904,10 @@ pub struct NativeBinding {
     /// node starts on every member (ROADMAP DA9); unset for the one
     /// beside the runner, in the runner's directory under `[priv]` too.
     pub resolve: Option<PathBuf>,
+    /// The `bulkhead-metrics` executable, the metrics endpoint the node
+    /// starts for `[metrics]` (ROADMAP DA7); unset for the one beside the
+    /// runner.
+    pub metrics: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -930,6 +938,7 @@ impl Default for NativeBinding {
             runner: None,
             ingress: None,
             resolve: None,
+            metrics: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1203,6 +1212,11 @@ impl NodeConfig {
             if app == INGRESS_APP {
                 return invalid(format!(
                     "{INGRESS_APP} is the node's own HTTP ingress, configured by [http]"
+                ));
+            }
+            if app == METRICS_APP {
+                return invalid(format!(
+                    "{METRICS_APP} is the node's own metrics endpoint, configured by [metrics]"
                 ));
             }
             if app == RESOLVE_APP {

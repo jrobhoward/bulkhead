@@ -826,6 +826,54 @@ async fn metrics____app_and_host____on_the_admin_api_and_the_scrape_endpoint() {
     n.shutdown().await;
 }
 
+/// `GET path` on `port`, with `connection: close`: the whole response.
+async fn scrape(port: u16, path: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut raw = String::new();
+    s.read_to_string(&mut raw).await.unwrap();
+    raw
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metrics____other_paths_and_the_driver_killed____404_and_the_port_kept() {
+    let port = common::ports::free_port().unwrap();
+    let mut n =
+        TestNode::start_native(&format!("[metrics]\naddress = \"127.0.0.1:{port}\"\n")).await;
+    let other = scrape(port, "/v1/apps").await;
+    let driver = common::ps(&n.client).await.len();
+    let pid = n
+        .client
+        .ps()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.app == "bulkhead-metrics")
+        .unwrap()
+        .pid;
+
+    n.client.kill(&pid).await.unwrap();
+    let mut after = String::new();
+    for _ in 0..100 {
+        after = scrape(port, "/metrics").await;
+        if after.starts_with("HTTP/1.1 200") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(other.starts_with("HTTP/1.1 404"), "{other}");
+    assert_eq!(driver, 0, "the driver is the node's, not a deployed app");
+    assert!(after.starts_with("HTTP/1.1 200"), "{after}");
+    assert!(after.contains("bulkhead_instances"), "{after}");
+    n.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn registered_names____listed_by_another_app____deploy_and_upgrade_refused() {
     let n = TestNode::start_native("").await;

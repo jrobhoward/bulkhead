@@ -7,6 +7,7 @@ mod cluster;
 mod connections;
 mod deploy;
 mod ingress;
+mod metrics;
 mod queries;
 #[cfg(feature = "tls")]
 mod remote;
@@ -67,8 +68,8 @@ pub struct Node {
     ingress: Ingress,
     /// The resolver of host names (ROADMAP DA9), on a member.
     resolver: resolve::Resolver,
-    /// Stops background tasks: the `[metrics]` endpoint, certificate
-    /// checks.
+    /// Stops background tasks: certificate checks, the resolver's
+    /// reloads.
     stop: tokio::sync::watch::Sender<bool>,
     /// The cluster transport, with `cluster.address`.
     quic: Arc<std::sync::Mutex<Option<QuicTransport>>>,
@@ -86,6 +87,9 @@ pub struct Node {
     /// Raised by every change of the failover's leadership, for
     /// `GET /v1/failover?after=`.
     leadership: tokio::sync::watch::Sender<u64>,
+    /// How the metrics driver's text is rendered, given to the runtime
+    /// (which holds it weakly).
+    metrics_text: std::sync::OnceLock<KeptMetricsText>,
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +179,9 @@ impl Node {
         let creation = store.next_creation()?;
         let native = native_config(&config)?;
         let mut drivers = bind_drivers(&config)?;
+        if let Some(profile) = metrics::bind(&config)? {
+            drivers.insert(crate::node::config::METRICS_APP.to_string(), profile);
+        }
         let ingress_args = ingress::bind(&config)?.map(|(profile, args)| {
             drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
             args
@@ -315,6 +322,7 @@ impl Node {
             #[cfg(feature = "http")]
             elsewhere: std::sync::OnceLock::new(),
             leadership: tokio::sync::watch::channel(0).0,
+            metrics_text: std::sync::OnceLock::new(),
             config,
         };
         node.resolver.watch(node.stop.subscribe());
@@ -324,18 +332,15 @@ impl Node {
             node.rt.node_events(),
             node.stop.subscribe(),
         ));
-        if let Some(binding) = &node.config.metrics {
-            let listener = tokio::net::TcpListener::bind(binding.address)
-                .await
-                .map_err(|e| NodeError::Invalid(format!("metrics: {}: {e}", binding.address)))?;
+        // The metrics a driver reads: the runtime's and the node's own,
+        // kept here while the runtime holds the closure weakly (ROADMAP DA7).
+        let render: bulkhead_host::MetricsText = {
             let (rt, quic) = (node.rt.clone(), node.quic.clone());
-            let render = move || metrics_text(&rt, &quic);
-            tokio::spawn(super::server::serve_metrics(
-                listener,
-                render,
-                node.stop.subscribe(),
-            ));
-        }
+            Arc::new(move || metrics_text(&rt, &quic))
+        };
+        node.rt.set_metrics_text(&render);
+        let _ = node.metrics_text.set(KeptMetricsText(render));
+        metrics::start(&node.config, &node.rt, &node.apps).await?;
         node.restore().await;
         let desired = node.st().desired.clone();
         node.store.prune_compiled(&desired);
@@ -454,6 +459,19 @@ pub(super) struct KeptElsewhere(
 impl std::fmt::Debug for KeptElsewhere {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("KeptElsewhere")
+    }
+}
+
+/// The node's metrics closure, kept for the node's life while the
+/// runtime holds it weakly.
+pub(super) struct KeptMetricsText(
+    #[allow(dead_code, reason = "held, never read: it keeps the closure alive")]
+    bulkhead_host::MetricsText,
+);
+
+impl std::fmt::Debug for KeptMetricsText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeptMetricsText")
     }
 }
 

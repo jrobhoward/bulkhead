@@ -15,6 +15,7 @@ members = [
     "crates/bulkhead-host",
     "crates/bulkhead-ingress",
     "crates/bulkhead-keys",
+    "crates/bulkhead-metrics",
     "crates/bulkhead-resolve",
     "crates/bulkhead-modbus",
     "crates/bulkhead-modbus-client",

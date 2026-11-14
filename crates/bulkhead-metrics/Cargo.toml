@@ -1,0 +1,28 @@
+[package]
+name = "bulkhead-metrics"
+version.workspace = true
+description = "The Bulkhead node's metrics endpoint as a driver app: GET /metrics served outside the node, the text asked of the node"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "bulkhead-metrics"
+path = "src/main.rs"
+
+[dependencies]
+bulkhead-sdk = { workspace = true }
+bulkhead-native = { workspace = true, features = ["app", "tokio"] }
+bytes = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+
+[lints]
+workspace = true

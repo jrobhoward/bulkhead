@@ -91,6 +91,26 @@ pub fn resolve_built() -> PathBuf {
         .clone()
 }
 
+/// `bulkhead-metrics`, built on first use beside the runner of
+/// [`native_fixtures`]: a node with `[metrics]` starts it (ROADMAP DA7).
+pub fn metrics_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let target = workspace_root().join("target/fixtures/native");
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .current_dir(workspace_root())
+                .args(["build", "-p", "bulkhead-metrics", "--target-dir"])
+                .arg(&target)
+                .status()
+                .unwrap();
+            assert!(status.success(), "building bulkhead-metrics failed");
+            target.join("debug/bulkhead-metrics")
+        })
+        .clone()
+}
+
 /// Node config from `toml`, with the fixtures' runner and resolver where
 /// it names none: a member node runs its resolver of host names as a
 /// native instance, so every test node needs both.
@@ -102,18 +122,29 @@ pub fn node_config(toml: &str) -> NodeConfig {
     if config.native.resolve.is_none() {
         config.native.resolve = Some(resolve_built());
     }
+    if config.metrics.is_some() && config.native.metrics.is_none() {
+        config.native.metrics = Some(metrics_built());
+    }
     config
 }
 
+/// The node's own drivers, which `bulkhead ps` lists beside apps.
+pub const NODE_DRIVERS: [&str; 4] = [
+    "bulkhead-resolve",
+    "bulkhead-ingress",
+    "bulkhead-metrics",
+    "bulkhead-admin",
+];
+
 /// The instances `client`'s node runs for deployed apps: `bulkhead ps`
-/// without the node's own drivers (`bulkhead-resolve`, `bulkhead-ingress`).
+/// without the node's own drivers ([`NODE_DRIVERS`]).
 pub async fn ps(client: &Client) -> Vec<bulkhead::api::InstanceInfo> {
     client
         .ps()
         .await
         .unwrap()
         .into_iter()
-        .filter(|i| i.app != "bulkhead-resolve" && i.app != "bulkhead-ingress")
+        .filter(|i| !NODE_DRIVERS.contains(&i.app.as_str()))
         .collect()
 }
 
