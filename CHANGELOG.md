@@ -52,6 +52,16 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `bulkhead-ingress` (ROADMAP DA2, step 3): the node's HTTP ingress as a
+  driver app, not yet started by the node. hyper's HTTP/1.1 server and
+  rustls on a tokio runtime per worker thread, calls through
+  `bulkhead_native::sender_async`; the ingress's limits, timeouts and
+  statuses, certificates chosen by SNI and reloaded on a timer or when
+  the node asks (`bulkhead/ingress-reload`), the standby's refuse and
+  redirect (forward needs the node, step 4), its counters as the app's
+  metrics once a second. Configured by init arguments the node will
+  write from `[http.<name>]`. `AsyncSender::metric_add`.
+
 - `bulkhead_sdk::http::{Routes, Route, ROUTES_EVENT}`: the node's HTTP route
   table from the host event `routes`, matched and picked as the node's
   ingress does (the longest prefix, then a route naming the host), and

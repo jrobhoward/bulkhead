@@ -148,6 +148,16 @@ impl AsyncSender {
         }
     }
 
+    /// Add `delta` to a metric the sender registered before it became
+    /// async ([`Sender::register_metric`]); a frame with no answer.
+    pub fn metric_add(&self, metric: u32, delta: f64) {
+        self.core
+            .state
+            .borrow_mut()
+            .sender
+            .metric_add(metric, delta);
+    }
+
     /// Calls in flight.
     #[must_use]
     pub fn in_flight(&self) -> usize {

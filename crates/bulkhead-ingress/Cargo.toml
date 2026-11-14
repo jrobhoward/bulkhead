@@ -1,0 +1,36 @@
+[package]
+name = "bulkhead-ingress"
+version.workspace = true
+description = "The HTTP ingress as a driver app: hyper and rustls outside the Bulkhead node, each request a call to the app owning its route"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "bulkhead-ingress"
+path = "src/main.rs"
+
+[dependencies]
+bulkhead-sdk = { workspace = true, features = ["http"] }
+bulkhead-native = { workspace = true, features = ["app", "tokio"] }
+bytes = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+tokio-rustls = { workspace = true }
+
+[dev-dependencies]
+rcgen = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

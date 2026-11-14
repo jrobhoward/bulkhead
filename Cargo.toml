@@ -13,6 +13,7 @@ members = [
     "crates/bulkhead-fixture-plugin",
     "crates/bulkhead-fixture-sdk",
     "crates/bulkhead-host",
+    "crates/bulkhead-ingress",
     "crates/bulkhead-modbus",
     "crates/bulkhead-modbus-client",
     "crates/bulkhead-native",

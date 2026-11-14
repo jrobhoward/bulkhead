@@ -85,6 +85,10 @@ async fn serve(runner: PathBuf, app: PathBuf, driver: PathBuf, pool: usize, driv
     // threads, on listeners and certificate files node config would give
     // it (`[drivers.driver]`), calling `echo` by name.
     let da1 = std::env::var("S37_DRIVER").is_ok_and(|v| v == "da1");
+    // `S37_INGRESS=1` (with `S37_DRIVER=da1`): the driver is
+    // `bulkhead-ingress` (ROADMAP DA2), given the route table and its own
+    // init arguments.
+    let ingress_driver = std::env::var("S37_INGRESS").is_ok_and(|v| v == "1");
     let certs = std::env::temp_dir().join(format!("s37-{}", std::process::id()));
     std::fs::create_dir_all(&certs).unwrap();
     let made = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
@@ -103,7 +107,7 @@ async fn serve(runner: PathBuf, app: PathBuf, driver: PathBuf, pool: usize, driv
                 ],
                 files: vec![certs.join("c.pem"), certs.join("k.pem")],
                 calls: vec!["echo".into()],
-                routes: false,
+                routes: ingress_driver,
             },
         );
     }
@@ -145,10 +149,17 @@ async fn serve(runner: PathBuf, app: PathBuf, driver: PathBuf, pool: usize, driv
                 "kind": "native-process",
                 "native": { "program": "executable" },
                 "instances": { "count": 1 },
-                "lifecycle": { "start_args": {
+                "lifecycle": { "start_args": if ingress_driver { json!({
+                    "threads": drivers,
+                    "listeners": [
+                        { "name": "http", "max_connections": 4096, "max_response": 8 << 20 },
+                        { "name": "https", "max_connections": 4096, "max_response": 8 << 20,
+                          "tls": [{ "cert": "/driver/c.pem", "key": "/driver/k.pem", "hosts": ["localhost"] }] }
+                    ]
+                }) } else { json!({
                     "threads": drivers,
                     "spin_us": std::env::var("S37_DRIVER_SPIN_US").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
-                } },
+                }) } },
                 "limits": limits
             }),
         )

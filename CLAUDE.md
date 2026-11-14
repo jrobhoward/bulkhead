@@ -271,7 +271,14 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   each request a call to the owning app's pool; the request and response
   envelope formats). `src/routes.rs` is the route table without hyper
   (apps' routes, owners, the `routes` host event), which the node keeps
-  when the ingress moves to a driver (ROADMAP DA2). `examples/http-counter` is its
+  when the ingress moves to a driver (ROADMAP DA2).
+- `crates/bulkhead-ingress`: the HTTP ingress as a driver app (ROADMAP
+  DA2): `config` (the init arguments the node writes from `[http.<name>]`),
+  `serve` (one request: limits, statuses), `tls` (certificates by SNI,
+  read through `bulkhead_sdk::files`), `driver` (worker threads, each a
+  tokio current-thread runtime and an async sender; worker 0 accepts; the
+  `routes` and `elsewhere` events). An SDK app, run through the runner
+  like any native app. `examples/http-counter` is its
   example, `crates/bulkhead/tests/http.rs` runs it through a node.
 - `crates/bulkhead-host/src/listener.rs`: listeners and connection handlers:
   the app's instances, many connections each.

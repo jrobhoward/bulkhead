@@ -432,6 +432,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bulkhead-ingress"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-native",
+ "bulkhead-sdk",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rcgen",
+ "rstest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "bulkhead-modbus"
 version = "0.3.0"
 dependencies = [
