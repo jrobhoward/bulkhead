@@ -10,13 +10,7 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["http", "tls", "sql", "egress"]
-# The in-node HTTP ingress (`bulkhead_host::http`), which the node no longer
-# runs (its ingress is the `bulkhead-ingress` driver, ROADMAP DA2); kept
-# for S37's comparison and this crate's tests until DA2 removes it.
-http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
-# HTTPS on the in-node HTTP ingress (`http::IngressTls`).
-tls = ["http", "dep:tokio-rustls"]
+default = ["sql", "egress"]
 # SQL datasources (`bulkhead:sql`): a Postgres pool per datasource
 # in node config. Idle without one.
 # HTTP egress (`bulkhead:http-egress`): a filtering
@@ -49,7 +43,6 @@ rustls-webpki = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 rustls-pki-types = { workspace = true }
-tokio-rustls = { workspace = true, optional = true }
 tokio-postgres = { workspace = true, optional = true }
 deadpool-postgres = { workspace = true, optional = true }
 tokio-postgres-rustls = { workspace = true, optional = true }
@@ -80,6 +73,8 @@ libc = { workspace = true }
 # simulation).
 bulkhead-host = { path = ".", features = ["test-apps"] }
 rcgen = { workspace = true }
+# The egress tests' HTTPS server.
+tokio-rustls = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
@@ -87,10 +82,6 @@ wat = { workspace = true }
 tracing-subscriber = { workspace = true }
 semver = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "test-util"] }
-
-[[test]]
-name = "http"
-required-features = ["tls"]
 
 [[test]]
 name = "egress"

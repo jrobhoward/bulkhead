@@ -2,7 +2,8 @@
 //! program (ROADMAP Z9d), bundled with the CLI, deployed under operator policy, and driven over
 //! HTTP; route clashes, ungranted routes, stop and start.
 
-// Native apps run on Linux only.
+// Bundles carry Linux programs only until ROADMAP FB6; on FreeBSD the
+// driver is tested through `bulkhead-ingress`'s own tests.
 #![cfg(target_os = "linux")]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]

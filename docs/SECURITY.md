@@ -187,7 +187,7 @@ In `fuzz/`, run nightly for five minutes each: `bundle_open`, `manifest`, `parse
 | --- | --- | --- |
 | `wire_packet` | cluster members | `transport::wire::decode` and the hello's version agreement |
 | `failover_status` | the partner | `failover::Status::decode` (heartbeat payloads) |
-| `http_reply` | apps | the HTTP reply envelope decoder in `http.rs` |
+| `http_reply` | apps | the ingress driver's reading of a reply: `bulkhead_sdk::http::Response::from_reply` and `bulkhead-ingress`'s `serve::response` |
 | `state_view` | apps | `node/state_view.rs`, which decodes an app's snapshot for `bulkhead state` |
 | `modbus_request` | Modbus masters | the server's request handling against its tables (address and count bounds) |
 | `native_frame` | native apps | `bulkhead_native::hot::parse_from_app` (hot frames) and the CBOR frame decoder the port uses |

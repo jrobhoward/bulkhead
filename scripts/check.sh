@@ -28,6 +28,9 @@
 #   features     the node with no optional feature (no HTTP ingress, TLS,
 #                probes or Modbus), and with HTTP but no TLS, each builds
 #                clean; the first has none of their dependencies
+#   deps         what left the node for a driver stays out of its dependency
+#                tree (ROADMAP CR1): the node never links bulkhead-ingress,
+#                its HTTP ingress brings no TLS, bulkhead-host alone no HTTP
 #   test         cargo test --workspace --all-features, then on Linux the
 #                conformance suite against the reference app
 #   doc          rustdoc with warnings as errors
@@ -48,8 +51,8 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-all_checks="fmt clippy build cli-no-node features test doc deny msrv secrets conventions changelog"
-quick_checks="fmt clippy conventions test"
+all_checks="fmt clippy build cli-no-node features deps test doc deny msrv secrets conventions changelog"
+quick_checks="fmt clippy conventions deps test"
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -127,6 +130,39 @@ check_features() {
         echo "$found"
         return 1
     fi
+}
+
+# The crates a build must not depend on (normal dependencies): $1 names the
+# build, $2 is a regex of crate names, the rest is cargo tree's arguments.
+absent() {
+    local what=$1 crates=$2 found
+    shift 2
+    found=$(cargo tree "$@" -e normal --prefix none --locked | grep -E "^($crates) " |
+        sed 's/ (\*)$//' | sort -u)
+    if [ -n "$found" ]; then
+        echo "$what depends on:"
+        echo "$found"
+        return 1
+    fi
+    echo "$what: none of $crates"
+}
+
+# ROADMAP CR1: protocol stacks that parse outside input leave the node for
+# driver apps, and stay out. hyper stays in the node for the admin socket
+# and its client, TLS for the remote admin API (until DA7), SQL and egress
+# until DA6 decides them.
+check_deps() {
+    local status=0
+    # The HTTP ingress driver is a program the node starts, never a library.
+    absent "bulkhead (every feature)" 'bulkhead-ingress' -p bulkhead --all-features || status=1
+    # The node with its HTTP ingress and nothing else: the ingress's TLS
+    # (tokio-rustls) is the driver's.
+    absent "bulkhead (node, http)" 'tokio-rustls|bulkhead-ingress' \
+        -p bulkhead --no-default-features --features http || status=1
+    # The runtime alone has no HTTP server or client, no TLS stream.
+    absent "bulkhead-host (no features)" 'hyper|hyper-util|http-body-util|tokio-rustls' \
+        -p bulkhead-host --no-default-features || status=1
+    return $status
 }
 
 # Every feature, so the Modbus tests run too.

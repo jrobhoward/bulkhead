@@ -232,6 +232,15 @@ All notable changes are recorded here. The format follows
 
 ### Removed
 
+- `bulkhead-host`'s in-node HTTP ingress (`bulkhead_host::http`, cargo
+  features `http` and `tls`; ROADMAP DA2, step 5): the ingress is the
+  `bulkhead-ingress` driver, whose own tests now run it as a node does;
+  the route table stays in `bulkhead_host::routes`. The fuzz target
+  `http_reply` reads replies as the driver does. `scripts/check.sh deps`
+  (ROADMAP CR1) fails when the node's dependency tree takes back
+  `bulkhead-ingress`, TLS in a node built with only `http`, or an HTTP
+  stack in `bulkhead-host` without features.
+
 - Passivation: the aim is long-lived processes, not many idle ones. The
   manifest key `instances.passivate_after_ms` is refused as an unknown
   key, including in a manifest a node already holds; rebuild and redeploy
@@ -683,6 +692,11 @@ All notable changes are recorded here. The format follows
   `dumpable`.
 
 ### Fixed
+
+- On FreeBSD an app opening one of its preopened files a second time (a
+  driver's certificate under `/driver/`) read nothing: the duplicated
+  descriptor kept the first read's offset. A read now starts at the
+  beginning, so the ingress driver's certificate reload works there.
 
 - On FreeBSD, messages on the native channel's descriptor socket ended a
   record only with `MSG_EOR`, which the node did not set: two sent

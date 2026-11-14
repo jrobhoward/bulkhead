@@ -4,9 +4,10 @@
 //! (`INGRESS_APP`) that accepts, reads TLS and HTTP, and calls the app
 //! owning each request's route. The node keeps the route table, sends it
 //! to the driver (host event `routes`), lets the driver call exactly the
-//! apps that own routes, and tells it which apps run on the failover
-//! partner (host event `elsewhere`). Without the `http` feature a node has
-//! none, and refuses node config or apps that need one.
+//! apps that own routes, and answers its question where an app that does
+//! not run here runs (`Request::Elsewhere`, a `CallApp` with `partner`).
+//! Without the `http` feature a node has none, and refuses node config or
+//! apps that need one.
 
 #[cfg(feature = "http")]
 use std::path::PathBuf;

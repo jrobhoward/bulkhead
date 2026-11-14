@@ -117,3 +117,31 @@ fn locate____guest_path____preopen_index_and_path_below(
 
     assert_eq!(found, expected);
 }
+
+#[cfg(all(unix, feature = "app"))]
+#[test]
+fn duplicated____preopened_file_read_again____whole_file_each_time() {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+    let path = std::env::temp_dir().join(format!("bulkhead-preopen-{}.pem", std::process::id()));
+    std::fs::write(&path, "first").unwrap();
+    let preopened = std::fs::File::open(&path).unwrap();
+    let read = || {
+        let mut got = String::new();
+        duplicated(preopened.as_fd(), Mode::Read)
+            .unwrap()
+            .read_to_string(&mut got)
+            .unwrap();
+        got
+    };
+
+    let once = read();
+    let twice = read();
+    std::fs::write(&path, "second, longer").unwrap();
+    let replaced = read();
+
+    assert_eq!(once, "first");
+    assert_eq!(twice, "first");
+    assert_eq!(replaced, "second, longer");
+    std::fs::remove_file(&path).unwrap();
+}

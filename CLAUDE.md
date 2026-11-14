@@ -267,19 +267,20 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   series) and the host's per-app counters, rendered as Prometheus text;
   the `bulkhead:metrics` service is `src/services/metrics`. Metric names
   are an interface listed in `docs/OBSERVABILITY.md`.
-- `crates/bulkhead-host/src/http.rs`: the HTTP ingress (hyper listeners,
-  each request a call to the owning app's pool; the request and response
-  envelope formats). `src/routes.rs` is the route table without hyper
-  (apps' routes, owners, the `routes` host event), which the node keeps
-  when the ingress moves to a driver (ROADMAP DA2).
+- `crates/bulkhead-host/src/routes.rs`: the HTTP route table (apps'
+  routes, owners, the `routes` host event), which the node keeps; the
+  ingress itself is the driver `bulkhead-ingress` (ROADMAP DA2).
+  `scripts/check.sh deps` (ROADMAP CR1) keeps what left out of the node's
+  dependency tree.
 - `crates/bulkhead-ingress`: the HTTP ingress as a driver app (ROADMAP
   DA2): `config` (the init arguments the node writes from `[http.<name>]`),
   `serve` (one request: limits, statuses), `tls` (certificates by SNI,
   read through `bulkhead_sdk::files`), `driver` (worker threads, each a
   tokio current-thread runtime and an async sender; worker 0 accepts; the
-  `routes` and `elsewhere` events). An SDK app, run through the runner
-  like any native app. `examples/http-counter` is its
-  example, `crates/bulkhead/tests/http.rs` runs it through a node.
+  `routes` event). An SDK app, run through the runner like any native
+  app. Its `tests/` run it on a runtime of their own, as the node does;
+  `examples/http-counter` is its example, `crates/bulkhead/tests/http.rs`
+  runs it through a node.
 - `crates/bulkhead-host/src/listener.rs`: listeners and connection handlers:
   the app's instances, many connections each.
   `crates/bulkhead-fixture-conn` is its test fixture (the SDK's

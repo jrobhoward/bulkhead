@@ -6,7 +6,16 @@ publish = false
 
 [dependencies]
 bulkhead-bundle = { path = "../../../crates/bulkhead-bundle" }
-bulkhead-host = { path = "../../../crates/bulkhead-host", features = ["http", "tls"] }
+bulkhead-host = { path = "../../../crates/bulkhead-host" }
+# The node's former ingress (src/node_ingress.rs), S37's baseline.
+bytes = "1"
+ciborium = "0.2"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+rustls-pki-types = "1"
+tracing = "0.1"
+serde = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

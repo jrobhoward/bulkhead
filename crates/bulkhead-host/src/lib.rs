@@ -32,8 +32,6 @@ pub mod failover;
 mod formats;
 mod handover;
 pub mod health;
-#[cfg(feature = "http")]
-pub mod http;
 #[cfg(feature = "test-apps")]
 pub mod in_process;
 mod instance;

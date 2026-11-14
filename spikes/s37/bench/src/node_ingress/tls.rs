@@ -22,7 +22,7 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
-use crate::error::HostError;
+use bulkhead_host::HostError;
 
 /// One certificate: its chain and key files, and the hosts it serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +208,3 @@ impl IngressTls {
     }
 }
 
-#[cfg(test)]
-#[path = "tls_tests.rs"]
-mod tls_tests;

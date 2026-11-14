@@ -182,8 +182,7 @@ pub fn open(guest: &str, mode: Mode) -> std::io::Result<std::fs::File> {
                 Mode::Append => OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND,
             };
         if below.is_empty() {
-            // A preopened file: its own descriptor, duplicated.
-            return Ok(std::fs::File::from(dir.try_clone_to_owned()?));
+            return duplicated(dir, mode);
         }
         let fd = rustix::fs::openat(dir, below, flags, Perm::from_raw_mode(0o640))?;
         return Ok(std::fs::File::from(fd));
@@ -197,6 +196,26 @@ pub fn open(guest: &str, mode: Mode) -> std::io::Result<std::fs::File> {
             .create(true)
             .open(host),
     }
+}
+
+/// A preopened file (a driver's, opened read-only by the runner) as
+/// [`open`] gives it: its descriptor duplicated. Duplicates share one
+/// offset, so a read starts at the beginning again; without that, every
+/// read after the first found the end of the file (a driver's certificate
+/// reload on FreeBSD, ROADMAP DA2). Two opens of one preopened file read
+/// at once still share the offset.
+///
+/// # Errors
+///
+/// The descriptor could not be duplicated or rewound.
+#[cfg(all(unix, feature = "app"))]
+fn duplicated(fd: std::os::fd::BorrowedFd<'_>, mode: Mode) -> std::io::Result<std::fs::File> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::from(fd.try_clone_to_owned()?);
+    if mode == Mode::Read {
+        file.seek(SeekFrom::Start(0))?;
+    }
+    Ok(file)
 }
 
 /// Make the directory at `guest`, as [`open`] reaches files.

@@ -294,6 +294,23 @@ fn response(r: Response) -> Reply {
     out
 }
 
+/// The status the driver answers for an app's reply `body` in the
+/// response format (`bulkhead_sdk::http::RESPONSE_SCHEMA`): the app's,
+/// or 502. For the fuzz target `http_reply`.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+#[must_use]
+pub fn fuzz_reply(body: &[u8]) -> u16 {
+    let msg = bulkhead_sdk::Envelope {
+        content_type: "application/cbor".into(),
+        schema: Some(bulkhead_sdk::http::RESPONSE_SCHEMA.into()),
+        body: body.to_vec(),
+    };
+    Response::from_reply(&msg)
+        .map_or(StatusCode::BAD_GATEWAY, |r| response(r).status())
+        .as_u16()
+}
+
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod serve_tests;

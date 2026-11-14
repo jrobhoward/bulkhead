@@ -1,3 +1,11 @@
+// The node's in-process HTTP ingress as it was before ROADMAP DA2 removed
+// it from `bulkhead-host` (crates/bulkhead-host/src/http.rs at commit
+// 0d3c475), kept here as S37's baseline: the bench compares the drivers
+// with it. Changes from that file: `crate::` paths are `bulkhead_host::`,
+// `tls` is always on, `HttpIngress::new` takes the runtime, no tests or fuzz export.
+
+#![allow(dead_code)] // What the bench does not use is kept as it was.
+
 //! HTTP ingress: the host terminates HTTP and delivers each
 //! request to an app as a call.
 //!
@@ -31,7 +39,7 @@
 //! path and query under the partner's URL (307 keeps the method and body,
 //! so a client that follows redirects repeats a POST there), or forwards it
 //! over the cluster to the app on the partner, whose pool answers it
-//! ([`crate::Runtime::call_app_on`]).
+//! (`Runtime::call_app_on`).
 //!
 //! Each listener caps its open connections and the time a client may take
 //! to send its headers and its body ([`IngressListen`]), so slow or idle
@@ -41,10 +49,8 @@
 //! Bodies are buffered whole; there is no streaming (S15: about 75% of
 //! native hyper's throughput through an instance call).
 
-#[cfg(feature = "tls")]
 mod tls;
 
-#[cfg(feature = "tls")]
 pub use tls::{IngressTls, TlsCertificate};
 
 use std::convert::Infallible;
@@ -66,17 +72,17 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
 
-use crate::apps::Apps;
-use crate::error::HostError;
-use crate::message::{CallError, Envelope};
-use crate::routes::RouteTable;
+use bulkhead_host::Apps;
+use bulkhead_host::HostError;
+use bulkhead_host::{CallError, Envelope};
+use bulkhead_host::routes::RouteTable;
 
 /// The `schema` of a request envelope.
 pub const REQUEST_SCHEMA: &str = "bulkhead/http-request";
 /// The `schema` of a response envelope.
 pub const RESPONSE_SCHEMA: &str = "bulkhead/http-response";
 
-pub use crate::routes::{DEFAULT_MAX_BODY, DEFAULT_TIMEOUT, HttpRoute};
+pub use bulkhead_host::routes::HttpRoute;
 
 /// One ingress address and its limits.
 #[derive(Debug, Clone)]
@@ -98,8 +104,7 @@ pub struct IngressListen {
     /// now, not here.
     pub standby: Standby,
     /// Serve HTTPS with these certificates; `None` serves plain HTTP.
-    #[cfg(feature = "tls")]
-    pub tls: Option<IngressTls>,
+        pub tls: Option<IngressTls>,
 }
 
 impl IngressListen {
@@ -115,8 +120,7 @@ impl IngressListen {
             body_timeout: Duration::from_secs(30),
             max_response: 16 << 20,
             standby: Standby::Refuse,
-            #[cfg(feature = "tls")]
-            tls: None,
+                        tls: None,
         }
     }
 }
@@ -166,7 +170,7 @@ struct Counters {
     forwarded: AtomicU64,
 }
 
-pub use crate::runtime::Elsewhere;
+pub use bulkhead_host::Elsewhere;
 
 #[derive(Default)]
 struct ElsewhereSlot(RwLock<Option<Elsewhere>>);
@@ -198,6 +202,7 @@ pub struct HttpIngress {
 #[derive(Debug)]
 struct Inner {
     apps: Apps,
+    rt: bulkhead_host::Runtime,
     routes: RouteTable,
     stop: watch::Sender<bool>,
     counters: Counters,
@@ -207,10 +212,11 @@ struct Inner {
 impl HttpIngress {
     /// An ingress delivering to `apps`, with no routes and no listeners.
     #[must_use]
-    pub fn new(apps: Apps) -> Self {
+    pub fn new(rt: bulkhead_host::Runtime, apps: Apps) -> Self {
         Self {
             inner: Arc::new(Inner {
-                routes: RouteTable::new(apps.runtime().clone()),
+                routes: RouteTable::new(rt.clone()),
+                rt,
                 apps,
                 stop: watch::channel(false).0,
                 counters: Counters::default(),
@@ -324,9 +330,6 @@ async fn accept(
         let stop = inner.stop.subscribe();
         tokio::spawn(async move {
             let _slot = slot;
-            #[cfg(not(feature = "tls"))]
-            serve_connection(inner, spec, stream, "http", stop).await;
-            #[cfg(feature = "tls")]
             match spec.tls.clone() {
                 None => serve_connection(inner, spec, stream, "http", stop).await,
                 Some(tls) => {
@@ -513,8 +516,7 @@ async fn handle(
         (Some(node), _) => {
             inner.counters.forwarded.fetch_add(1, Ordering::Relaxed);
             inner
-                .apps
-                .runtime()
+                .rt
                 .call_app_on(node, &app, msg, route.timeout)
                 .await
         }
@@ -547,6 +549,7 @@ async fn handle(
             tracing::debug!(app, %reason, "HTTP request: instance exited");
             status(StatusCode::BAD_GATEWAY, "the app failed")
         }
+        Err(_) => status(StatusCode::BAD_GATEWAY, "the app failed"),
     }
 }
 
@@ -631,15 +634,6 @@ fn response(reply: Envelope) -> Reply {
     }
 }
 
-/// For the fuzz targets in `fuzz/` only: read an app's reply envelope
-/// body as an HTTP response; the status code if it is one.
-#[cfg(fuzzing)]
-#[doc(hidden)]
-#[must_use]
-pub fn fuzz_response(body: &[u8]) -> Option<u16> {
-    parse_response(body).map(|r| r.status().as_u16())
-}
-
 fn parse_response(body: &[u8]) -> Option<Reply> {
     let value: Value = ciborium::from_reader(body).ok()?;
     let map = value.as_map()?;
@@ -672,6 +666,3 @@ fn parse_response(body: &[u8]) -> Option<Reply> {
     Some(r)
 }
 
-#[cfg(test)]
-#[path = "http_tests.rs"]
-mod http_tests;

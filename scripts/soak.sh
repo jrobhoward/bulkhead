@@ -129,8 +129,10 @@ echo "soak: building (release)"
 # bulkhead with Modbus, for the scada runs.
 cargo build --release --locked -p bulkhead -p bulkhead-soak --features bulkhead/modbus || exit 1
 cargo build --release --locked -p bulkhead-modbus --example fake_device || exit 1
-# The apps as native programs, and the runner beside bulkhead.
+# The apps as native programs, and the runner and the HTTP ingress driver
+# beside bulkhead.
 cargo build --release --locked -p bulkhead-native --bin bulkhead-runner || exit 1
+cargo build --release --locked -p bulkhead-ingress || exit 1
 cargo build --release --locked -p example-counter -p example-chaos -p example-ledger \
     -p bulkhead-fixture-conformance -p example-scada-points -p example-scada-hmi -p example-scada-control \
     || exit 1

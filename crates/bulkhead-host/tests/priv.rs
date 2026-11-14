@@ -435,3 +435,72 @@ async fn helper____processes_together_over_memory_max____refused() {
     let alive = field(&forks, "alive").parse::<u32>().unwrap_or(99);
     assert!(alive < 4, "{forks}");
 }
+
+/// A driver app under the helper (ROADMAP DA1, PS2), as the HTTP ingress
+/// runs on a node with one: under a user of its own, it accepts on the
+/// listening socket the node passes and reads the file its profile gives
+/// it, which the node's user owns and others may not read, as an
+/// operator's key file is; a file beside it stays out of reach.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let Some(started) = helper("helper____driver") else {
+        return;
+    };
+    let keys = privhelper::dir_owned(&started.dir.path().join("keys"), started.node_uid, 0o750);
+    let file = keys.join("web.key");
+    let beside = keys.join("other.key");
+    for (path, body) in [(&file, "the driver's key"), (&beside, "not given")] {
+        std::fs::write(path, body).unwrap();
+        std::os::unix::fs::chown(path, Some(started.node_uid), Some(started.node_uid)).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        drivers: std::collections::BTreeMap::from([(
+            "drv".to_string(),
+            bulkhead_host::DriverProfile {
+                listeners: vec![bulkhead_host::DriverListener {
+                    name: "main".into(),
+                    socket: std::sync::Arc::new(socket),
+                }],
+                files: vec![file.clone()],
+                ..bulkhead_host::DriverProfile::default()
+            },
+        )]),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let app = program(&started, &rt);
+    let d = rt.spawn(&app, spec("drv")).unwrap();
+
+    let ids = ask(&d, "ids").await;
+    let names = ask(&d, "listeners").await;
+    let client = std::thread::spawn(move || {
+        let mut s = std::net::TcpStream::connect(address).unwrap();
+        s.set_read_timeout(Some(LONG)).unwrap();
+        let mut got = String::new();
+        s.read_to_string(&mut got).unwrap();
+        got
+    });
+    let peer = ask(&d, "accept main").await;
+    let greeted = client.join().unwrap();
+    let given = ask(&d, "vcat /driver/web.key").await;
+    let other = ask(&d, &format!("read {}", beside.display())).await;
+
+    let user = started.first_uid;
+    assert_eq!(ids, format!("{user} {user}"), "a user of its own");
+    assert_eq!(names, "main");
+    assert!(!peer.starts_with("err:"), "{peer}");
+    assert_eq!(greeted, "hello\n");
+    assert_eq!(given, "the driver's key");
+    assert!(other.starts_with("err:"), "{other}");
+    d.kill();
+}

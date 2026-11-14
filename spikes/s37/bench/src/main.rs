@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bulkhead_bundle::manifest::{AppInfo, AppManifest, AppSpec, NativeProgram, ProgramRef, Provenance};
-use bulkhead_host::http::{HttpIngress, HttpRoute, IngressListen, IngressTls, TlsCertificate};
+mod node_ingress;
+
+use node_ingress::{HttpIngress, HttpRoute, IngressListen, IngressTls, TlsCertificate};
 use bulkhead_host::{
     AppDeployment, DriverListener, DriverProfile, ListenerSpec, NativeCode, NativeConfig, Runtime,
     RuntimeConfig,
@@ -184,7 +186,7 @@ async fn serve(runner: PathBuf, app: PathBuf, driver: PathBuf, pool: usize, driv
         .start_apps(vec![AppDeployment::new(echo, app_code), AppDeployment::new(drv, driver_code)])
         .await
         .unwrap();
-    let ingress = HttpIngress::new(apps.clone());
+    let ingress = HttpIngress::new(rt.clone(), apps.clone());
     ingress.set_routes("echo", routes).unwrap();
     let tls = IngressTls::load(vec![TlsCertificate {
         cert: certs.join("c.pem"),

@@ -1,8 +1,9 @@
 //! The node's HTTP route table: the routes apps declare (manifest
 //! `bulkhead:http-routes`), at most one app owning a host and path prefix,
 //! and the whole table announced to driver apps as the host event
-//! `routes` (ROADMAP DA1; `GUEST_FORMATS.md`, "Routes"). Free of hyper:
-//! the node keeps it when its ingress runs as a driver (ROADMAP DA2).
+//! `routes` (ROADMAP DA1; `GUEST_FORMATS.md`, "Routes"). The node keeps
+//! it; the ingress driver, `bulkhead-ingress`, reads the HTTP (ROADMAP
+//! DA2).
 //!
 //! A request matches a route by host (any case; a route without one
 //! matches every host) and by path prefix on segment boundaries; the

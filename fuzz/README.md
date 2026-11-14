@@ -10,7 +10,7 @@
 | `routing_key` | arbitrary JSON or CBOR bodies and field names | hash routing's key reader never panics |
 | `wire_packet` | arbitrary bytes from a cluster member | as a hello, any agreed version is one both sides speak; as a packet, one that decodes round-trips through `encode` |
 | `failover_status` | arbitrary heartbeat payloads from the partner | a status that decodes encodes to 26 bytes that decode to the same status |
-| `http_reply` | arbitrary reply bodies from a guest | the HTTP reply envelope decoder never panics; an accepted reply has a valid status code |
+| `http_reply` | arbitrary reply bodies from an app in the HTTP response format | the ingress driver's reading of a reply (`Response::from_reply`, then its hyper response) never panics and answers a valid status code |
 | `state_view` | arbitrary snapshot bytes from a guest | `bulkhead state`'s reader never panics, names a format, and its answer serializes as JSON |
 | `modbus_request` | arbitrary Modbus requests and table sizes | a read returns exactly the count asked for and a write changes only addresses the table has |
 | `native_frame` | arbitrary frame bodies from a native app | the node's decoders (hot frames and CBOR) never panic; a hot request that decodes writes back to the same bytes |

@@ -24,7 +24,7 @@ Three programs, built from this directory alone against the main workspace's cra
   - makes each request a call through the node to an instance of the app, by name, in turn: the same envelope the node's ingress sends;
   - answers `/local` itself, without a call, to split the cost.
 - **`s37-bench`**, in two roles:
-  - `node`: a runtime with the echo app (a pool of 4) behind the node's own ingress (HTTP and HTTPS, `bulkhead_host::http`), and the driver (a pool of 4) on two listeners, calling the same pool;
+  - `node`: a runtime with the echo app (a pool of 4) behind the node's own ingress (HTTP and HTTPS, `bulkhead_host::http`; since DA2 removed it from the node, a copy in `bench/src/node_ingress.rs`), and the driver (a pool of 4) on two listeners, calling the same pool;
   - `load`: keep-alive connections, one request at a time each, for 10 s after a second's warm-up. It reports requests a second, p50 and p99, and the CPU the node and its children (every instance) spent per request. The client runs on the same machine, as before (BASELINE.md, 2026-10-16), with 4 workers, as the node has.
 
 The same app, envelope and pool are behind both paths. Only what lies between the client and the app changes:

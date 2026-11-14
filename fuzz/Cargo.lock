@@ -272,6 +272,7 @@ dependencies = [
  "bulkhead",
  "bulkhead-bundle",
  "bulkhead-host",
+ "bulkhead-ingress",
  "bulkhead-modbus",
  "bulkhead-native",
  "bulkhead-priv-wire",
@@ -319,10 +320,27 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
- "tokio-rustls",
  "toml",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "bulkhead-ingress"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-native",
+ "bulkhead-sdk",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
@@ -346,11 +364,32 @@ dependencies = [
  "libc",
  "rustix",
  "serde",
+ "tokio",
 ]
 
 [[package]]
 name = "bulkhead-priv-wire"
 version = "0.3.0"
+
+[[package]]
+name = "bulkhead-sdk"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-native",
+ "bulkhead-sdk-macros",
+ "ciborium",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bulkhead-sdk-macros"
+version = "0.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "bumpalo"

@@ -435,6 +435,8 @@ dependencies = [
 name = "bulkhead-ingress"
 version = "0.3.0"
 dependencies = [
+ "bulkhead-bundle",
+ "bulkhead-host",
  "bulkhead-native",
  "bulkhead-sdk",
  "bytes",
@@ -450,6 +452,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tracing-subscriber",
 ]
 
 [[package]]

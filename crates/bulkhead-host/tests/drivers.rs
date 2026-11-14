@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bulkhead_bundle::manifest::NativeProgram;
+use bulkhead_host::routes::{HttpRoute, RouteTable};
 use bulkhead_host::{
     DriverListener, DriverProfile, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, Runtime,
     RuntimeConfig,
@@ -42,6 +43,12 @@ fn node(test: &str) -> Node {
 
 /// [`node`], with the driver asking for the HTTP route table or not.
 fn node_with(test: &str, routes: bool) -> Node {
+    node_profile(test, routes, false)
+}
+
+/// [`node_with`], with the driver calling the apps that own routes
+/// (`calls_routed`) instead of `drv-target`.
+fn node_profile(test: &str, routes: bool, calls_routed: bool) -> Node {
     let dir = std::env::temp_dir().join(format!("bulkhead-drivers-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("shop.pem");
@@ -63,6 +70,7 @@ fn node_with(test: &str, routes: bool) -> Node {
                 files: vec![file.clone()],
                 calls: vec!["drv-target".into()],
                 routes,
+                calls_routed,
                 ..DriverProfile::default()
             },
         )]),
@@ -83,12 +91,19 @@ fn node_with(test: &str, routes: bool) -> Node {
 }
 
 fn up(n: &Node, app: &str) -> InstanceHandle {
-    let spec = InstanceSpec {
+    up_accepting(n, app, &[])
+}
+
+/// [`up`], accepting messages from the apps `accept_from` names only
+/// (any app when empty).
+fn up_accepting(n: &Node, app: &str, accept_from: &[&str]) -> InstanceHandle {
+    let mut spec = InstanceSpec {
         memory_max: 64 << 20,
         callback_deadline: Duration::from_secs(5),
         init_timeout: Duration::from_secs(5),
         ..InstanceSpec::new(app, "1.0.0")
     };
+    spec.acl.accept_from = accept_from.iter().map(ToString::to_string).collect();
     n.rt.spawn(&n.code, spec).unwrap()
 }
 
@@ -218,29 +233,27 @@ async fn driver____calls____only_the_apps_its_profile_lists() {
     other.kill();
 }
 
-#[cfg(feature = "http")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver____asks_for_routes____told_the_table_and_each_change() {
-    use bulkhead_host::http::{HttpIngress, HttpRoute};
-    let n = node_with("routes", true);
-    let d = up(&n, "drv");
-    let plain = up(&n, "plain");
-    ask(&d, "listeners").await;
-    let apps = n.rt.start_apps(Vec::new()).await.unwrap();
-    let ingress = HttpIngress::new(apps);
-    let route = |prefix: &str| HttpRoute {
+fn route(prefix: &str) -> HttpRoute {
+    HttpRoute {
         host: None,
         path_prefix: prefix.into(),
         hash_header: Some("x-customer".into()),
         max_body: 1024,
         timeout: Duration::from_secs(3),
-    };
+    }
+}
 
-    ingress.set_routes("shop", vec![route("/shop")]).unwrap();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____asks_for_routes____told_the_table_and_each_change() {
+    let n = node_with("routes", true);
+    let d = up(&n, "drv");
+    let plain = up(&n, "plain");
+    ask(&d, "listeners").await;
+    let table = RouteTable::new(n.rt.clone());
+
+    table.set("shop", vec![route("/shop")]).unwrap();
     let first = common::ask_until(&d, "infos", |i| i.contains("/shop")).await;
-    ingress
-        .set_routes("orders", vec![route("/orders")])
-        .unwrap();
+    table.set("orders", vec![route("/orders")]).unwrap();
     let second = common::ask_until(&d, "infos", |i| i.contains("/orders")).await;
     let not_asked = ask(&plain, "infos").await;
 
@@ -250,5 +263,40 @@ async fn driver____asks_for_routes____told_the_table_and_each_change() {
     assert!(second.contains(r#""app":"orders""#), "{second}");
     assert!(!not_asked.contains("routes"), "{not_asked}");
     d.kill();
+    plain.kill();
+}
+
+/// The HTTP ingress's rule (ROADMAP DA2): a driver whose profile says
+/// `calls_routed` may call exactly the apps owning routes, as the table
+/// changes, and they accept it whatever their `accept_from`, as they
+/// accepted the node's own ingress.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____calls_routed____the_route_owners_past_accept_from_and_no_other() {
+    let n = node_profile("routed", true, true);
+    let d = up(&n, "drv");
+    let shop = up_accepting(&n, "shop", &["nobody"]);
+    let plain = up(&n, "plain");
+    let shop_pid = ask(&shop, "self").await;
+    let plain_pid = ask(&plain, "self").await;
+    let table = RouteTable::new(n.rt.clone());
+
+    let before = ask(&d, &format!("call {shop_pid} echo x")).await;
+    table.set("shop", vec![route("/shop")]).unwrap();
+    let routed = ask(&d, &format!("call {shop_pid} echo x")).await;
+    let other = ask(&d, &format!("call {plain_pid} echo x")).await;
+    let from_plain = ask(&plain, &format!("call {shop_pid} echo x")).await;
+    table.remove("shop");
+    let after = ask(&d, &format!("call {shop_pid} echo x")).await;
+
+    assert_eq!(before, "err:AccessDenied");
+    assert_eq!(routed, "x");
+    assert_eq!(other, "err:AccessDenied");
+    assert_eq!(
+        from_plain, "err:AccessDenied",
+        "accept_from holds for others"
+    );
+    assert_eq!(after, "err:AccessDenied");
+    d.kill();
+    shop.kill();
     plain.kill();
 }

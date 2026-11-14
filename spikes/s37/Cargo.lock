@@ -173,7 +173,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
- "tokio-rustls",
  "toml",
  "tower-service",
  "tracing",
@@ -1414,11 +1413,19 @@ version = "0.0.0"
 dependencies = [
  "bulkhead-bundle",
  "bulkhead-host",
+ "bytes",
+ "ciborium",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
  "rustls",
+ "rustls-pki-types",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]
