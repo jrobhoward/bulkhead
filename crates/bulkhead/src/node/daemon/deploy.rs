@@ -163,6 +163,11 @@ impl Node {
         let grant = bundle.effective_grant(&self.policy);
         let manifest = bundle.manifest.clone();
         let (name, version) = (manifest.app.name.clone(), manifest.app.version.to_string());
+        if name == crate::node::config::INGRESS_APP {
+            return Err(NodeError::Refused(format!(
+                "{name} is the node's own HTTP ingress; no bundle may take its name"
+            )));
+        }
         let rt = self.rt.clone();
         let program = bundle.program.clone();
         // A program is written where only the node can change it.

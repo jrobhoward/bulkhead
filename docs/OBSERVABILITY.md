@@ -81,7 +81,7 @@ The host's metrics, every one with an `app` label. The names and labels are an i
 | `bulkhead_sockets_open` | gauge | | Sockets the app's instances hold open (`bulkhead:sockets`), TCP and UDP, accepted ones included; listed once an app has opened or been refused one. |
 | `bulkhead_sockets_refused_total` | counter | | Socket addresses the app's policy refused (bind, listen, connect, send, receive) and sockets refused over `max_sockets`. |
 
-With an HTTP ingress, also (no labels): `bulkhead_http_requests_total`, `bulkhead_http_server_errors_total`, `bulkhead_http_not_found_total`, `bulkhead_http_redirected_total` and `bulkhead_http_forwarded_total` (requests a standby redirected or forwarded to its failover partner), ran out of time or set no response), `bulkhead_http_refused_connections_total`.
+With an HTTP ingress, also, from its driver app (label `app="bulkhead-ingress"`, added to every second): `bulkhead_http_requests_total`, `bulkhead_http_server_errors_total`, `bulkhead_http_not_found_total`, `bulkhead_http_redirected_total` and `bulkhead_http_forwarded_total` (requests a standby redirected or forwarded to its failover partner), ran out of time or set no response), `bulkhead_http_refused_connections_total`.
 
 With a cluster transport, also, labelled `node` (the other node): `bulkhead_cluster_send_queue_bytes` (gauge: bytes of casts, calls and replies queued for it) and `bulkhead_cluster_send_refused_total` (counter: messages refused past `[cluster] send_buffer_bytes`, and notices refused past the frame cap, since the node started).
 

@@ -406,7 +406,7 @@ pub(crate) async fn handle(node: &Node, req: Request<Incoming>) -> Reply {
         (&Method::GET, ["v1", "instances"]) => json(StatusCode::OK, &node.ps()),
         (&Method::GET, ["v1", "metrics"]) => metrics_text(node.metrics()),
         (&Method::GET, ["v1", "cluster"]) => json(StatusCode::OK, &node.members()),
-        (&Method::POST, ["v1", "tls", "reload"]) => respond(node.reload_tls()),
+        (&Method::POST, ["v1", "tls", "reload"]) => respond(node.reload_tls().await),
         (&Method::GET, ["v1", "failover"]) => failover(node, &q).await,
         (&Method::POST, ["v1", "failover", "confirm"]) => respond(node.confirm_failover()),
         (&Method::POST, ["v1", "failover", "switchover"]) => respond(node.switchover().await),

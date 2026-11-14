@@ -11,15 +11,17 @@ publish = false
 
 [features]
 default = ["http", "tls", "sql", "egress"]
-# The HTTP ingress (`bulkhead_host::http`): node-level routes to apps.
+# The in-node HTTP ingress (`bulkhead_host::http`), which the node no longer
+# runs (its ingress is the `bulkhead-ingress` driver, ROADMAP DA2); kept
+# for S37's comparison and this crate's tests until DA2 removes it.
 http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
-# HTTPS on the HTTP ingress (`http::IngressTls`).
+# HTTPS on the in-node HTTP ingress (`http::IngressTls`).
 tls = ["http", "dep:tokio-rustls"]
 # SQL datasources (`bulkhead:sql`): a Postgres pool per datasource
 # in node config. Idle without one.
 # HTTP egress (`bulkhead:http-egress`): a filtering
 # sender with a connection pool. Without it, the interface is deny-stubbed.
-egress = ["tls", "dep:hyper-rustls", "dep:rustls-native-certs", "dep:tower-service", "hyper-util/client-legacy", "hyper-util/http1"]
+egress = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:hyper-rustls", "dep:rustls-native-certs", "dep:tower-service", "hyper-util/client-legacy", "hyper-util/http1"]
 sql = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:tokio-postgres-rustls", "dep:futures-util"]
 # USDT probes on the message path (`src/probe.rs`): SystemTap SDT on Linux,
 # DTrace on macOS and FreeBSD, ETW on Windows. Without it the probe calls

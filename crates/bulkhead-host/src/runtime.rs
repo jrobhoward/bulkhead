@@ -31,6 +31,32 @@ use bulkhead_bundle::manifest::LogLevel;
 /// Hosts instances on one node.
 ///
 /// Must be used from a multi-threaded tokio runtime: native instances'
+/// Where an app that does not run here runs now: the failover partner's
+/// node, or `None` ([`Runtime::set_elsewhere`]).
+pub type Elsewhere = Arc<dyn Fn(&str) -> Option<u32> + Send + Sync>;
+
+/// [`Elsewhere`] as the runtime holds it.
+type WeakElsewhere = std::sync::Weak<dyn Fn(&str) -> Option<u32> + Send + Sync>;
+
+/// A driver's call to `app` on the failover partner, where it runs now
+/// (`Request::CallApp`'s `partner`, ROADMAP DA2): `access-denied` unless
+/// the driver's profile forwards and its `may_call` lists the app;
+/// `noproc` unless the app runs on the partner now.
+pub(crate) async fn call_app_partner(
+    rt: &RuntimeInner,
+    from: &InstanceHandle,
+    driver: Option<&crate::config::DriverProfile>,
+    app: &str,
+    msg: Envelope,
+    timeout: Duration,
+) -> Result<Envelope, CallError> {
+    if !driver.is_some_and(|d| d.forward) || !crate::acl::may_call(&from.acl().may_call, app) {
+        return Err(CallError::AccessDenied);
+    }
+    let node = rt.elsewhere(app).ok_or(CallError::Noproc)?;
+    transport::call_app(rt, node, app.to_string(), msg, timeout).await
+}
+
 /// waits spin on it (spike S32).
 #[derive(Debug, Clone)]
 pub struct Runtime {
@@ -50,6 +76,14 @@ pub(crate) struct RuntimeInner {
     /// The HTTP route table as JSON, for driver apps whose profile asks
     /// for it (ROADMAP DA1); `None` before an ingress sets one.
     http_routes: RwLock<Option<String>>,
+    /// The apps that own HTTP routes, in order: the `may_call` of a driver
+    /// whose profile says `calls_routed` (ROADMAP DA2).
+    route_owners: RwLock<Vec<String>>,
+    /// Where an app that does not run here runs now, if on the failover
+    /// partner (ROADMAP DA2). Weak: the closure holds the node's parts,
+    /// the runtime among them, and its owner keeps it.
+    elsewhere: RwLock<Option<WeakElsewhere>>,
+
     pub(crate) extensions: Vec<Arc<dyn Extension>>,
     transport: std::sync::OnceLock<Arc<dyn Transport>>,
     pub(crate) pending_calls: PendingCalls,
@@ -90,6 +124,18 @@ impl RuntimeInner {
             .clone()
     }
 
+    /// The node `app` runs on now, if it does not run here and runs on
+    /// the failover partner.
+    pub(crate) fn elsewhere(&self, app: &str) -> Option<u32> {
+        let f = self
+            .elsewhere
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()?
+            .upgrade()?;
+        f(app)
+    }
+
     /// The HTTP route table as JSON, once an ingress has set one.
     pub(crate) fn http_routes(&self) -> Option<String> {
         self.http_routes
@@ -118,7 +164,16 @@ impl RuntimeInner {
     /// `may_call` from the profile's `calls`.
     pub(crate) fn with_driver(&self, mut spec: InstanceSpec) -> InstanceSpec {
         if let Some(profile) = self.config.drivers.get(&spec.app) {
-            spec.acl.may_call.clone_from(&profile.calls);
+            spec.acl.may_call = if profile.calls_routed {
+                crate::acl::only(
+                    &self
+                        .route_owners
+                        .read()
+                        .unwrap_or_else(PoisonError::into_inner),
+                )
+            } else {
+                profile.calls.clone()
+            };
             spec.driver = Some(profile.clone());
         }
         spec
@@ -242,6 +297,8 @@ impl Runtime {
             metrics: Metrics::default(),
             failover_role: RwLock::default(),
             http_routes: RwLock::default(),
+            route_owners: RwLock::default(),
+            elsewhere: RwLock::default(),
             extensions,
             transport: std::sync::OnceLock::new(),
             pending_calls: PendingCalls::default(),
@@ -642,17 +699,48 @@ impl Runtime {
     }
 
     /// Keep the HTTP route table (JSON, `GUEST_FORMATS.md`'s "Routes") and
-    /// announce it to the driver apps whose profile asks for it (host event
-    /// `routes`, ROADMAP DA1).
-    pub(crate) fn set_http_routes(&self, json: String) {
+    /// its apps, give them as `may_call` to the running drivers whose
+    /// profile says `calls_routed`, and announce the table to the driver
+    /// apps whose profile asks for it (host event `routes`, ROADMAP DA1).
+    pub(crate) fn set_http_routes(&self, json: String, owners: Vec<String>) {
         *self
             .inner
             .http_routes
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(json);
+        let may_call = crate::acl::only(&owners);
+        *self
+            .inner
+            .route_owners
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = owners;
         for instance in self.instances() {
+            let routed = self
+                .inner
+                .config
+                .drivers
+                .get(instance.app())
+                .is_some_and(|d| d.calls_routed);
+            if routed {
+                instance.set_may_call(may_call.clone());
+            }
             instance.announce();
         }
+    }
+
+    /// Say where an app that does not run here runs now: the failover
+    /// partner's node for an app it runs and this node does not (ROADMAP
+    /// DA2). Asked when a driver redirects or forwards a request for an
+    /// app that does not run here (`Request::Elsewhere`, a `CallApp` with
+    /// `partner`), so it must be cheap. The runtime keeps a weak
+    /// reference: the caller keeps `elsewhere` for as long as it should
+    /// answer, so a closure holding this runtime makes no cycle.
+    pub fn set_elsewhere(&self, elsewhere: &Elsewhere) {
+        *self
+            .inner
+            .elsewhere
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::downgrade(elsewhere));
     }
 
     /// Set this node's failover role (`primary`, `standby`, `down`) and tell

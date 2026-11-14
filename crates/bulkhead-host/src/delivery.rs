@@ -76,12 +76,19 @@ pub(crate) fn permits(from: Origin<'_>, target: &InstanceHandle) -> bool {
     let Origin::Local(sender) = from else {
         return true;
     };
-    let ok = acl::allowed(
-        sender.app(),
-        &sender.acl().may_call,
-        target.app(),
-        &target.acl().accept_from,
-    );
+    // The HTTP ingress driver calls only apps that own routes, which by
+    // declaring them accept HTTP requests whatever their `accept_from`,
+    // as from the node's own ingress before it (ROADMAP DA2).
+    let ok = if sender.routes_driver() {
+        acl::may_call(&sender.acl().may_call, target.app())
+    } else {
+        acl::allowed(
+            sender.app(),
+            &sender.acl().may_call,
+            target.app(),
+            &target.acl().accept_from,
+        )
+    };
     if !ok {
         tracing::debug!(from = %sender.pid(), to = %target.pid(), "refused by the messaging ACL");
     }

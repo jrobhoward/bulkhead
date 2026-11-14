@@ -643,6 +643,10 @@ fn default_margin_ms() -> u64 {
 /// process (`bulkhead_native::driver::MAX_LISTENERS`).
 pub const MAX_DRIVER_LISTENERS: usize = 6;
 
+/// The app name of the node's own HTTP ingress driver (ROADMAP DA2),
+/// which no bundle and no `[drivers.<app>]` may take.
+pub const INGRESS_APP: &str = "bulkhead-ingress";
+
 /// `[drivers.<app>]`: what the app of that name gets beyond its manifest,
 /// as a driver app (ROADMAP DA1).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
@@ -822,6 +826,11 @@ pub struct NativeBinding {
     /// The `bulkhead-runner` executable; unset for the one beside
     /// `bulkhead`.
     pub runner: Option<PathBuf>,
+    /// The `bulkhead-ingress` executable, the HTTP ingress driver the
+    /// node starts for `[http]` (ROADMAP DA2); unset for the one beside
+    /// the runner. Under `[priv]` it must be in the runner's directory,
+    /// which every instance's root shows.
+    pub ingress: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -850,6 +859,7 @@ impl Default for NativeBinding {
         let host = bulkhead_host::NativeConfig::default();
         Self {
             runner: None,
+            ingress: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1120,6 +1130,11 @@ impl NodeConfig {
             if !is_valid_name(app) {
                 return invalid("not an app name".into());
             }
+            if app == INGRESS_APP {
+                return invalid(format!(
+                    "{INGRESS_APP} is the node's own HTTP ingress, configured by [http]"
+                ));
+            }
             if d.listeners.len() > MAX_DRIVER_LISTENERS {
                 return invalid(format!("at most {MAX_DRIVER_LISTENERS} listeners"));
             }
@@ -1133,6 +1148,41 @@ impl NodeConfig {
             }
             if let Some(c) = d.calls.iter().find(|c| !is_valid_name(c)) {
                 return invalid(format!("calls: '{c}' is not an app name"));
+            }
+        }
+        Ok(())
+    }
+
+    /// What the ingress driver needs of `[http]` (ROADMAP DA2): at most
+    /// [`MAX_DRIVER_LISTENERS`] listeners, each a name, and certificate
+    /// and key files of distinct file names, since the driver reads each
+    /// under `/driver/` by its file name.
+    fn check_http_driver(&self) -> Result<(), NodeError> {
+        use bulkhead_bundle::manifest::is_valid_name;
+        if self.http.len() > MAX_DRIVER_LISTENERS {
+            return Err(NodeError::Invalid(format!(
+                "node config: at most {MAX_DRIVER_LISTENERS} [http.<name>] listeners"
+            )));
+        }
+        let mut files = std::collections::BTreeMap::new();
+        for (name, binding) in &self.http {
+            if !is_valid_name(name) {
+                return Err(NodeError::Invalid(format!(
+                    "node config: http.{name}: not a name (lowercase letters, digits, '-' and '_')"
+                )));
+            }
+            for path in binding.tls.iter().flat_map(|t| [&t.cert, &t.key]) {
+                let file = path.file_name().unwrap_or_default().to_os_string();
+                if let Some(other) = files.insert(file, path)
+                    && other != path
+                {
+                    return Err(NodeError::Invalid(format!(
+                        "node config: http.{name}.tls: {} and {} have the same file \
+                         name; the ingress reads each by its file name",
+                        other.display(),
+                        path.display()
+                    )));
+                }
             }
         }
         Ok(())
@@ -1227,6 +1277,7 @@ impl NodeConfig {
         config.check_sockets()?;
         config.check_native()?;
         config.check_drivers()?;
+        config.check_http_driver()?;
         for (name, binding) in &config.http {
             let invalid =
                 |m: String| Err(NodeError::Invalid(format!("node config: http.{name}.{m}")));

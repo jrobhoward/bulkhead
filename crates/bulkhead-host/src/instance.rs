@@ -113,6 +113,9 @@ struct Shared {
     message_max_bytes: AtomicU64,
     /// Which apps it may send to and accept from; replaced at an upgrade.
     acl: std::sync::RwLock<Arc<Acl>>,
+    /// A driver whose profile says `calls_routed` (the HTTP ingress,
+    /// ROADMAP DA2): its calls pass a target's `accept_from`.
+    routes_driver: bool,
     dropped: Arc<AtomicU64>,
     /// Boxed: rare, and a channel allocates its first block of 32 slots
     /// up front, which unboxed would cost 6 KiB per instance.
@@ -177,6 +180,26 @@ impl InstanceHandle {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// Whether it is a driver serving the node's HTTP routes, whose calls
+    /// pass a target's `accept_from` (ROADMAP DA2).
+    pub(crate) fn routes_driver(&self) -> bool {
+        self.shared.routes_driver
+    }
+
+    /// Replace the apps it may send to, keeping whom it accepts from (the
+    /// ingress driver's `may_call` as routes change, ROADMAP DA2).
+    pub(crate) fn set_may_call(&self, may_call: Vec<String>) {
+        let mut acl = self
+            .shared
+            .acl
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *acl = Arc::new(Acl {
+            accept_from: acl.accept_from.clone(),
+            may_call,
+        });
     }
 
     /// The version it runs (changes on upgrade).
@@ -714,6 +737,7 @@ pub(crate) fn prepare(
             exit: exit_rx,
             message_max_bytes: AtomicU64::new(spec.message_max_bytes),
             acl: std::sync::RwLock::new(Arc::new(spec.acl.clone())),
+            routes_driver: spec.driver.as_ref().is_some_and(|d| d.calls_routed),
             dropped: dropped.clone(),
             ops: ops_tx,
             signals: signals_tx,

@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The HTTP ingress runs outside the node (ROADMAP DA2, step 4): for
+  `[http.<name>]` the node binds the addresses and starts the
+  `bulkhead-ingress` driver as an app of its own (`[native] ingress`,
+  default beside the runner), which accepts, reads TLS and HTTP and calls
+  the app owning each route; node config and apps' routes are unchanged.
+  The node keeps the route table, lets the driver call exactly the apps
+  that own routes (their `accept_from` passes, as before), answers its
+  `Request::Elsewhere` (where an app runs on the failover partner, for
+  `redirect`) and its `CallApp` with `partner` (for `forward`), and asks
+  it to reload certificates on SIGHUP and `bulkhead tls reload`. The
+  `bulkhead_http_*` metrics gain `app="bulkhead-ingress"` and are added to
+  every second. At most 6 `[http]` listeners, each a name, and
+  certificate and key files of distinct file names; `bulkhead-ingress` is
+  a reserved app name. The node's `http` and `tls` features no longer
+  build the in-node ingress (`bulkhead-host`'s `http`, `tls`).
+
 - An app thread waiting for its answer on a sender channel spins longer
   before it sleeps: node config `[native] sender_spin_us` (default 50 µs;
   the app learns it as `BULKHEAD_SENDER_SPIN_US`), apart from `spin_us`
@@ -51,6 +67,13 @@ All notable changes are recorded here. The format follows
   0770 (no set-group-id bit any more).
 
 ### Added
+
+- Driver profiles' `calls_routed` (`may_call` is the apps owning HTTP
+  routes, kept up to date) and `forward` (calls to the failover partner),
+  `Runtime::set_elsewhere` (held weakly). Protocol 14 gains
+  `Request::Elsewhere`/`Answer::Elsewhere` and `CallApp`'s `partner`
+  (left out of the frame when false); `AsyncSender::call_app_partner`
+  and `elsewhere`.
 
 - `bulkhead-ingress` (ROADMAP DA2, step 3): the node's HTTP ingress as a
   driver app, not yet started by the node. hyper's HTTP/1.1 server and

@@ -167,7 +167,7 @@ fn reload_on_hangup(node: Arc<Node>) {
     };
     tokio::spawn(async move {
         while hangup.recv().await.is_some() {
-            match node.reload_tls() {
+            match node.reload_tls().await {
                 Ok(done) => tracing::info!("{}", done.message),
                 Err(e) => tracing::error!(error = %e, "TLS reload failed"),
             }

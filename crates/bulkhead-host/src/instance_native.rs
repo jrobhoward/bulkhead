@@ -324,10 +324,16 @@ async fn answer(
                     .map_err(|e| convert::call_error(&e)),
             )
         }
+        Request::Elsewhere { app } => Answer::Elsewhere(state.elsewhere(&app)),
+        // A call to the partner is a driver's sender channel's (ROADMAP DA2).
+        Request::CallApp { partner: true, .. } => {
+            Answer::Called(Err(convert::call_error(&CallError::AccessDenied)))
+        }
         Request::CallApp {
             app,
             msg,
             timeout_ms,
+            partner: false,
         } => {
             let result = state
                 .call_app(

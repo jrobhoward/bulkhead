@@ -7,13 +7,15 @@
 //! - Worker 0 accepts on every listener and hands each connection to the
 //!   workers in turn: the runner's seccomp filter allows `accept4` on the
 //!   descriptors the node passed only, so a duplicate cannot accept.
-//! - The callback thread takes the host events `routes` (the node's route
-//!   table) and `elsewhere` (the apps on the failover partner now), and the
-//!   node's call to reload certificates ([`RELOAD_SCHEMA`]).
+//! - The callback thread takes the host event `routes` (the node's route
+//!   table) and the node's call to reload certificates ([`RELOAD_SCHEMA`]).
+//!   A request for an app that does not run here is redirected or
+//!   forwarded as its listener says, the node asked at once where the app
+//!   runs (`serve`).
 //! - Worker 0 adds the counters to the app's metrics once a second, not
 //!   one frame per request.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::TcpListener as StdListener;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,10 +37,6 @@ use crate::config::Config;
 use crate::serve::{Listening, Shared, serve};
 use crate::tls::{IngressTls, SdkFiles};
 
-/// The host event with the apps that run on the failover partner now and
-/// not here: `{"apps": ["shop"]}`.
-pub const ELSEWHERE_EVENT: &str = "elsewhere";
-
 /// The schema of the node's call asking the driver to reload every
 /// listener's certificates; answered with [`Reloaded`] as JSON.
 pub const RELOAD_SCHEMA: &str = "bulkhead/ingress-reload";
@@ -54,12 +52,6 @@ pub struct Reloaded {
     pub certificates: usize,
     /// `<listener>: <why>` for each that failed.
     pub failed: Vec<String>,
-}
-
-/// The body of an `elsewhere` event.
-#[derive(Debug, Deserialize)]
-struct Elsewhere {
-    apps: Vec<String>,
 }
 
 /// The ingress driver.
@@ -209,18 +201,6 @@ impl App for Ingress {
                         .unwrap_or_else(PoisonError::into_inner) = routes;
                 }
                 Err(e) => bulkhead_sdk::error!("routes event: {e}"),
-            }
-        } else if name == ELSEWHERE_EVENT {
-            match serde_json::from_slice::<Elsewhere>(&msg.body) {
-                Ok(e) => {
-                    *self
-                        .shared
-                        .elsewhere
-                        .write()
-                        .unwrap_or_else(PoisonError::into_inner) =
-                        e.apps.into_iter().collect::<HashSet<_>>();
-                }
-                Err(e) => bulkhead_sdk::error!("elsewhere event: {e}"),
             }
         }
     }

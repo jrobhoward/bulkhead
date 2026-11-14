@@ -537,6 +537,7 @@ impl Ctx {
             app: app.into(),
             msg,
             timeout_ms,
+            partner: false,
         }) {
             Answer::Called(result) => result,
             other => unexpected(&other),

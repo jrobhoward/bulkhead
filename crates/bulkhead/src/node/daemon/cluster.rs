@@ -155,12 +155,15 @@ impl Node {
             // standby and hears it.
             let (gate, rt, partner) = (gate.clone(), self.rt.clone(), f.partner);
             let leadership = handle.subscribe();
-            self.ingress.set_elsewhere(std::sync::Arc::new(move |app| {
+            let elsewhere: bulkhead_host::Elsewhere = std::sync::Arc::new(move |app| {
                 (leadership.borrow().standing == bulkhead_host::failover::Standing::Standby
                     && gate.holds(app)
                     && rt.peer_status(partner).is_some_and(|s| s.reachable))
                 .then_some(partner)
-            }));
+            });
+            // The runtime holds it weakly; the node keeps it for its life.
+            self.rt.set_elsewhere(&elsewhere);
+            let _ = self.elsewhere.set(super::KeptElsewhere(elsewhere));
         }
         tokio::spawn(gate::follow(
             gate.clone(),

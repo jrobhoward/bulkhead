@@ -75,6 +75,10 @@ pub struct Node {
     gate: Option<Arc<Gate>>,
     /// This node's failover, once started.
     failover: std::sync::OnceLock<FailoverHandle>,
+    /// Where a singleton runs while this node is its standby, given to the
+    /// runtime (which holds it weakly) for the HTTP ingress driver.
+    #[cfg(feature = "http")]
+    elsewhere: std::sync::OnceLock<KeptElsewhere>,
     /// Raised by every change of the failover's leadership, for
     /// `GET /v1/failover?after=`.
     leadership: tokio::sync::watch::Sender<u64>,
@@ -166,6 +170,11 @@ impl Node {
         }
         let creation = store.next_creation()?;
         let native = native_config(&config)?;
+        let mut drivers = bind_drivers(&config)?;
+        let ingress_args = ingress::bind(&config)?.map(|(profile, args)| {
+            drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
+            args
+        });
         #[cfg(not(feature = "sql"))]
         if let Some(name) = config.datasources.keys().next() {
             return Err(NodeError::Invalid(format!(
@@ -205,7 +214,7 @@ impl Node {
                 cast_credit: config.cluster.cast_credit,
                 cast_credit_bytes: config.cluster.cast_credit_bytes,
                 native,
-                drivers: bind_drivers(&config)?,
+                drivers,
                 secrets: config
                     .secrets
                     .iter()
@@ -252,7 +261,7 @@ impl Node {
             .map_err(|e| NodeError::Invalid(format!("{}: {e}", config.data_dir.display())))?;
         let apps = rt.start_apps(Vec::new()).await.map_err(internal)?;
         let stop = tokio::sync::watch::channel(false).0;
-        let ingress = Ingress::open(&config, &apps, &stop).await?;
+        let ingress = Ingress::open(&config, &rt, &apps, ingress_args).await?;
         let events = Events::new();
         let audit = Audit::new(store.audit_path(), events.clone());
         let gate = config.failover.is_some().then(|| {
@@ -284,6 +293,8 @@ impl Node {
             operators: Arc::default(),
             gate,
             failover: std::sync::OnceLock::new(),
+            #[cfg(feature = "http")]
+            elsewhere: std::sync::OnceLock::new(),
             leadership: tokio::sync::watch::channel(0).0,
             config,
         };
@@ -297,8 +308,8 @@ impl Node {
             let listener = tokio::net::TcpListener::bind(binding.address)
                 .await
                 .map_err(|e| NodeError::Invalid(format!("metrics: {}: {e}", binding.address)))?;
-            let (rt, ingress, quic) = (node.rt.clone(), node.ingress.clone(), node.quic.clone());
-            let render = move || metrics_text(&rt, &ingress, &quic);
+            let (rt, quic) = (node.rt.clone(), node.quic.clone());
+            let render = move || metrics_text(&rt, &quic);
             tokio::spawn(super::server::serve_metrics(
                 listener,
                 render,
@@ -350,7 +361,7 @@ impl Node {
             self.rt.leave_cluster();
             quic.shutdown_gracefully().await;
         }
-        self.ingress.stop();
+        self.ingress.stop().await;
         let names: Vec<String> = self.native_listener_map().keys().cloned().collect();
         for name in names {
             self.stop_native_listeners(&name);
@@ -362,7 +373,7 @@ impl Node {
     /// the runtime's, then the HTTP ingress's.
     #[must_use]
     pub fn metrics(&self) -> String {
-        metrics_text(&self.rt, &self.ingress, &self.quic)
+        metrics_text(&self.rt, &self.quic)
     }
 
     /// Reload every HTTPS ingress's certificates from their files. An
@@ -371,8 +382,8 @@ impl Node {
     /// # Errors
     ///
     /// [`NodeError::Invalid`] naming each ingress that failed.
-    pub fn reload_tls(&self) -> Result<Done, NodeError> {
-        let (ingresses, mut failed) = self.ingress.reload_tls();
+    pub async fn reload_tls(&self) -> Result<Done, NodeError> {
+        let (ingresses, mut failed) = self.ingress.reload_tls().await;
         #[cfg(feature = "tls")]
         if let Err(e) = self.reload_operators() {
             failed.push(e.to_string());
@@ -406,15 +417,25 @@ impl Node {
     }
 }
 
-/// The runtime's metrics, then the HTTP ingress's, then the cluster
-/// transport's.
-fn metrics_text(
-    rt: &Runtime,
-    ingress: &Ingress,
-    quic: &std::sync::Mutex<Option<QuicTransport>>,
-) -> String {
+/// The node's `elsewhere` closure, kept for the node's life while the
+/// runtime holds it weakly.
+#[cfg(feature = "http")]
+pub(super) struct KeptElsewhere(
+    #[allow(dead_code, reason = "held, never read: it keeps the closure alive")]
+    pub(super)  bulkhead_host::Elsewhere,
+);
+
+#[cfg(feature = "http")]
+impl std::fmt::Debug for KeptElsewhere {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeptElsewhere")
+    }
+}
+
+/// The runtime's metrics (apps', the HTTP ingress driver's among them),
+/// then the cluster transport's.
+fn metrics_text(rt: &Runtime, quic: &std::sync::Mutex<Option<QuicTransport>>) -> String {
     let mut text = rt.render_metrics();
-    text.push_str(&ingress.metrics());
     let quic = quic
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -589,6 +610,8 @@ fn bind_drivers(
                     files: d.files.clone(),
                     calls: d.calls.clone(),
                     routes: d.routes,
+                    calls_routed: false,
+                    forward: false,
                 },
             ))
         })

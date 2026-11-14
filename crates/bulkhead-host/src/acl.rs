@@ -51,6 +51,22 @@ pub(crate) fn allowed(
     listed(sender_may_call, target_app) && listed(target_accept, sender_app)
 }
 
+/// Whether `may_call` lets its app send to `target_app` (the sender's
+/// half of [`allowed`]).
+pub(crate) fn may_call(may_call: &[String], target_app: &str) -> bool {
+    may_call.is_empty() || may_call.iter().any(|a| a == target_app)
+}
+
+/// A `may_call` that lets its app send to `apps` alone: an empty list
+/// means any app, so no apps becomes a name no app has.
+pub(crate) fn only(apps: &[String]) -> Vec<String> {
+    if apps.is_empty() {
+        vec![String::new()]
+    } else {
+        apps.to_vec()
+    }
+}
+
 #[cfg(test)]
 #[path = "acl_tests.rs"]
 mod acl_tests;

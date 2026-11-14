@@ -1,36 +1,52 @@
-//! The node's HTTP ingress (`[http.<name>]`), its HTTPS certificates and
-//! the routes apps declare. Without the `http` feature a node has none, and
-//! refuses node config or apps that need one; without `tls`, plain HTTP
-//! only.
+//! The node's HTTP ingress (`[http.<name>]`) and the routes apps declare.
+//! Since ROADMAP DA2 the node parses no HTTP: it binds each address and
+//! starts the ingress driver, `bulkhead-ingress`, a native app of its own
+//! (`INGRESS_APP`) that accepts, reads TLS and HTTP, and calls the app
+//! owning each request's route. The node keeps the route table, sends it
+//! to the driver (host event `routes`), lets the driver call exactly the
+//! apps that own routes, and tells it which apps run on the failover
+//! partner (host event `elsewhere`). Without the `http` feature a node has
+//! none, and refuses node config or apps that need one.
 
+#[cfg(feature = "http")]
+use std::path::PathBuf;
+#[cfg(feature = "http")]
+use std::sync::Arc;
 #[cfg(feature = "http")]
 use std::time::Duration;
 
 #[cfg(feature = "http")]
 use bulkhead_bundle::manifest::AppManifest;
 #[cfg(feature = "http")]
-use bulkhead_host::http::{HttpIngress, HttpRoute, IngressListen, Standby};
-#[cfg(feature = "tls")]
-use bulkhead_host::http::{IngressTls, TlsCertificate};
-use bulkhead_host::{AppDeployment, Apps, InstanceSpec};
-use tokio::sync::watch;
+use bulkhead_host::routes::{HttpRoute, RouteTable};
+use bulkhead_host::{AppDeployment, Apps, InstanceSpec, Runtime};
 
 use crate::node::config::NodeConfig;
 #[cfg(feature = "http")]
-use crate::node::config::StandbyMode;
+use crate::node::config::{INGRESS_APP, StandbyMode};
 use crate::node::error::NodeError;
 
-/// The node's ingress, if node config has `[http]` addresses.
+/// The schema of the node's call asking the driver to reload certificates
+/// (`bulkhead_ingress::driver::RELOAD_SCHEMA`).
+#[cfg(feature = "http")]
+const RELOAD_SCHEMA: &str = "bulkhead/ingress-reload";
+
+/// How long the node waits for the driver's answer to a reload.
+#[cfg(feature = "http")]
+const RELOAD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The node's ingress: the route table, and whether a driver serves it.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Ingress {
     #[cfg(feature = "http")]
-    http: Option<HttpIngress>,
-    /// HTTPS certificates, by ingress name.
-    #[cfg(feature = "tls")]
-    certificates: Vec<(String, IngressTls)>,
+    routes: Option<Arc<RouteTable>>,
+    /// The driver runs (node config has `[http]` addresses).
+    #[cfg(feature = "http")]
+    serving: bool,
+    #[cfg(feature = "http")]
+    apps: Option<Apps>,
 }
 
-/// An app's routes, kept to put back after a failed upgrade.
 /// Whether two versions of an app have the same HTTP routes, as both run
 /// at once in a blue-green upgrade.
 pub(super) fn same_routes(
@@ -48,76 +64,193 @@ pub(super) fn same_routes(
     }
 }
 
+/// An app's routes, kept to put back after a failed upgrade.
 pub(super) struct SavedRoutes(#[cfg(feature = "http")] Option<Vec<HttpRoute>>);
 
+/// `[http]` bound for the driver: its profile (listeners, certificate
+/// files, calls) and its init arguments; `None` without `[http]`.
+///
+/// # Errors
+///
+/// An address cannot be bound.
+#[cfg(feature = "http")]
+pub(super) fn bind(
+    config: &NodeConfig,
+) -> Result<Option<(bulkhead_host::DriverProfile, serde_json::Value)>, NodeError> {
+    if config.http.is_empty() {
+        return Ok(None);
+    }
+    let mut listeners = Vec::new();
+    let mut files = Vec::new();
+    let mut args = Vec::new();
+    let mut forward = false;
+    let mut threads = 1;
+    for (name, binding) in &config.http {
+        let socket = std::net::TcpListener::bind(binding.address).map_err(|e| {
+            NodeError::Invalid(format!("http.{name}: bind {}: {e}", binding.address))
+        })?;
+        listeners.push(bulkhead_host::DriverListener {
+            name: name.clone(),
+            socket: Arc::new(socket),
+        });
+        let mut certificates = Vec::new();
+        for t in &binding.tls {
+            let guest = |p: &PathBuf| {
+                format!(
+                    "/driver/{}",
+                    p.file_name().unwrap_or_default().to_string_lossy()
+                )
+            };
+            certificates.push(serde_json::json!({
+                "cert": guest(&t.cert),
+                "key": guest(&t.key),
+                "hosts": t.hosts,
+            }));
+            files.push(t.cert.clone());
+            files.push(t.key.clone());
+        }
+        let standby = match (binding.standby_mode(), &binding.partner_url) {
+            (StandbyMode::Redirect, Some(url)) => serde_json::json!({
+                "redirect": { "partner_url": url.trim_end_matches('/') }
+            }),
+            (StandbyMode::Forward, _) => {
+                forward = true;
+                serde_json::json!("forward")
+            }
+            // Config checks refuse a redirect without a URL.
+            _ => serde_json::json!("refuse"),
+        };
+        threads = threads.max(binding.acceptors);
+        args.push(serde_json::json!({
+            "name": name,
+            "max_connections": binding.max_connections,
+            "header_timeout_ms": binding.header_timeout_ms.max(1),
+            "body_timeout_ms": binding.body_timeout_ms.max(1),
+            "max_response": binding.max_response.bytes(),
+            "standby": standby,
+            "tls": certificates,
+            "tls_reload_s": binding.tls_reload_s,
+        }));
+    }
+    let profile = bulkhead_host::DriverProfile {
+        listeners,
+        files,
+        calls: Vec::new(),
+        routes: true,
+        calls_routed: true,
+        forward,
+    };
+    let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
+    Ok(Some((profile, args)))
+}
+
+/// No ingress in this build.
+#[cfg(not(feature = "http"))]
+#[allow(clippy::unnecessary_wraps)] // The same signature as with `http`.
+pub(super) fn bind(
+    _config: &NodeConfig,
+) -> Result<Option<(bulkhead_host::DriverProfile, serde_json::Value)>, NodeError> {
+    Ok(None)
+}
+
+/// Where `bulkhead-ingress` is: `[native] ingress`, or beside the runner.
+#[cfg(feature = "http")]
+fn ingress_program(config: &NodeConfig) -> PathBuf {
+    if let Some(path) = &config.native.ingress {
+        return path.clone();
+    }
+    let runner = config.native.runner.clone().unwrap_or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("bulkhead-runner")))
+            .unwrap_or_else(|| PathBuf::from("bulkhead-runner"))
+    });
+    runner.parent().map_or_else(
+        || PathBuf::from("bulkhead-ingress"),
+        |d| d.join("bulkhead-ingress"),
+    )
+}
+
+/// The driver's manifest: one instance, its init arguments, its metrics
+/// named as the node's ingress's were (`bulkhead_http_*`).
+#[cfg(feature = "http")]
+fn ingress_manifest(args: serde_json::Value) -> Result<AppManifest, NodeError> {
+    use bulkhead_bundle::manifest::{AppInfo, AppSpec, ProgramRef, Provenance};
+    let spec = serde_json::json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "instances": { "count": 1 },
+        "lifecycle": { "start_args": args },
+        "limits": {
+            "memory_max": "512MiB",
+            "message_max_bytes": "16MiB",
+        },
+        "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_http" } },
+    });
+    Ok(AppManifest {
+        app: AppInfo {
+            name: INGRESS_APP.into(),
+            version: env!("CARGO_PKG_VERSION")
+                .parse()
+                .map_err(|e| NodeError::Internal(format!("{INGRESS_APP} version: {e}")))?,
+            description: Some("The node's HTTP ingress".into()),
+            authors: Vec::new(),
+            license: None,
+            repository: None,
+        },
+        program: ProgramRef {
+            path: String::new(),
+            checksum: String::new(),
+        },
+        provenance: Provenance {
+            signer_key: String::new(),
+            build_info: None,
+            sbom: None,
+        },
+        spec: AppSpec::from_json_value(&spec)
+            .map_err(|e| NodeError::Internal(format!("{INGRESS_APP} manifest: {e}")))?,
+    })
+}
+
 impl Ingress {
-    /// Bind every `[http.<name>]` address, and watch certificates that
-    /// reload on a timer until `stop`.
+    /// The route table, and with `[http]` the driver started with `args`
+    /// (from [`bind`]).
+    ///
+    /// # Errors
+    ///
+    /// The driver's program is missing, or it did not start.
     #[cfg(feature = "http")]
     pub(super) async fn open(
         config: &NodeConfig,
+        rt: &Runtime,
         apps: &Apps,
-        stop: &watch::Sender<bool>,
+        args: Option<serde_json::Value>,
     ) -> Result<Self, NodeError> {
-        #[cfg(not(feature = "tls"))]
-        let _ = stop;
-        let mut ingress = Self::default();
-        if config.http.is_empty() {
+        let mut ingress = Self {
+            routes: Some(Arc::new(RouteTable::new(rt.clone()))),
+            serving: false,
+            apps: Some(apps.clone()),
+        };
+        let Some(args) = args else {
             return Ok(ingress);
+        };
+        let program = ingress_program(config);
+        if !program.is_file() {
+            return Err(NodeError::Invalid(format!(
+                "[http] needs the HTTP ingress program, and {} is not one ([native] ingress)",
+                program.display()
+            )));
         }
-        let http = HttpIngress::new(apps.clone());
-        for (name, binding) in &config.http {
-            let mut listen = IngressListen::new(binding.address);
-            listen.acceptors = binding.acceptors;
-            listen.max_connections = binding.max_connections;
-            listen.header_timeout = Duration::from_millis(binding.header_timeout_ms.max(1));
-            listen.body_timeout = Duration::from_millis(binding.body_timeout_ms.max(1));
-            listen.max_response = binding.max_response.bytes();
-            listen.standby = match (binding.standby_mode(), &binding.partner_url) {
-                (StandbyMode::Redirect, Some(url)) => {
-                    Standby::Redirect(url.trim_end_matches('/').to_string())
-                }
-                (StandbyMode::Forward, _) => Standby::Forward,
-                // Config checks refuse a redirect without a URL.
-                _ => Standby::Refuse,
-            };
-            if !binding.tls.is_empty() {
-                #[cfg(feature = "tls")]
-                {
-                    let entries = binding
-                        .tls
-                        .iter()
-                        .map(|t| TlsCertificate {
-                            cert: t.cert.clone(),
-                            key: t.key.clone(),
-                            hosts: t.hosts.clone(),
-                        })
-                        .collect();
-                    let tls = IngressTls::load(entries)
-                        .map_err(|e| NodeError::Invalid(format!("http.{name}: {e}")))?;
-                    if binding.tls_reload_s > 0 {
-                        tokio::spawn(watch_certificates(
-                            name.clone(),
-                            tls.clone(),
-                            Duration::from_secs(binding.tls_reload_s),
-                            stop.subscribe(),
-                        ));
-                    }
-                    ingress.certificates.push((name.clone(), tls.clone()));
-                    listen.tls = Some(tls);
-                }
-                #[cfg(not(feature = "tls"))]
-                return Err(NodeError::Invalid(format!(
-                    "http.{name}: this build of bulkhead has no TLS (cargo feature `tls`)"
-                )));
-            }
-            let bound = http
-                .listen(listen)
-                .await
-                .map_err(|e| NodeError::Invalid(format!("http.{name}: {e}")))?;
-            tracing::info!(name, %bound, "HTTP ingress listening");
-        }
-        ingress.http = Some(http);
+        let code = rt.load_native(bulkhead_host::NativeCode {
+            path: program,
+            kind: bulkhead_bundle::manifest::NativeProgram::Executable,
+        });
+        let deployment = AppDeployment::new(ingress_manifest(args)?, code);
+        apps.add(deployment)
+            .await
+            .map_err(|e| NodeError::Invalid(format!("the HTTP ingress did not start: {e}")))?;
+        ingress.serving = true;
+        tracing::info!(listeners = config.http.len(), "HTTP ingress driver started");
         Ok(ingress)
     }
 
@@ -126,22 +259,15 @@ impl Ingress {
     #[allow(clippy::unused_async)] // The same signature as with `http`.
     pub(super) async fn open(
         config: &NodeConfig,
+        _rt: &Runtime,
         _apps: &Apps,
-        _stop: &watch::Sender<bool>,
+        _args: Option<serde_json::Value>,
     ) -> Result<Self, NodeError> {
         match config.http.keys().next() {
             Some(name) => Err(NodeError::Invalid(format!(
                 "http.{name}: this build of bulkhead has no HTTP ingress (cargo feature `http`)"
             ))),
             None => Ok(Self::default()),
-        }
-    }
-
-    /// Tell the ingress which apps run on the failover partner now.
-    #[cfg(feature = "http")]
-    pub(super) fn set_elsewhere(&self, elsewhere: bulkhead_host::http::Elsewhere) {
-        if let Some(http) = &self.http {
-            http.set_elsewhere(elsewhere);
         }
     }
 
@@ -168,12 +294,12 @@ impl Ingress {
         } else {
             Vec::new()
         };
-        match &self.http {
-            Some(ingress) => ingress
-                .set_routes(name, routes)
+        match &self.routes {
+            Some(table) if self.serving || routes.is_empty() => table
+                .set(name, routes)
                 .map_err(|e| NodeError::Conflict(e.to_string())),
             None if routes.is_empty() => Ok(()),
-            None => Err(NodeError::Invalid(format!(
+            _ => Err(NodeError::Invalid(format!(
                 "{name} declares HTTP routes, and this node has no HTTP ingress ([http.<name>] in node config)"
             ))),
         }
@@ -203,8 +329,8 @@ impl Ingress {
 
     pub(super) fn remove_routes(&self, name: &str) {
         #[cfg(feature = "http")]
-        if let Some(ingress) = &self.http {
-            ingress.remove_routes(name);
+        if let Some(table) = &self.routes {
+            table.remove(name);
         }
         #[cfg(not(feature = "http"))]
         let _ = name;
@@ -213,7 +339,7 @@ impl Ingress {
     /// `name`'s routes now, to put back with [`Ingress::restore_routes`].
     pub(super) fn save_routes(&self, name: &str) -> SavedRoutes {
         #[cfg(feature = "http")]
-        return SavedRoutes(self.http.as_ref().map(|h| h.routes(name)));
+        return SavedRoutes(self.routes.as_ref().map(|t| t.routes(name)));
         #[cfg(not(feature = "http"))]
         {
             let _ = name;
@@ -226,8 +352,8 @@ impl Ingress {
     /// upgrade's error.
     pub(super) fn restore_routes(&self, name: &str, saved: SavedRoutes) -> Result<(), String> {
         #[cfg(feature = "http")]
-        if let (Some(http), SavedRoutes(Some(before))) = (&self.http, saved)
-            && let Err(e) = http.set_routes(name, before)
+        if let (Some(table), SavedRoutes(Some(before))) = (&self.routes, saved)
+            && let Err(e) = table.set(name, before)
         {
             tracing::error!(app = name, error = %e, "HTTP routes not put back after a failed upgrade");
             return Err(format!("its HTTP routes could not be put back: {e}"));
@@ -237,80 +363,58 @@ impl Ingress {
         Ok(())
     }
 
-    /// The ingress's counters in the Prometheus text format; empty without
-    /// an ingress.
-    #[cfg(not(feature = "http"))]
-    pub(super) fn metrics(&self) -> String {
-        String::new()
-    }
-
-    /// The ingress's counters in the Prometheus text format; empty without
-    /// an ingress.
-    #[cfg(feature = "http")]
-    pub(super) fn metrics(&self) -> String {
-        let mut text = String::new();
-        if let Some(http) = &self.http {
-            let s = http.stats();
-            for (name, help, value) in [
-                (
-                    "bulkhead_http_requests_total",
-                    "HTTP requests answered.",
-                    s.requests,
-                ),
-                (
-                    "bulkhead_http_server_errors_total",
-                    "HTTP requests answered with a 5xx status.",
-                    s.server_errors,
-                ),
-                (
-                    "bulkhead_http_not_found_total",
-                    "HTTP requests that matched no route.",
-                    s.not_found,
-                ),
-                (
-                    "bulkhead_http_redirected_total",
-                    "HTTP requests redirected to the failover partner.",
-                    s.redirected,
-                ),
-                (
-                    "bulkhead_http_forwarded_total",
-                    "HTTP requests forwarded to the failover partner.",
-                    s.forwarded,
-                ),
-                (
-                    "bulkhead_http_refused_connections_total",
-                    "Connections closed on accept, over max_connections.",
-                    s.refused,
-                ),
-            ] {
-                text.push_str(&format!(
-                    "# HELP {name} {help}\n# TYPE {name} counter\n{name} {value}\n"
-                ));
-            }
+    /// Ask the driver to reload every HTTPS listener's certificates from
+    /// their files: how many listeners serve HTTPS, and each that failed
+    /// (it keeps its old certificates).
+    pub(super) async fn reload_tls(&self) -> (usize, Vec<String>) {
+        #[cfg(feature = "http")]
+        if self.serving
+            && let Some(apps) = &self.apps
+        {
+            return reload_driver(apps).await;
         }
-        text
-    }
-
-    /// Reload every HTTPS ingress's certificates from their files: how many
-    /// there are, and each that failed (it keeps its old certificates).
-    pub(super) fn reload_tls(&self) -> (usize, Vec<String>) {
-        #[cfg(feature = "tls")]
-        return (
-            self.certificates.len(),
-            self.certificates
-                .iter()
-                .filter_map(|(name, tls)| tls.reload().err().map(|e| format!("http.{name}: {e}")))
-                .collect(),
-        );
-        #[cfg(not(feature = "tls"))]
         (0, Vec::new())
     }
 
-    pub(super) fn stop(&self) {
+    /// Stop the driver first, so no request reaches an app that is
+    /// stopping.
+    pub(super) async fn stop(&self) {
         #[cfg(feature = "http")]
-        if let Some(http) = &self.http {
-            http.stop();
+        if self.serving
+            && let Some(apps) = &self.apps
+        {
+            apps.kill(INGRESS_APP).await;
         }
+    }
+}
+
+/// The driver's answer to a reload (`bulkhead_ingress::driver::Reloaded`).
+#[cfg(feature = "http")]
+#[derive(Debug, serde::Deserialize)]
+struct Reloaded {
+    certificates: usize,
+    failed: Vec<String>,
+}
+
+#[cfg(feature = "http")]
+async fn reload_driver(apps: &Apps) -> (usize, Vec<String>) {
+    let Some(driver) = apps.app(INGRESS_APP) else {
+        return (0, vec!["http: the HTTP ingress does not run".into()]);
+    };
+    let msg = bulkhead_host::Envelope {
+        content_type: "application/json".into(),
+        schema: Some(RELOAD_SCHEMA.into()),
+        body: b"{}".to_vec(),
+    };
+    match driver.call(msg, RELOAD_TIMEOUT).await {
+        Ok(reply) => match serde_json::from_slice::<Reloaded>(&reply.body) {
+            Ok(r) => (
+                r.certificates,
+                r.failed.into_iter().map(|f| format!("http.{f}")).collect(),
+            ),
+            Err(e) => (0, vec![format!("http: the ingress's answer: {e}")]),
+        },
+        Err(e) => (0, vec![format!("http: the ingress did not answer: {e}")]),
     }
 }
 
@@ -318,28 +422,4 @@ impl Ingress {
 fn granted_routes(spec: &InstanceSpec) -> bool {
     spec.granted
         .contains(&bulkhead_bundle::manifest::Capability::HttpIncoming)
-}
-
-/// Reload `tls` whenever its files change, checking every `every`, until
-/// `stop`.
-#[cfg(feature = "tls")]
-async fn watch_certificates(
-    name: String,
-    tls: IngressTls,
-    every: Duration,
-    mut stop: watch::Receiver<bool>,
-) {
-    loop {
-        tokio::select! {
-            _ = stop.wait_for(|s| *s) => return,
-            () = tokio::time::sleep(every) => {}
-        }
-        match tls.reload_if_changed() {
-            Ok(true) => tracing::info!(ingress = name, "TLS certificates reloaded"),
-            Ok(false) => {}
-            Err(e) => {
-                tracing::error!(ingress = name, error = %e, "TLS reload failed; keeping the old certificates")
-            }
-        }
-    }
 }

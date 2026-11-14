@@ -781,3 +781,53 @@ fn NodeConfig____key_only_components_read____refused_saying_so(#[case] line: &st
         "{err}"
     );
 }
+
+#[rstest::rstest]
+#[case::seven_listeners(
+    &(0..7).map(|i| format!("[http.l{i}]\naddress = \"127.0.0.1:{}\"\n", 8080 + i)).collect::<String>(),
+    "at most 6 [http.<name>] listeners"
+)]
+#[case::name_not_a_listener_name(
+    "[http.Main]\naddress = \"0.0.0.0:8080\"\n",
+    "http.Main: not a name"
+)]
+#[case::same_file_name_twice(
+    "[http.a]\naddress = \"0.0.0.0:8080\"\ntls = [{ cert = \"/etc/a/web.pem\", key = \"/etc/a/web.key\" }]\n\
+     [http.b]\naddress = \"0.0.0.0:8443\"\ntls = [{ cert = \"/etc/b/web.pem\", key = \"/etc/b/web.key\" }]\n",
+    "have the same file name"
+)]
+#[case::the_ingress_as_a_driver(
+    "[drivers.bulkhead-ingress]\nlisteners = { https = \"0.0.0.0:8443\" }\n",
+    "the node's own HTTP ingress"
+)]
+fn http____more_than_the_ingress_driver_takes____refused(#[case] text: &str, #[case] why: &str) {
+    let err = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n{text}"))
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains(why), "{err}");
+}
+
+#[test]
+fn http____one_certificate_for_two_listeners____taken() {
+    let text = "data_dir = \"/d\"\n\
+        [http.a]\naddress = \"0.0.0.0:8080\"\ntls = [{ cert = \"/etc/web.pem\", key = \"/etc/web.key\" }]\n\
+        [http.b]\naddress = \"0.0.0.0:8443\"\ntls = [{ cert = \"/etc/web.pem\", key = \"/etc/web.key\" }]\n";
+
+    let config = NodeConfig::from_toml_str(text);
+
+    assert!(config.is_ok(), "{config:?}");
+}
+
+#[test]
+fn native____ingress_set____kept() {
+    let config = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[native]\ningress = \"/usr/lib/bulkhead/bulkhead-ingress\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.native.ingress.as_deref(),
+        Some(std::path::Path::new("/usr/lib/bulkhead/bulkhead-ingress"))
+    );
+}

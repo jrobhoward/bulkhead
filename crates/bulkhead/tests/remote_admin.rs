@@ -140,7 +140,7 @@ async fn remote_admin____operator_removed_and_reloaded____refused_from_then_on()
     let before = r.client(&r.alice, r.node_key.clone()).list().await;
 
     operators(&r.operators, &[]);
-    r.node.node().reload_tls().unwrap();
+    r.node.node().reload_tls().await.unwrap();
     let after = r.client(&r.alice, r.node_key.clone()).list().await;
 
     assert!(before.is_ok());

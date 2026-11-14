@@ -52,6 +52,25 @@ pub fn native_fixtures() -> &'static (PathBuf, PathBuf) {
     })
 }
 
+/// `bulkhead-ingress`, built on first use beside the runner of
+/// [`native_fixtures`], where a node with `[http]` looks for its HTTP
+/// ingress driver. Apart from the runner: only nodes with `[http]` wait
+/// for it to build.
+pub fn ingress_built() {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let target = workspace_root().join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .args(["build", "-p", "bulkhead-ingress", "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "building bulkhead-ingress failed");
+    });
+}
+
 /// A fixture crate's program, built natively with `features` on first use
 /// by each test binary, into `target/fixtures/<dir>`.
 fn native_program(package: &str, features: &str, dir: &str, once: &OnceLock<()>) -> Vec<u8> {
@@ -277,6 +296,9 @@ impl TestNode {
         tokio::sync::oneshot::Sender<()>,
         tokio::task::JoinHandle<()>,
     ) {
+        if extra.contains("[http") {
+            ingress_built();
+        }
         let toml = format!(
             "data_dir = {:?}\nmax_instances = 32\ntrusted_keys = [{:?}]\n{extra}",
             dir.path().join("data"),
@@ -489,7 +511,8 @@ pub fn examples(packages: &[&str], features: &[&str], tag: &str) -> Built {
     }
 }
 
-/// Node config naming the runner.
+/// Node config naming the runner, with the HTTP ingress driver beside it.
 pub fn runner_config() -> String {
+    ingress_built();
     format!("[native]\nrunner = {:?}\n", native_fixtures().0)
 }

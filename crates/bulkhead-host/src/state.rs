@@ -143,6 +143,15 @@ impl InstanceState {
         events
     }
 
+    /// Where `app`, not running here, runs now, if on the failover partner
+    /// (`Request::Elsewhere`): for a driver given the route table, `None`
+    /// for any other instance (ROADMAP DA2).
+    pub(crate) fn elsewhere(&self, app: &str) -> Option<u32> {
+        self.announce_routes
+            .then(|| self.ctx.rt.elsewhere(app))
+            .flatten()
+    }
+
     /// A context for the new version's state of the same instance (an
     /// upgrade).
     pub(crate) fn context(&self) -> ProcessContext {

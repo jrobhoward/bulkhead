@@ -589,7 +589,29 @@ pub enum Request {
         msg: Envelope,
         /// How long to wait for the reply.
         timeout_ms: u32,
+        /// Call the app on the failover partner instead, where it runs
+        /// now (ROADMAP DA2): only on a sender channel of a driver whose
+        /// profile forwards, `access-denied` otherwise, and `noproc` when
+        /// the app does not run on the partner. Absent from the frame when false, so a
+        /// node or an app on protocol 13 or 14 reads it unchanged.
+        #[serde(default, skip_serializing_if = "is_false")]
+        partner: bool,
     },
+    /// Where the app called `app`, which does not run here, runs now: the
+    /// failover partner's node, if it runs there (ROADMAP DA2), looked up
+    /// when asked: [`Answer::Elsewhere`]. Answered for a driver given the
+    /// route table (`[drivers.<app>] routes`, the HTTP ingress), which
+    /// redirects a request to the partner; `None` for any other app.
+    /// Allowed on a sender channel too.
+    Elsewhere {
+        /// The app's name.
+        app: String,
+    },
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if takes a reference.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A sender channel the node made: descriptors passed on the descriptor
@@ -1251,6 +1273,9 @@ pub enum Answer {
     Extension(Result<Bytes, ExtensionError>),
     /// A sender channel, its descriptors passed before this answer.
     Sender(Result<SenderChannel, SenderError>),
+    /// The node an app runs on now, if the failover partner
+    /// ([`Request::Elsewhere`]).
+    Elsewhere(Option<u32>),
 }
 
 /// A frame that could not be read.

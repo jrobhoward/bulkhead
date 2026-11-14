@@ -78,7 +78,7 @@ struct State {
 #[derive(Debug)]
 enum Slot {
     Waiting(Option<Waker>),
-    Done(Result<Envelope, CallError>),
+    Done(Answer),
     /// Its future was dropped; the answer is thrown away.
     Abandoned,
 }
@@ -122,6 +122,24 @@ impl AsyncSender {
             app: app.into(),
             msg,
             timeout_ms,
+            partner: false,
+        })
+    }
+
+    /// Call the app called `app` on the failover partner, where it runs
+    /// now (`Request::CallApp` with `partner`): only for a driver whose
+    /// profile forwards (ROADMAP DA2).
+    pub fn call_app_partner(
+        &self,
+        app: impl Into<String>,
+        msg: Envelope,
+        timeout_ms: u32,
+    ) -> Called {
+        self.start(Request::CallApp {
+            app: app.into(),
+            msg,
+            timeout_ms,
+            partner: true,
         })
     }
 
@@ -134,7 +152,18 @@ impl AsyncSender {
         })
     }
 
+    /// Where the app called `app`, which does not run here, runs now, if
+    /// on the failover partner (`Request::Elsewhere`): for a driver given
+    /// the route table (ROADMAP DA2).
+    pub fn elsewhere(&self, app: impl Into<String>) -> Located {
+        Located(self.ask(Request::Elsewhere { app: app.into() }))
+    }
+
     fn start(&self, request: Request) -> Called {
+        Called(self.ask(request))
+    }
+
+    fn ask(&self, request: Request) -> Asked {
         let id = {
             let mut state = self.core.state.borrow_mut();
             let id = state.sender.send_request(request);
@@ -142,7 +171,7 @@ impl AsyncSender {
             id
         };
         self.core.work.notify_one();
-        Called {
+        Asked {
             core: self.core.clone(),
             id,
         }
@@ -273,16 +302,12 @@ impl State {
     }
 
     fn answer(&mut self, frame: ToApp) {
-        let ToApp::Answer {
-            id,
-            answer: Answer::Called(result),
-        } = frame
-        else {
+        let ToApp::Answer { id, answer } = frame else {
             unexpected_frame(&frame)
         };
         match self.slots.remove(&id) {
             Some(Slot::Waiting(waker)) => {
-                self.slots.insert(id, Slot::Done(result));
+                self.slots.insert(id, Slot::Done(answer));
                 if let Some(w) = waker {
                     w.wake();
                 }
@@ -297,29 +322,19 @@ impl State {
     }
 }
 
-/// A call's answer, awaited.
+/// A request's answer, awaited; dropped first, the answer is thrown
+/// away when it comes.
 #[derive(Debug)]
-#[must_use = "a call's answer is read by awaiting it"]
-pub struct Called {
+struct Asked {
     core: Rc<Core>,
     id: u64,
 }
 
-impl Called {
-    /// The call's id on the channel.
-    #[must_use]
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-}
-
-impl Future for Called {
-    type Output = Result<Envelope, CallError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+impl Asked {
+    fn poll_answer(&self, cx: &Context<'_>) -> Poll<Answer> {
         let mut state = self.core.state.borrow_mut();
         match state.slots.remove(&self.id) {
-            Some(Slot::Done(result)) => Poll::Ready(result),
+            Some(Slot::Done(answer)) => Poll::Ready(answer),
             Some(Slot::Waiting(_)) | None => {
                 state
                     .slots
@@ -331,12 +346,52 @@ impl Future for Called {
     }
 }
 
-impl Drop for Called {
+impl Drop for Asked {
     fn drop(&mut self) {
         let mut state = self.core.state.borrow_mut();
         if let Some(Slot::Waiting(_)) = state.slots.get(&self.id) {
             state.slots.insert(self.id, Slot::Abandoned);
         }
+    }
+}
+
+/// A call's answer, awaited.
+#[derive(Debug)]
+#[must_use = "a call's answer is read by awaiting it"]
+pub struct Called(Asked);
+
+impl Called {
+    /// The call's id on the channel.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.0.id
+    }
+}
+
+impl Future for Called {
+    type Output = Result<Envelope, CallError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_answer(cx).map(|answer| match answer {
+            Answer::Called(result) => result,
+            other => protocol_error(&format!("a call answered with {other:?}")),
+        })
+    }
+}
+
+/// Where an app runs, awaited ([`AsyncSender::elsewhere`]).
+#[derive(Debug)]
+#[must_use = "the answer is read by awaiting it"]
+pub struct Located(Asked);
+
+impl Future for Located {
+    type Output = Option<u32>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_answer(cx).map(|answer| match answer {
+            Answer::Elsewhere(node) => node,
+            other => protocol_error(&format!("Elsewhere answered with {other:?}")),
+        })
     }
 }
 

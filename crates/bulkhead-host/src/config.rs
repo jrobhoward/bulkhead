@@ -278,8 +278,16 @@ pub struct DriverProfile {
     /// The apps it may send to: its messaging ACL's `may_call`, in place
     /// of its manifest's.
     pub calls: Vec<String>,
-    /// Send it the HTTP route table as the host event `routes`.
+    /// Send it the HTTP route table as the host event `routes`, and
+    /// answer its `Request::Elsewhere` (ROADMAP DA2).
     pub routes: bool,
+    /// Its `may_call` is the apps that own HTTP routes, kept up to date as
+    /// routes change, in place of `calls` (the ingress driver, ROADMAP
+    /// DA2).
+    pub calls_routed: bool,
+    /// It may call an app on the failover partner where the app runs now
+    /// (`Request::CallApp`'s `partner`), for a listener that forwards.
+    pub forward: bool,
 }
 
 /// A listening socket of a driver app's, by name.

@@ -63,6 +63,7 @@ fn node_with(test: &str, routes: bool) -> Node {
                 files: vec![file.clone()],
                 calls: vec!["drv-target".into()],
                 routes,
+                ..DriverProfile::default()
             },
         )]),
         ..RuntimeConfig::default()

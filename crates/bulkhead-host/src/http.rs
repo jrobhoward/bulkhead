@@ -166,9 +166,7 @@ struct Counters {
     forwarded: AtomicU64,
 }
 
-/// The node an app that does not run here runs on now, if it is the
-/// partner and can be reached.
-pub type Elsewhere = Arc<dyn Fn(&str) -> Option<u32> + Send + Sync>;
+pub use crate::runtime::Elsewhere;
 
 #[derive(Default)]
 struct ElsewhereSlot(RwLock<Option<Elsewhere>>);

@@ -11,7 +11,6 @@
 //! rules 403, the instance exiting before replying, a malformed reply or
 //! one over `max_response` 502.
 
-use std::collections::HashSet;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,15 +31,11 @@ use crate::tls::IngressTls;
 /// A response.
 pub type Reply = hyper::Response<Full<Bytes>>;
 
-/// What every worker thread shares: the route table, the apps on the
-/// partner, the counters.
+/// What every worker thread shares: the route table and the counters.
 #[derive(Debug, Default)]
 pub struct Shared {
     /// The node's routes, from the host event `routes`.
     pub routes: RwLock<Routes>,
-    /// The apps that run on the failover partner now and not here, from
-    /// the host event `elsewhere`.
-    pub elsewhere: RwLock<HashSet<String>>,
     /// What the driver has served.
     pub counters: Counters,
 }
@@ -119,22 +114,6 @@ async fn handle(
     let Some(route) = picked else {
         return status(StatusCode::NOT_FOUND, "no route");
     };
-    let on_partner = listening.config.standby != Standby::Refuse
-        && shared
-            .elsewhere
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&route.app);
-    if on_partner {
-        match &listening.config.standby {
-            Standby::Redirect { partner_url } => return redirect(partner_url, req.uri()),
-            // Forwarding goes through the node's call to the partner,
-            // which drivers cannot ask for yet (ROADMAP DA2, step 4).
-            Standby::Forward | Standby::Refuse => {
-                return status(StatusCode::SERVICE_UNAVAILABLE, "app not running");
-            }
-        }
-    }
     let declared = req
         .headers()
         .get(CONTENT_LENGTH)
@@ -172,9 +151,30 @@ async fn handle(
         key,
     };
     let timeout_ms = u32::try_from(route.timeout_ms).unwrap_or(u32::MAX);
-    let result = sender
-        .call_app(route.app.as_str(), request.to_envelope().into(), timeout_ms)
-        .await;
+    let msg: Envelope = request.to_envelope().into();
+    // Kept for the partner only where a listener forwards.
+    let again = matches!(listening.config.standby, Standby::Forward).then(|| msg.clone());
+    let mut result = sender.call_app(route.app.as_str(), msg, timeout_ms).await;
+    if matches!(result, Err(CallError::Noproc)) {
+        // Not running here: where it runs now, asked of the node at once,
+        // as the node's ingress asked (ROADMAP DA2).
+        match (&listening.config.standby, again) {
+            (Standby::Redirect { partner_url }, _) => {
+                if sender.elsewhere(route.app.as_str()).await.is_some() {
+                    return redirect(partner_url, &parts.uri);
+                }
+            }
+            (Standby::Forward, Some(msg)) => {
+                result = sender
+                    .call_app_partner(route.app.as_str(), msg, timeout_ms)
+                    .await;
+                if !matches!(result, Err(CallError::Noproc)) {
+                    shared.counters.forwarded.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            _ => {}
+        }
+    }
     from_call(result, listening.config.max_response)
 }
 

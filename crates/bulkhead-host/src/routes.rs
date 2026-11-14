@@ -119,9 +119,9 @@ impl RouteTable {
         } else {
             table.insert(app.to_string(), routes);
         }
-        let json = routes_json(&table);
+        let (json, owners) = (routes_json(&table), table.keys().cloned().collect());
         drop(table);
-        self.runtime.set_http_routes(json);
+        self.runtime.set_http_routes(json, owners);
         Ok(())
     }
 
@@ -129,9 +129,9 @@ impl RouteTable {
     pub fn remove(&self, app: &str) {
         let mut table = self.routes.write().unwrap_or_else(PoisonError::into_inner);
         table.remove(app);
-        let json = routes_json(&table);
+        let (json, owners) = (routes_json(&table), table.keys().cloned().collect());
         drop(table);
-        self.runtime.set_http_routes(json);
+        self.runtime.set_http_routes(json, owners);
     }
 
     /// `app`'s routes.

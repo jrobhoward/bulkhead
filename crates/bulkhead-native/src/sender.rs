@@ -184,6 +184,7 @@ impl Sender {
             app: app.into(),
             msg,
             timeout_ms,
+            partner: false,
         }) {
             Answer::Called(result) => result,
             other => unexpected(&other),
@@ -202,6 +203,7 @@ impl Sender {
             app: app.into(),
             msg,
             timeout_ms,
+            partner: false,
         });
         self.started.insert(id, None);
         id

@@ -50,7 +50,7 @@ use crate::metrics::AppStats;
 use crate::native::{Passed, os};
 use crate::output::Tags;
 use crate::probe;
-use crate::runtime::RuntimeInner;
+use crate::runtime::{RuntimeInner, call_app_partner};
 use crate::services::keyvalue::storage::Outcome;
 use crate::services::{SenderStates, ServiceCtx};
 use crate::spec::InstanceSpec;
@@ -387,23 +387,24 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
             app,
             msg,
             timeout_ms,
+            partner,
         } => {
             let hub = hub.clone();
             Handled::Later(Box::pin(async move {
                 let ctx = &hub.ctx;
                 let msg = convert::host_envelope(msg);
-                let result = match ctx.rt.route_app(&app, &msg) {
-                    Some(target) => {
-                        delivery::call(
-                            &ctx.rt,
-                            Origin::Local(&ctx.me),
-                            target.pid(),
-                            msg,
-                            Duration::from_millis(timeout_ms.into()),
-                        )
-                        .await
+                let timeout = Duration::from_millis(timeout_ms.into());
+                let result = if partner {
+                    let driver = ctx.spec.driver.as_ref();
+                    call_app_partner(&ctx.rt, &ctx.me, driver, &app, msg, timeout).await
+                } else {
+                    match ctx.rt.route_app(&app, &msg) {
+                        Some(target) => {
+                            let to = target.pid();
+                            delivery::call(&ctx.rt, Origin::Local(&ctx.me), to, msg, timeout).await
+                        }
+                        None => Err(CallError::Noproc),
                     }
-                    None => Err(CallError::Noproc),
                 };
                 Answer::Called(
                     result
@@ -433,6 +434,13 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 .native_register(kind, &name, &help, &labels, &buckets),
         )),
         Request::OpenSender => Handled::Now(Answer::Sender(Hub::open(hub))),
+        Request::Elsewhere { app } => {
+            let ctx = &hub.ctx;
+            let routes = ctx.spec.driver.as_ref().is_some_and(|d| d.routes);
+            Handled::Now(Answer::Elsewhere(
+                routes.then(|| ctx.rt.elsewhere(&app)).flatten(),
+            ))
+        }
         other => Handled::Refused(format!("{other:?}")),
     }
 }

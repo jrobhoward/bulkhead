@@ -155,7 +155,10 @@ async fn node(setup: &Setup, tag: &str, extra: &str) -> (Arc<Node>, PathBuf) {
          [native]\nrunner = {:?}\n",
         setup.dir.path().join(tag),
         setup.public,
-        common::native_fixtures().0,
+        {
+            common::ingress_built();
+            common::native_fixtures().0.clone()
+        },
     );
     let node = Arc::new(
         Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))

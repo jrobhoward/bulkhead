@@ -108,6 +108,7 @@ async fn serve(runner: PathBuf, app: PathBuf, driver: PathBuf, pool: usize, driv
                 files: vec![certs.join("c.pem"), certs.join("k.pem")],
                 calls: vec!["echo".into()],
                 routes: ingress_driver,
+                ..DriverProfile::default()
             },
         );
     }

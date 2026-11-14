@@ -88,7 +88,7 @@ pub use pid::Pid;
 #[doc(hidden)]
 pub use pool::routing_key;
 pub use replication::ReplicationStatus;
-pub use runtime::{LoadedApp, Runtime};
+pub use runtime::{Elsewhere, LoadedApp, Runtime};
 pub use spec::{InstanceSpec, PRIV_PATH, Preopen};
 pub use supervisor::{
     Backoff, Child, ChildHandle, ChildSpec, ChildStart, SupervisorHandle, SupervisorSpec,

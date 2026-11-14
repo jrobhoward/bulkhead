@@ -124,6 +124,7 @@ fn request_name(r: &Request) -> &'static str {
         Request::Http(_) => "Http",
         Request::Extension { .. } => "Extension",
         Request::OpenSender => "OpenSender",
+        Request::Elsewhere { .. } => "Elsewhere",
         Request::CallApp { .. } => "CallApp",
     }
 }
@@ -149,6 +150,7 @@ fn answer_name(a: &Answer) -> &'static str {
         Answer::Http(_) => "Http",
         Answer::Extension(_) => "Extension",
         Answer::Sender(_) => "Sender",
+        Answer::Elsewhere(_) => "Elsewhere",
     }
 }
 
@@ -209,6 +211,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "Extension",
             "OpenSender",
             "CallApp",
+            "Elsewhere",
         ],
     ),
     (
@@ -233,6 +236,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "Http",
             "Extension",
             "Sender",
+            "Elsewhere",
         ],
     ),
 ];
@@ -408,7 +412,9 @@ fn requests() -> Vec<Request> {
             app: "shop".into(),
             msg: env(),
             timeout_ms: 500,
+            partner: false,
         },
+        Request::Elsewhere { app: "shop".into() },
     ]
 }
 
@@ -444,6 +450,7 @@ fn answers() -> Vec<Answer> {
             door: FdRef(4),
             bell: FdRef(5),
         })),
+        Answer::Elsewhere(Some(2)),
     ]
 }
 
@@ -643,4 +650,22 @@ fn previous_version____every_frame____decodes_and_encodes_unchanged() {
 
         assert_eq!(again, frame, "{ty} {name}");
     }
+}
+
+#[test]
+fn call_app____partner_false____encoded_as_before_and_read_back_false() {
+    let call = |partner| Request::CallApp {
+        app: "shop".into(),
+        msg: env(),
+        timeout_ms: 500,
+        partner,
+    };
+
+    let plain = protocol::encode(&call(false));
+    let forward = protocol::encode(&call(true));
+    let back: Request = protocol::decode(&plain[4..]).unwrap();
+
+    assert!(!plain.windows(7).any(|w| w == b"partner"));
+    assert!(forward.windows(7).any(|w| w == b"partner"));
+    assert!(matches!(back, Request::CallApp { partner: false, .. }));
 }
