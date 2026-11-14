@@ -517,14 +517,18 @@ dependencies = [
 name = "bulkhead-resolve"
 version = "0.3.0"
 dependencies = [
+ "bulkhead-bundle",
+ "bulkhead-host",
  "bulkhead-native",
  "bulkhead-sdk",
  "futures-io",
+ "futures-util",
  "hickory-resolver",
  "rstest",
  "serde",
  "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

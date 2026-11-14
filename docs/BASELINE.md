@@ -3024,6 +3024,25 @@ One connection, p50 (the node's in the same run):
 - **Large bodies** cost twice the node's CPU through the driver on both machines: each body crosses the driver's channel and then the app's (ROADMAP PF1).
 - **Not measured:** FreeBSD (function checks only); under the privileged helper.
 
+## 2026-11-14: host names through the resolver driver (DA9)
+
+`crates/bulkhead-resolve/examples/lookup_cost.rs`, 10,000 lookups of each kind one at a time, through a runtime whose names go to `bulkhead-resolve` (release builds, default `spin_us` and `sender_spin_us`), against libc's `getaddrinfo` (what the node did before) and hickory-resolver in the same process (the alternative DA6 set aside). An uncached name is a new one each time, answered by a DNS-over-TCP server in the harness on loopback (A and AAAA, one stream); a cached one was answered once before. CPU is the harness's and the driver's, per lookup. Two rounds each: the 16-core machine (load under 0.5 at the start, no VM running) and the Raspberry Pi 5 (load under 0.3), both with systemd-resolved as the system's resolver. Results: `crates/bulkhead-resolve/examples/results/{x86,pi5}-2026-11-14.txt`.
+
+| Lookup | 16-core p50 | 16-core CPU | Pi p50 | Pi CPU |
+| --- | --- | --- | --- | --- |
+| hosts file: driver | 26–35 µs | 92–125 µs | 52–57 µs | 146–162 µs |
+| hosts file: `getaddrinfo` (`localhost`, `/etc/hosts`) | 24–27 µs | 25–27 µs | 56 µs | 57 µs |
+| cached: driver | 48–54 µs | 139–155 µs | 68–71 µs | 191–196 µs |
+| cached: hickory in the process | 3.1 µs | 5–6 µs | 4.1 µs | 4 µs |
+| cached: `getaddrinfo` through systemd-resolved (`example.com`) | 244–312 µs | 137–162 µs | 246–248 µs | 107–110 µs |
+| uncached, loopback server: driver | 198–205 µs | 357–378 µs | 160–162 µs | 351 µs |
+| uncached, loopback server: hickory in the process | 120–124 µs | 203–229 µs | 67 µs | 131–132 µs |
+
+- **The driver's hop** costs 20 to 50 µs a lookup and 90 to 190 µs of CPU, against hickory in the node: a call from the node to the driver, its worker thread woken, and the answer cast back to its callback thread, which alone may reply (two node round trips and two cross-thread wake-ups), with each side spinning while it waits. A reply from a sender channel would save the cast back (ROADMAP AP1b).
+- **Against what the node did before:** a hosts-file name takes about the time `getaddrinfo` takes, at 3 to 4 times its CPU; a cached DNS name is answered in a fifth of the time `getaddrinfo` takes through systemd-resolved (libc asking its stub at 127.0.0.53, which caches), for the same CPU on the 16-core machine and 1.8 times it on the Pi. An uncached name is a network round trip to the nameserver, milliseconds, beside which the hop does not show.
+- **What it buys:** no DNS reply parsed in the node (DESIGN.md, "Protocols outside the core"). At the rates apps resolve names (a connection's start, a pool's), tens of microseconds a lookup are not felt; an app that resolves per request should keep its addresses.
+- **Found while measuring:** the streams the node opens for the driver lacked `TCP_NODELAY`, so each query (its length, then its message) waited 40 ms for the server's delayed ACK; the driver now sets it, as hickory does on its own streams.
+
 ## Not measured yet
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.

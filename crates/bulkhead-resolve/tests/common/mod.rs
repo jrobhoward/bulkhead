@@ -94,6 +94,7 @@ impl Dns {
         let served = dns.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                let _ = stream.set_nodelay(true);
                 tokio::spawn(served.clone().connection(stream));
             }
         });
@@ -138,11 +139,16 @@ impl Dns {
             let Ok(request) = Message::from_vec(&buf) else {
                 return;
             };
+            // A zero sleep still waits for tokio's next millisecond tick.
             let delay = *self.delay.lock().unwrap();
-            tokio::time::sleep(delay).await;
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             let answer = self.answer(&request).to_vec().unwrap();
-            let len = u16::try_from(answer.len()).unwrap().to_be_bytes();
-            if stream.write_all(&len).await.is_err() || stream.write_all(&answer).await.is_err() {
+            // One write, as servers send an answer.
+            let mut framed = u16::try_from(answer.len()).unwrap().to_be_bytes().to_vec();
+            framed.extend_from_slice(&answer);
+            if stream.write_all(&framed).await.is_err() {
                 return;
             }
         }

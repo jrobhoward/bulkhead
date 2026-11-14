@@ -135,6 +135,10 @@ impl RuntimeProvider for NodeStreams {
                 .insert(server_addr, alive.clone());
             let guard = Closing { key, closed, alive };
             stream.set_nonblocking(true)?;
+            // As hickory's own streams: a query is its length, then the
+            // message, and Nagle would hold the second write for the
+            // server's delayed ACK (40 ms on Linux).
+            stream.set_nodelay(true)?;
             let io = AsyncIoTokioAsStd(tokio::net::TcpStream::from_std(stream)?);
             Ok(Stream { io, guard })
         })

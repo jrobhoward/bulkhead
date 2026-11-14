@@ -746,6 +746,11 @@ All notable changes are recorded here. The format follows
   and the node would otherwise wait about two minutes and run on without
   it. The ingress is stopped gracefully at shutdown, and the resolver on
   a reload, rather than killed.
+- The resolver driver's streams to nameservers set `TCP_NODELAY` (ROADMAP
+  DA9, step 5): a query is its length then its message, and each waited
+  40 ms for the server's delayed ACK. `examples/lookup_cost` measures a
+  lookup through the driver against `getaddrinfo` and hickory in-process
+  (BASELINE.md, 2026-11-14).
 - The resolver driver (ROADMAP DA9, step 4) answers a name the hosts file
   holds from the file alone, as libc's `files` source does, keeps one
   stream per nameserver for all its lookups (a burst of first lookups
