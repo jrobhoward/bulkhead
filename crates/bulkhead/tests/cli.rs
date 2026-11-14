@@ -11,7 +11,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use bulkhead::node::{LogRing, Node, NodeConfig};
+use bulkhead::node::{LogRing, Node};
 use minisign::KeyPair;
 use tempfile::TempDir;
 
@@ -63,7 +63,7 @@ async fn cli____full_cycle____deploy_list_status_call_kill_stop_start_remove() {
         common::native_fixtures().0
     );
     let node = Arc::new(
-        Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))
+        Node::open(common::node_config(&toml), LogRing::new(100))
             .await
             .unwrap(),
     );
@@ -93,7 +93,13 @@ async fn cli____full_cycle____deploy_list_status_call_kill_stop_start_remove() {
     let counted = bulkhead(&socket, &["call", "demo", "count"]).await;
     let ps_table = bulkhead(&socket, &["ps"]).await;
     let ps_json = bulkhead(&socket, &["--json", "ps"]).await;
-    let ps: Vec<bulkhead::api::InstanceInfo> = serde_json::from_str(&ps_json.stdout).unwrap();
+    // The demo app's instance: `ps` lists the node's own resolver too.
+    let ps: Vec<bulkhead::api::InstanceInfo> =
+        serde_json::from_str::<Vec<bulkhead::api::InstanceInfo>>(&ps_json.stdout)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.app == "demo")
+            .collect();
     let state = bulkhead(&socket, &["state", &ps[0].pid]).await;
     let by_pid = bulkhead(&socket, &["call", "--pid", &ps[0].pid, "echo:by-pid"]).await;
     let registered = bulkhead(&socket, &["call", "demo", "register:demo-name"]).await;
@@ -251,7 +257,7 @@ async fn shell____lines_on_stdin____each_runs_and_errors_do_not_end_the_session(
         common::native_fixtures().0
     );
     let node = Arc::new(
-        Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))
+        Node::open(common::node_config(&toml), LogRing::new(100))
             .await
             .unwrap(),
     );

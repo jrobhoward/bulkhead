@@ -54,6 +54,14 @@
 //! operators = "/etc/bulkhead/operators.toml"  # [operators] alice = ["ed25519:..."]
 //! # key = "/etc/bulkhead/node.key"           # default: [cluster] key
 //!
+//! # Host names: resolved by the bulkhead-resolve driver (ROADMAP DA9),
+//! # never in the node. Every key optional.
+//! [resolver]
+//! resolv_conf = "/etc/resolv.conf"  # search domains, options, nameservers
+//! hosts = "/etc/hosts"
+//! nameservers = ["127.0.0.53"]      # in place of resolv.conf's; "ip:port" too
+//! reload_s = 5                      # read both again; the driver restarts on a change
+//!
 //! # Prometheus scrape endpoint (GET /metrics). Unauthenticated.
 //! [metrics]
 //! address = "127.0.0.1:9100"
@@ -199,6 +207,10 @@ pub struct NodeConfig {
     /// Native-process apps: the runner, the cgroup and the pings.
     #[serde(default)]
     pub native: NativeBinding,
+    /// Host names (ROADMAP DA9): where the resolver driver's nameservers,
+    /// search domains and hosts come from.
+    #[serde(default)]
+    pub resolver: ResolverBinding,
     /// Start every native instance through the privileged helper,
     /// `bulkhead-priv`, under a user of its app's own (`[priv]`, ROADMAP
     /// PS1). The node must then have been started by the helper; without
@@ -647,6 +659,59 @@ pub const MAX_DRIVER_LISTENERS: usize = 6;
 /// which no bundle and no `[drivers.<app>]` may take.
 pub const INGRESS_APP: &str = "bulkhead-ingress";
 
+/// The app name of the node's own resolver of host names (ROADMAP DA9),
+/// which no bundle and no `[drivers.<app>]` may take.
+pub const RESOLVE_APP: &str = "bulkhead-resolve";
+
+/// The most nameservers the resolver driver is given
+/// (`bulkhead_resolve::config::MAX_NAMESERVERS`).
+pub const MAX_NAMESERVERS: usize = 8;
+
+/// `[resolver]`: where host names are resolved from (ROADMAP DA9). The
+/// node reads both files by path and gives their text to the resolver
+/// driver, `bulkhead-resolve`; it parses only `resolv.conf`'s
+/// `nameserver` lines, for the addresses the driver may connect to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResolverBinding {
+    /// `resolv.conf`: its search domains and options, and its
+    /// nameservers unless `nameservers` is set.
+    pub resolv_conf: PathBuf,
+    /// The hosts file; a missing one is empty.
+    pub hosts: PathBuf,
+    /// Nameservers in place of `resolv.conf`'s: `ip` (port 53) or
+    /// `ip:port`, `[v6]:port` for IPv6 with a port.
+    pub nameservers: Vec<String>,
+    /// How often both files are read again, in seconds; on a change the
+    /// driver restarts with them. 0: only on SIGHUP and `bulkhead
+    /// reload-tls`.
+    pub reload_s: u64,
+}
+
+impl Default for ResolverBinding {
+    fn default() -> Self {
+        Self {
+            resolv_conf: PathBuf::from("/etc/resolv.conf"),
+            hosts: PathBuf::from("/etc/hosts"),
+            nameservers: Vec::new(),
+            reload_s: 5,
+        }
+    }
+}
+
+/// A nameserver as written: `ip`, `ip:port` or `[v6]:port`; port 53 when
+/// none is named.
+#[must_use]
+pub fn nameserver(text: &str) -> Option<std::net::SocketAddr> {
+    let text = text.trim();
+    if let Ok(addr) = text.parse::<std::net::SocketAddr>() {
+        return Some(addr);
+    }
+    text.parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| std::net::SocketAddr::new(ip, 53))
+}
+
 /// `[drivers.<app>]`: what the app of that name gets beyond its manifest,
 /// as a driver app (ROADMAP DA1).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
@@ -831,6 +896,10 @@ pub struct NativeBinding {
     /// the runner. Under `[priv]` it must be in the runner's directory,
     /// which every instance's root shows.
     pub ingress: Option<PathBuf>,
+    /// The `bulkhead-resolve` executable, the resolver of host names the
+    /// node starts on every member (ROADMAP DA9); unset for the one
+    /// beside the runner, in the runner's directory under `[priv]` too.
+    pub resolve: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -860,6 +929,7 @@ impl Default for NativeBinding {
         Self {
             runner: None,
             ingress: None,
+            resolve: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1135,6 +1205,11 @@ impl NodeConfig {
                     "{INGRESS_APP} is the node's own HTTP ingress, configured by [http]"
                 ));
             }
+            if app == RESOLVE_APP {
+                return invalid(format!(
+                    "{RESOLVE_APP} is the node's own resolver, configured by [resolver]"
+                ));
+            }
             if d.listeners.len() > MAX_DRIVER_LISTENERS {
                 return invalid(format!("at most {MAX_DRIVER_LISTENERS} listeners"));
             }
@@ -1184,6 +1259,23 @@ impl NodeConfig {
                     )));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// `[resolver] nameservers`: each an address, at most
+    /// [`MAX_NAMESERVERS`].
+    fn check_resolver(&self) -> Result<(), NodeError> {
+        let r = &self.resolver;
+        if r.nameservers.len() > MAX_NAMESERVERS {
+            return Err(NodeError::Invalid(format!(
+                "node config: resolver.nameservers: at most {MAX_NAMESERVERS}"
+            )));
+        }
+        if let Some(bad) = r.nameservers.iter().find(|n| nameserver(n).is_none()) {
+            return Err(NodeError::Invalid(format!(
+                "node config: resolver.nameservers: '{bad}' is not ip or ip:port"
+            )));
         }
         Ok(())
     }
@@ -1278,6 +1370,7 @@ impl NodeConfig {
         config.check_native()?;
         config.check_drivers()?;
         config.check_http_driver()?;
+        config.check_resolver()?;
         for (name, binding) in &config.http {
             let invalid =
                 |m: String| Err(NodeError::Invalid(format!("node config: http.{name}.{m}")));

@@ -2,6 +2,7 @@
 //! admin API exposes.
 
 mod blue_green;
+mod builtin;
 mod cluster;
 mod connections;
 mod deploy;
@@ -9,6 +10,7 @@ mod ingress;
 mod queries;
 #[cfg(feature = "tls")]
 mod remote;
+mod resolve;
 mod upgrade;
 
 pub use blue_green::Traffic;
@@ -63,6 +65,8 @@ pub struct Node {
     extensions: std::sync::Mutex<Option<StartedExtensions>>,
     /// HTTP ingress, if node config has `[http]` addresses.
     ingress: Ingress,
+    /// The resolver of host names (ROADMAP DA9), on a member.
+    resolver: resolve::Resolver,
     /// Stops background tasks: the `[metrics]` endpoint, certificate
     /// checks.
     stop: tokio::sync::watch::Sender<bool>,
@@ -267,6 +271,7 @@ impl Node {
             tracing::warn!(error = %e, "a driver's file not shared with it");
         }
         let ingress = Ingress::open(&config, &rt, &apps, ingress_args).await?;
+        let resolver = resolve::Resolver::open(&config, &rt, &apps).await?;
         let events = Events::new();
         let audit = Audit::new(store.audit_path(), events.clone());
         let gate = config.failover.is_some().then(|| {
@@ -292,6 +297,7 @@ impl Node {
             native_listeners: std::sync::Mutex::default(),
             extensions: std::sync::Mutex::default(),
             ingress,
+            resolver,
             stop,
             quic: Arc::default(),
             #[cfg(feature = "tls")]
@@ -303,6 +309,7 @@ impl Node {
             leadership: tokio::sync::watch::channel(0).0,
             config,
         };
+        node.resolver.watch(node.stop.subscribe());
         tokio::spawn(events::forward(
             node.events.clone(),
             node.rt.instance_events(),
@@ -389,6 +396,11 @@ impl Node {
     /// [`NodeError::Invalid`] naming each ingress that failed.
     pub async fn reload_tls(&self) -> Result<Done, NodeError> {
         let (ingresses, mut failed) = self.ingress.reload_tls().await;
+        match self.resolver.reload().await {
+            Ok(true) => tracing::info!("resolver restarted with changed resolv.conf or hosts"),
+            Ok(false) => {}
+            Err(e) => failed.push(format!("resolver: {e}")),
+        }
         #[cfg(feature = "tls")]
         if let Err(e) = self.reload_operators() {
             failed.push(e.to_string());

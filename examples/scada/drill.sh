@@ -41,6 +41,8 @@ echo "building (release; the first build takes a few minutes)..."
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead --features modbus
 # The node runs apps through the bulkhead-runner beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-native --bin bulkhead-runner
+# And its resolver of host names (bulkhead-resolve), also beside it.
+cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-resolve
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \
   -p bulkhead-modbus --example fake_device
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \

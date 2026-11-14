@@ -9,6 +9,7 @@
 #
 #   cargo build -p bulkhead -p bulkhead-priv                   # as a user
 #   cargo build -p bulkhead-native --bin bulkhead-runner
+#   cargo build -p bulkhead-resolve
 #   sh scripts/priv-e2e-rcd.sh "$PWD"                           # as root
 set -eu
 SRC=${1:?checkout}
@@ -19,6 +20,7 @@ install -m 0755 $T/bulkhead-priv /usr/local/sbin/bulkhead-priv
 install -m 0755 $T/bulkhead /usr/local/bin/bulkhead
 install -d -m 0755 /usr/local/libexec/bulkhead
 install -m 0755 $T/bulkhead-runner /usr/local/libexec/bulkhead/bulkhead-runner
+install -m 0755 $T/bulkhead-resolve /usr/local/libexec/bulkhead/bulkhead-resolve
 install -d -m 0755 /usr/local/etc/bulkhead
 service bulkhead onestop 2>/dev/null || true
 rm -rf /var/db/bulkhead; install -d -m 0700 -o bulkhead -g bulkhead /var/db/bulkhead

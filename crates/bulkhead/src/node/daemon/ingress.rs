@@ -156,86 +156,24 @@ pub(super) fn bind(
     Ok(None)
 }
 
-/// Where `bulkhead-ingress` is: `[native] ingress`, or beside the runner.
-#[cfg(feature = "http")]
-fn ingress_program(config: &NodeConfig) -> PathBuf {
-    if let Some(path) = &config.native.ingress {
-        return path.clone();
-    }
-    let runner = config.native.runner.clone().unwrap_or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("bulkhead-runner")))
-            .unwrap_or_else(|| PathBuf::from("bulkhead-runner"))
-    });
-    runner.parent().map_or_else(
-        || PathBuf::from("bulkhead-ingress"),
-        |d| d.join("bulkhead-ingress"),
-    )
-}
-
-/// The driver's restarts: at most `INGRESS_INTENSITY` within
-/// `INGRESS_PERIOD_MS`, each after a delay from `INGRESS_BACKOFF_MS`
-/// doubling to its cap. The cap keeps a driver crashing at once to about
-/// 13 restarts in the period, under the intensity, so its supervisor never
-/// gives up: a client that can crash it (by exhausting its memory, say)
-/// costs the node its ingress for a second at a time, not until a restart.
-#[cfg(feature = "http")]
-const INGRESS_INTENSITY: u32 = 20;
-#[cfg(feature = "http")]
-const INGRESS_PERIOD_MS: u64 = 10_000;
-#[cfg(feature = "http")]
-const INGRESS_BACKOFF_MS: (u64, u64) = (100, 1_000);
-
 /// The driver's manifest: one instance, its init arguments, restarts that
 /// never give up, its metrics named as the node's ingress's were
 /// (`bulkhead_http_*`).
 #[cfg(feature = "http")]
 fn ingress_manifest(args: serde_json::Value) -> Result<AppManifest, NodeError> {
-    use bulkhead_bundle::manifest::{AppInfo, AppSpec, ProgramRef, Provenance};
     let spec = serde_json::json!({
         "kind": "native-process",
         "native": { "program": "executable" },
         "instances": { "count": 1 },
         "lifecycle": { "start_args": args },
-        "supervision": {
-            "intensity": INGRESS_INTENSITY,
-            "period_ms": INGRESS_PERIOD_MS,
-            "backoff": {
-                "initial_ms": INGRESS_BACKOFF_MS.0,
-                "max_ms": INGRESS_BACKOFF_MS.1,
-                "jitter": false,
-            },
-        },
+        "supervision": super::builtin::supervision(),
         "limits": {
             "memory_max": "512MiB",
             "message_max_bytes": "16MiB",
         },
         "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_http" } },
     });
-    Ok(AppManifest {
-        app: AppInfo {
-            name: INGRESS_APP.into(),
-            version: env!("CARGO_PKG_VERSION")
-                .parse()
-                .map_err(|e| NodeError::Internal(format!("{INGRESS_APP} version: {e}")))?,
-            description: Some("The node's HTTP ingress".into()),
-            authors: Vec::new(),
-            license: None,
-            repository: None,
-        },
-        program: ProgramRef {
-            path: String::new(),
-            checksum: String::new(),
-        },
-        provenance: Provenance {
-            signer_key: String::new(),
-            build_info: None,
-            sbom: None,
-        },
-        spec: AppSpec::from_json_value(&spec)
-            .map_err(|e| NodeError::Internal(format!("{INGRESS_APP} manifest: {e}")))?,
-    })
+    super::builtin::manifest(INGRESS_APP, "The node's HTTP ingress", &spec)
 }
 
 impl Ingress {
@@ -261,7 +199,7 @@ impl Ingress {
         let Some(args) = args else {
             return Ok(ingress);
         };
-        let program = ingress_program(config);
+        let program = super::builtin::program(config, config.native.ingress.as_ref(), INGRESS_APP);
         if !program.is_file() {
             return Err(NodeError::Invalid(format!(
                 "[http] needs the HTTP ingress program, and {} is not one ([native] ingress)",
@@ -457,7 +395,3 @@ fn granted_routes(spec: &InstanceSpec) -> bool {
     spec.granted
         .contains(&bulkhead_bundle::manifest::Capability::HttpIncoming)
 }
-
-#[cfg(test)]
-#[path = "ingress_tests.rs"]
-mod tests;

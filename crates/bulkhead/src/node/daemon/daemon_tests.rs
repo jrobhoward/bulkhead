@@ -4,9 +4,11 @@
 
 use super::*;
 
+/// A witness: it runs no apps, so no resolver of host names to build for
+/// tests of the change lock alone.
 async fn node(dir: &tempfile::TempDir) -> Node {
     let toml = format!(
-        "data_dir = {:?}\nmax_instances = 8\n",
+        "data_dir = {:?}\nmax_instances = 8\n[cluster]\nrole = \"witness\"\n",
         dir.path().join("data")
     );
     Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(16))

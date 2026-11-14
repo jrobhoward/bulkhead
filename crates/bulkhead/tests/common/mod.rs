@@ -71,6 +71,52 @@ pub fn ingress_built() {
     });
 }
 
+/// `bulkhead-resolve`, built on first use beside the runner of
+/// [`native_fixtures`]: every member node starts it (ROADMAP DA9).
+pub fn resolve_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let target = workspace_root().join("target/fixtures/native");
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .current_dir(workspace_root())
+                .args(["build", "-p", "bulkhead-resolve", "--target-dir"])
+                .arg(&target)
+                .status()
+                .unwrap();
+            assert!(status.success(), "building bulkhead-resolve failed");
+            target.join("debug/bulkhead-resolve")
+        })
+        .clone()
+}
+
+/// Node config from `toml`, with the fixtures' runner and resolver where
+/// it names none: a member node runs its resolver of host names as a
+/// native instance, so every test node needs both.
+pub fn node_config(toml: &str) -> NodeConfig {
+    let mut config = NodeConfig::from_toml_str(toml).unwrap();
+    if config.native.runner.is_none() {
+        config.native.runner = Some(native_fixtures().0.clone());
+    }
+    if config.native.resolve.is_none() {
+        config.native.resolve = Some(resolve_built());
+    }
+    config
+}
+
+/// The instances `client`'s node runs for deployed apps: `bulkhead ps`
+/// without the node's own drivers (`bulkhead-resolve`, `bulkhead-ingress`).
+pub async fn ps(client: &Client) -> Vec<bulkhead::api::InstanceInfo> {
+    client
+        .ps()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.app != "bulkhead-resolve" && i.app != "bulkhead-ingress")
+        .collect()
+}
+
 /// A fixture crate's program, built natively with `features` on first use
 /// by each test binary, into `target/fixtures/<dir>`.
 fn native_program(package: &str, features: &str, dir: &str, once: &OnceLock<()>) -> Vec<u8> {
@@ -308,7 +354,7 @@ impl TestNode {
         // runtime still holds the keyvalue database; retry until it is free.
         let mut tries = 0;
         let node = loop {
-            match Node::open(NodeConfig::from_toml_str(&toml).unwrap(), ring()).await {
+            match Node::open(node_config(&toml), ring()).await {
                 Ok(node) => break Arc::new(node),
                 Err(e) if tries < 250 => {
                     tries += 1;

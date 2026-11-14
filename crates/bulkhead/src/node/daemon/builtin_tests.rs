@@ -1,5 +1,3 @@
-// The driver's manifest exists only with the ingress.
-#![cfg(feature = "http")]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -10,8 +8,9 @@ use std::time::Duration;
 use super::*;
 
 #[test]
-fn ingress_manifest____driver_crashing_at_once_for_ten_minutes____supervisor_never_gives_up() {
-    let supervision = ingress_manifest(serde_json::json!({}))
+fn supervision____driver_crashing_at_once_for_ten_minutes____never_gives_up() {
+    let spec = serde_json::json!({ "supervision": supervision() });
+    let supervision = manifest("driver", "a built-in driver", &spec)
         .unwrap()
         .spec
         .supervision;

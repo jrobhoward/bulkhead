@@ -84,7 +84,7 @@ async fn cluster____two_nodes_by_seed____members_remote_call_leave_and_events() 
         ))
         .await
         .unwrap();
-    let pid = n2.client.ps().await.unwrap()[0].pid.clone();
+    let pid = common::ps(&n2.client).await[0].pid.clone();
     let (_, reply) = n1
         .client
         .call_to(

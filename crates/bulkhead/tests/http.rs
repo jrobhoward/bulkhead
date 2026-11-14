@@ -14,7 +14,7 @@ use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bulkhead::node::{LogRing, Node, NodeConfig};
+use bulkhead::node::{LogRing, Node};
 
 mod common;
 use tempfile::TempDir;
@@ -162,7 +162,7 @@ async fn node(setup: &Setup, tag: &str, extra: &str) -> (Arc<Node>, PathBuf) {
         },
     );
     let node = Arc::new(
-        Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))
+        Node::open(common::node_config(&toml), LogRing::new(100))
             .await
             .unwrap(),
     );

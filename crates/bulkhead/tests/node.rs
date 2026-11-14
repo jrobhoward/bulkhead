@@ -32,7 +32,7 @@ async fn deploy____signed_bundle____running_listed_and_callable() {
 
     let deployed = n.client.deploy(b).await.unwrap();
     let list = n.client.list().await.unwrap();
-    let ps = n.client.ps().await.unwrap();
+    let ps = common::ps(&n.client).await;
     let reply = call(&n, "echoer", "echo hello").await;
 
     assert_eq!(deployed.app.status, "running");
@@ -69,12 +69,12 @@ async fn kill____instance____restarted_with_next_incarnation() {
         ))
         .await
         .unwrap();
-    let before = n.client.ps().await.unwrap()[0].pid.clone();
+    let before = common::ps(&n.client).await[0].pid.clone();
 
     n.client.kill(&before).await.unwrap();
     let mut after = String::new();
     for _ in 0..200 {
-        let ps = n.client.ps().await.unwrap();
+        let ps = common::ps(&n.client).await;
         if let Some(i) = ps.iter().find(|i| i.pid != before && i.state == "active") {
             after = i.pid.clone();
             break;
@@ -227,7 +227,7 @@ async fn events_and_follow____deploy_kill_and_logs____streamed_as_they_happen() 
         .unwrap()
         .unwrap()
         .unwrap();
-    let before = n.client.ps().await.unwrap()[0].pid.clone();
+    let before = common::ps(&n.client).await[0].pid.clone();
     n.client.kill(&before).await.unwrap();
     let killed = next_event(&mut events, "audit", "kill").await;
     let exited = next_event(&mut events, "instance", "exit").await;
@@ -503,7 +503,7 @@ async fn stop_start_remove____app_with_dependents____lifecycle_and_dependency_gu
     n.client.stop("top").await.unwrap();
     let again = n.client.stop("top").await.unwrap_err();
     n.client.start("top").await.unwrap();
-    let ps_after_start = n.client.ps().await.unwrap();
+    let ps_after_start = common::ps(&n.client).await;
     let remove_blocked = n.client.remove("base").await.unwrap_err();
     n.client.remove("top").await.unwrap();
     n.client.remove("base").await.unwrap();

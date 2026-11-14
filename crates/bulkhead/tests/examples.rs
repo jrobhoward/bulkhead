@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bulkhead::node::{LogRing, Node, NodeConfig};
+use bulkhead::node::{LogRing, Node};
 use tempfile::TempDir;
 
 fn root() -> PathBuf {
@@ -186,7 +186,7 @@ async fn examples____bundled_with_the_cli____run_upgrade_and_fail_as_designed() 
         common::runner_config()
     );
     let node = Arc::new(
-        Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))
+        Node::open(common::node_config(&toml), LogRing::new(100))
             .await
             .unwrap(),
     );

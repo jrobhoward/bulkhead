@@ -119,7 +119,7 @@ async fn failover____primary_stops____singleton_moves_to_standby_and_stays() {
         standing(&n2).await.role == "standby"
     })
     .await;
-    let before = (singleton(&n2).await, n2.client.ps().await.unwrap().len());
+    let before = (singleton(&n2).await, common::ps(&n2.client).await.len());
     n1.shutdown().await;
     until("node 2 primary and running the singleton", || async {
         standing(&n2).await.may_run && singleton(&n2).await == "running"
@@ -510,7 +510,7 @@ async fn gate____singleton_deployed_to_a_primary____runs_at_once() {
     let status = singleton(&n).await;
 
     assert_eq!(status, "running");
-    assert_eq!(n.client.ps().await.unwrap().len(), 1);
+    assert_eq!(common::ps(&n.client).await.len(), 1);
     n.shutdown().await;
 }
 
@@ -538,7 +538,7 @@ async fn gate____held_singleton____upgraded_rolled_back_and_removed_without_runn
         .await
         .unwrap();
     let after_rollback = n.client.status("leader").await.unwrap().summary;
-    let instances = n.client.ps().await.unwrap().len();
+    let instances = common::ps(&n.client).await.len();
     n.client.remove("leader").await.unwrap();
 
     assert_eq!(
@@ -619,7 +619,7 @@ async fn gate____epoch_cannot_be_kept____singleton_stays_stopped() {
     let status = singleton(&n).await;
 
     assert_eq!(status, "standby");
-    assert_eq!(n.client.ps().await.unwrap().len(), 0);
+    assert_eq!(common::ps(&n.client).await.len(), 0);
     n.shutdown().await;
 }
 

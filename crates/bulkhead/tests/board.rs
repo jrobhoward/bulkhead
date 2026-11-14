@@ -17,7 +17,7 @@ use std::time::Duration;
 
 mod common;
 
-use bulkhead::node::{Node, NodeConfig};
+use bulkhead::node::Node;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -125,7 +125,7 @@ impl Running {
     async fn open(toml: &str, socket: &Path) -> Self {
         let mut tries = 0;
         let node = loop {
-            match Node::open(NodeConfig::from_toml_str(toml).unwrap(), common::ring()).await {
+            match Node::open(common::node_config(toml), common::ring()).await {
                 Ok(node) => break Arc::new(node),
                 Err(_) if tries < 250 => {
                     tries += 1;

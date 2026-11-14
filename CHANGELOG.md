@@ -8,6 +8,19 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Every member node starts `bulkhead-resolve` (ROADMAP DA9, step 2), an
+  app of its own of that name: beside the runner, or `[native] resolve`;
+  a member without it refuses to start (a witness runs none). It gets the
+  text of `resolv.conf` and the hosts file and TCP to the nameservers
+  alone (`bulkhead:sockets` connect rules), accepts messages from itself
+  only, and restarts with a supervisor that never gives up. New node
+  config `[resolver]`: `resolv_conf`, `hosts`, `nameservers` (`ip` or
+  `ip:port`, in place of `resolv.conf`'s, at most 8) and `reload_s`
+  (default 5): both files are read again then, on SIGHUP and on
+  `bulkhead reload-tls`, and the driver restarts when they changed.
+  `bulkhead-resolve` is a reserved app name. `bulkhead ps` lists its
+  instance. Nothing resolves through it yet (step 3).
+
 - The HTTP ingress runs outside the node (ROADMAP DA2, step 4): for
   `[http.<name>]` the node binds the addresses and starts the
   `bulkhead-ingress` driver as an app of its own (`[native] ingress`,
@@ -72,8 +85,7 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
-- `bulkhead-resolve`, the resolver driver (ROADMAP DA9, step 1; the node
-  does not start it yet): hickory-resolver on a worker thread, over TCP
+- `bulkhead-resolve`, the resolver driver (ROADMAP DA9): hickory-resolver on a worker thread, over TCP
   streams the node opens to the nameservers it names (no UDP), with
   `resolv.conf`'s search list and options and the hosts file passed as
   text. It answers calls with schema `bulkhead/resolve`

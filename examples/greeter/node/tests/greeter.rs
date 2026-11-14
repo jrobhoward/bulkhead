@@ -37,7 +37,8 @@ fn cargo(target: &Path, args: &[&str]) {
     assert!(status.success(), "building {args:?} failed");
 }
 
-/// The greeter app as a native program and `bulkhead-runner`, built once
+/// The greeter app as a native program and `bulkhead-runner` (with the
+/// node's `bulkhead-resolve` beside it), built once
 /// per test binary.
 fn native() -> &'static (PathBuf, PathBuf) {
     static BUILT: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
@@ -45,7 +46,14 @@ fn native() -> &'static (PathBuf, PathBuf) {
         let target = root().join("target/fixtures/greeter-native");
         cargo(
             &target,
-            &["-p", "bulkhead-native", "-p", "example-greeter-app"],
+            &[
+                "-p",
+                "bulkhead-native",
+                "-p",
+                "bulkhead-resolve",
+                "-p",
+                "example-greeter-app",
+            ],
         );
         let debug = target.join("debug");
         (

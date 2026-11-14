@@ -35,7 +35,7 @@ async fn pid_of(n: &TestNode, app: &str) -> String {
 /// Wait for an active instance of `app` whose pid is not `old`.
 async fn next_pid(n: &TestNode, app: &str, old: &str) -> String {
     for _ in 0..300 {
-        let ps = n.client.ps().await.unwrap();
+        let ps = common::ps(&n.client).await;
         if let Some(i) = ps
             .iter()
             .find(|i| i.app == app && i.pid != old && i.state == "active")
@@ -46,7 +46,7 @@ async fn next_pid(n: &TestNode, app: &str, old: &str) -> String {
     }
     panic!(
         "no new instance of {app}: {:?}",
-        n.client.ps().await.unwrap()
+        common::ps(&n.client).await
     );
 }
 
@@ -93,7 +93,7 @@ async fn exit_criterion_1____kill____restarted_links_get_exit_monitors_get_down_
     let stale_kill = n.client.kill(&target).await.unwrap_err();
     let target_status = n.client.status("target").await.unwrap();
     let watcher_status = n.client.status("watcher").await.unwrap();
-    let ps = n.client.ps().await.unwrap();
+    let ps = common::ps(&n.client).await;
     let restarted = ps.iter().find(|i| i.pid == next).unwrap();
 
     assert_eq!(linked, "ok");
@@ -158,7 +158,7 @@ async fn exit_criterion_3____handler_spins____killed_with_timeout_and_node_stays
     for _ in 0..10 {
         let t = Instant::now();
         assert_eq!(call(&n, "bystander", "echo:x").await, "x");
-        n.client.ps().await.unwrap();
+        common::ps(&n.client).await;
         worst = worst.max(t.elapsed());
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -245,7 +245,7 @@ async fn exit_criterion_5____mailbox_full____casts_dropped_and_counted_calls_fai
         .await
         .unwrap_err();
     let elapsed = started.elapsed();
-    let ps = n.client.ps().await.unwrap();
+    let ps = common::ps(&n.client).await;
 
     assert!(cast.to_string().contains("overloaded"), "{cast}");
     assert!(called.to_string().contains("overloaded"), "{called}");

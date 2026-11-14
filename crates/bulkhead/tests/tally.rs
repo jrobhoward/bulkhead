@@ -18,7 +18,7 @@ use std::process::Command as StdCommand;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use bulkhead::node::{LogRing, Node, NodeConfig};
+use bulkhead::node::{LogRing, Node};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn root() -> PathBuf {
@@ -155,7 +155,7 @@ async fn tally____on_postgres____counts_in_transactions_and_outlives_the_app() {
         node_extra(),
     );
     let node = Arc::new(
-        Node::open(NodeConfig::from_toml_str(&toml).unwrap(), LogRing::new(100))
+        Node::open(common::node_config(&toml), LogRing::new(100))
             .await
             .unwrap(),
     );

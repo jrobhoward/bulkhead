@@ -133,6 +133,7 @@ cargo build --release --locked -p bulkhead-modbus --example fake_device || exit 
 # beside bulkhead.
 cargo build --release --locked -p bulkhead-native --bin bulkhead-runner || exit 1
 cargo build --release --locked -p bulkhead-ingress || exit 1
+cargo build --release --locked -p bulkhead-resolve || exit 1
 cargo build --release --locked -p example-counter -p example-chaos -p example-ledger \
     -p bulkhead-fixture-conformance -p example-scada-points -p example-scada-hmi -p example-scada-control \
     || exit 1
