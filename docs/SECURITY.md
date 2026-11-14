@@ -27,6 +27,7 @@ Report it privately through the repository's Security tab ("Report a vulnerabili
 | A cluster member (a node whose key is in the peers file) | what its own instances could do on the node: call, cast, link and send exit signals within the messaging ACLs, as its stamp on each frame says; call an app by name from its host, as a standby's ingress does to forward an HTTP request (not subject to messaging ACLs, as host calls are not); take part in failover | speak for another node's instances (a frame whose sender pid is on another node is dropped); its stamps are trusted, so a member that lies about its senders' apps passes ACLs it should not |
 | The witness | arbitrate its pair | — |
 | An extension (host code built into the node by its operator: the Modbus extension, `examples/greeter`) | everything the node process can do; it runs as part of the node | — (apps reach it only through its package's declaration and grant, which the extension enforces itself; a native program's calls come through the node with the same state, so the same checks) |
+| The HTTP ingress driver (`bulkhead-ingress`, ROADMAP DA2) | accept on the `[http]` listeners, read its certificates and keys, call the apps that own routes with any request, ask where such an app runs on the failover partner and have the node call it there | reach anything else of the node's: other apps, buckets, secrets, the cluster key; its process is fenced as any native instance's |
 | HTTP clients, listener clients, Modbus masters | nothing | anything beyond the routes, handlers and tables they reach |
 | Modbus devices polled | return register values | crash or stall the node |
 
@@ -56,9 +57,16 @@ Cluster members trust one another fully, as nodes of an Erlang cluster do: mutua
 
 ### Ingress clients
 
-- **HTTP.** Routes by host and path prefix; body limit per route (1 MiB default); header timeout 10 s, body timeout 30 s; at most 1,024 connections per address; reply size limit; TLS with rustls on ring, certificates reloaded on change. No client certificates yet.
+- **HTTP.** Parsed by the ingress driver, not the node (below). Routes by host and path prefix; body limit per route (1 MiB default); header timeout 10 s, body timeout 30 s; at most 1,024 connections per address; reply size limit; TLS with rustls on ring, certificates reloaded on change. No client certificates yet.
 - **Listeners.** `max_connections` and an idle timeout per listener. An app's connections are passed to its instances, many to each, so a client's bytes reach the app's code unparsed by the node; the node keeps a copy of each socket and shuts it down when the listener stops or the connection idles (`TCP_INFO`), whatever the app does with its copy.
 - **Gaps.** None found.
+
+### The ingress driver
+
+Since ROADMAP DA2 (2026-11-14) HTTP and TLS from clients are parsed in `bulkhead-ingress`, a native instance the node starts for `[http]` (DESIGN.md, "HTTP ingress"), so a bug in hyper, rustls or the driver's own code is a compromise of that process, not of the node.
+
+- **Controls.** The runner's fence, as for any native instance: Landlock and the seccomp allow-list on Linux, Capsicum on FreeBSD, and under the privileged helper a user of its own (with a cgroup and namespaces, or a jail). Its profile is the node's, not a manifest's: `accept4` on the listening sockets the node passed and nowhere else, read rules on its certificate and key files alone, and calls only to the apps that own routes, following the route table (their `accept_from` passes, since declaring routes accepts HTTP requests; `may_call` is the node's list). It answers the node's reload call and the `routes` host event; its frames are read and checked as any app's. `Request::Elsewhere` and a `CallApp` with `partner` are answered for a driver whose profile forwards, and only for apps it may call. `memory_max` 512 MiB, one instance; it restarts after a crash with at most 1 s of backoff and its supervisor never gives up, so a crash costs the ingress at most about a second, and the node keeps the sockets (clients connecting meanwhile wait in the backlog). Its six counters reach the node's metrics as an app's do. Tested on Linux and FreeBSD 15, with the helper as root on both (`bulkhead-ingress/tests`, `tests/drivers.rs`, `tests/priv.rs`); its reading of an app's reply is fuzzed (`http_reply`).
+- **Gaps.** A compromised driver holds the ingress's TLS keys and every client's traffic in clear, and can send the routes' apps any request: apps see no client address, and headers such as `x-forwarded-for` are the client's or the driver's to write, so an app that trusts them trusts the driver. Without the helper it runs as the node's user, fenced by Landlock or Capsicum alone. A client that can crash it (filling its 512 MiB with bodies across `max_connections`, at 1 MiB each by default, or a bug) can keep it restarting, the ingress down for up to a second each time and connections in flight dropped. A certificate or key replaced by a rename (certbot's renewals, which switch a link) is not seen until the driver restarts: its read rule (Landlock) or descriptor (FreeBSD) is bound to the file it was given at start, so rewrite the files in place (OPERATIONS.md). One connection's request costs more CPU than the node's own ingress did (1.5 to 1.6 times on the Pi, BASELINE.md 2026-11-14), so a flood of requests costs the machine more for the same clients.
 
 ### HTTP egress
 
@@ -148,7 +156,7 @@ Every input the node reads from outside its own process, who controls it, the co
 | --- | --- | --- | --- |
 | A native app's frames and ring positions | an app | `bulkhead_native::hot` and the CBOR decoder, `channel::Ring`; fuzzed (`native_frame`; the ring's reader is T1b) | yes: this is the node's own interface |
 | An app's snapshot, for `bulkhead state` | an app | `node/state_view.rs`; fuzzed | yes |
-| HTTP ingress: requests and TLS handshakes | any client | hyper, rustls (`http.rs`) | no: an ingress driver (DA2) |
+| HTTP ingress: requests and TLS handshakes | any client | hyper, rustls, in the ingress driver (`bulkhead-ingress`) since 2026-11-14 | moved: the node binds the addresses and keeps the route table; `scripts/check.sh deps` checks that no node build links `bulkhead-ingress`, a node built with `http` alone has no `tokio-rustls`, and `bulkhead-host` has no hyper (DA2, CR1); hyper stays for the admin socket |
 | HTTP egress: responses and TLS handshakes | any server an app is allowed | hyper, rustls (`services/egress`) | no: an egress driver (DA4); the policy check stays |
 | SQL: Postgres replies | the database server | `tokio-postgres` | no: a driver per datasource (DA3) |
 | Modbus: device replies and masters' requests | devices and masters | `tokio-modbus`, `bulkhead-modbus`; the server's requests fuzzed | no: a driver (DA5) |

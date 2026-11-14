@@ -6,6 +6,7 @@
 #   install -m 0755 target/release/bulkhead-priv /usr/local/sbin/bulkhead-priv
 #   install -m 0755 target/release/bulkhead /usr/local/bin/bulkhead
 #   install -D -m 0755 target/release/bulkhead-runner /usr/local/libexec/bulkhead/bulkhead-runner
+#   install -m 0755 target/release/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress  # with [http]
 #   install -d -m 0700 -o bulkhead -g bulkhead /var/lib/bulkhead
 #   install -m 0600 examples/systemd/priv.conf /etc/bulkhead/priv.conf   # then edit node_uid, node_gid
 #   install -m 0644 examples/systemd/bulkhead-priv.service /etc/systemd/system/bulkhead.service

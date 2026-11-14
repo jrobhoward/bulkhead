@@ -4,6 +4,7 @@
 #   useradd --system --no-create-home --shell /usr/sbin/nologin bulkhead
 #   install -m 0755 target/release/bulkhead /usr/local/bin/bulkhead
 #   install -m 0755 target/release/bulkhead-runner /usr/local/bin/bulkhead-runner  # native-process apps
+#   install -m 0755 target/release/bulkhead-ingress /usr/local/bin/bulkhead-ingress  # with [http]
 #   install -d -m 0750 -o root -g bulkhead /etc/bulkhead     # node.toml, policy, keys
 #   install -m 0644 examples/systemd/bulkhead.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now bulkhead

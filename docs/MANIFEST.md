@@ -327,6 +327,7 @@ address = "0.0.0.0:7070"               # binds a manifest listener named "lines"
 acceptors = 4                          # default 4: tasks accepting connections at once
 
 [drivers.ingress]                      # the app named "ingress", deployed as any app, as a driver app (DA1)
+                                       # (not bulkhead-ingress: the node's own HTTP ingress, from [http], has that name)
 listeners = { https = "0.0.0.0:8443" } # listening sockets the node binds and keeps; the driver accepts on them
                                        # itself (inherited at descriptors 8..13, named in BULKHEAD_LISTENERS),
                                        # accept4 allowed on them alone; at most 6
@@ -377,6 +378,7 @@ ping_timeout_ms = 5000                 # and killed (timeout) without an answer 
 landlock_optional = false              # run native apps on a Linux kernel without Landlock; no effect on FreeBSD (Capsicum)
 spin_us = 20                           # the node and a native app spin this long waiting for each other, then sleep; 0: always sleep (at most 10000)
 sender_spin_us = 50                    # how long an app's thread waits spinning for an answer on a sender channel (its own threads, a driver's requests); at most 10000
+ingress = "/usr/local/bin/bulkhead-ingress"  # the HTTP ingress driver, needed with [http]; unset: bulkhead-ingress beside the runner
 
 [priv]                                 # native instances start through the privileged helper, bulkhead-priv, each app under a user of its own (OPERATIONS.md); the node must be started by it. Nothing to set: the helper's own configuration holds its checks. Not with [native] cgroup
 
@@ -389,16 +391,18 @@ operators = "/etc/bulkhead/operators.toml"  # [operators] alice = ["ed25519:..."
 key = "/etc/bulkhead/node.key"          # default: [cluster] key; operators pin its public key (`bulkhead cluster pubkey`)
 
 [http.main]
-address = "0.0.0.0:8080"               # HTTP ingress (cargo feature `http`, on by default): serves every app's routes
-acceptors = 4                          # default 4
+address = "0.0.0.0:8080"               # HTTP ingress (cargo feature `http`, on by default): serves every app's routes, through
+                                       # the bulkhead-ingress driver, which the node starts ([native] ingress); at most 6 listeners
+acceptors = 4                          # default 4: the driver's worker threads, the largest of the listeners' (at most 64)
 max_connections = 1024                 # default 1024; more are closed on accept
 header_timeout_ms = 10000              # default 10000: time to send headers (also between kept-alive requests)
 body_timeout_ms = 30000                # default 30000: time to send a body, then 408
 max_response = "16MiB"                 # default "16MiB": larger app replies become 502
-tls = [                                # HTTPS (cargo feature `tls`, on by default): PEM chain and key; SNI picks by hosts; the first is the default
+tls = [                                # HTTPS (cargo feature `tls`, on by default): PEM chain and key; SNI picks by hosts; the first is the default;
+                                       # the driver reads each file by its name under /driver/, so names must differ; rewrite them in place to renew
   { cert = "/etc/bulkhead/shop.pem", key = "/etc/bulkhead/shop.key", hosts = ["shop.example", "*.shop.example"] },
 ]
-tls_reload_s = 60                      # default 60: reload when the files change (0: only SIGHUP or `bulkhead reload-tls`)
+tls_reload_s = 60                      # default 60: reload when the files' modification times change (0: only SIGHUP or `bulkhead reload-tls`)
 partner_url = "https://node2.example:8443"  # with [failover]: the partner's listener, as clients reach it
 standby = "redirect"                   # with [failover], a request for a singleton running on the partner:
                                        # "redirect" (307 to partner_url), "forward" (over the cluster to the

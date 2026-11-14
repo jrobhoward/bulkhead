@@ -430,7 +430,7 @@ async fn tls____plain_http_on_the_tls_port____no_response() {
 }
 
 /// `tls_reload_s`: the driver reads changed files on its timer, without
-/// the node asking (the node's reload is `bulkhead tls reload`, in the
+/// the node asking (the node's reload is `bulkhead reload-tls`, in the
 /// node's `http.rs`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_reload____files_replaced____new_certificate_served_on_the_timer() {

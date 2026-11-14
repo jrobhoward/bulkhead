@@ -77,7 +77,7 @@ a36673746174757318c9676865616465727381826c636f6e74656e742d747970
 656a746578742f706c61696e64626f6479426f6b
 ```
 
-A reply with any other schema is sent as `200`, with the envelope's content type as `content-type` and its body. A reply that has the schema but is not such a map is answered `502`, as is one larger than the route's `max_response`. MANIFEST.md has the route settings, and `crates/bulkhead-host/src/http.rs` the statuses for each failure.
+A reply with any other schema is sent as `200`, with the envelope's content type as `content-type` and its body. A reply that has the schema but is not such a map is answered `502`, as is one larger than the route's `max_response`. MANIFEST.md has the route settings, and the ingress driver's `crates/bulkhead-ingress/src/serve.rs` the statuses for each failure.
 
 ## Health checks
 
@@ -136,7 +136,7 @@ The JSON objects' keys come in any order.
 {"routes": [{"app": "shop", "host": null, "path_prefix": "/shop", "hash_header": "x-customer", "max_body": 1048576, "timeout_ms": 30000}]}
 ```
 
-`routes` is the whole table, every app's routes, ordered by app: the routes a node's own ingress serves, so a driver serving HTTP routes and limits requests as the ingress does and calls the app by name (`call_app`). `host` and `hash_header` are `null` when unset; `max_body` is bytes and `timeout_ms` milliseconds. The Rust SDK reads it as `bulkhead_sdk::http::Routes`, whose `pick` matches a request as the ingress does.
+`routes` is the whole table, every app's routes, ordered by app: the routes the node's ingress serves, so a driver serving HTTP routes and limits requests as the ingress does and calls the app by name (`call_app`). The node's own ingress driver, `bulkhead-ingress`, is such a driver (ROADMAP DA2). `host` and `hash_header` are `null` when unset; `max_body` is bytes and `timeout_ms` milliseconds. The Rust SDK reads it as `bulkhead_sdk::http::Routes`, whose `pick` matches a request as the ingress does.
 
 ## Modbus updates
 

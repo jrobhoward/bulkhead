@@ -10,7 +10,7 @@ A map of the code as built: the crates, the paths a call, a deploy, a failover, 
 flowchart TD
     operator(["operator"]) -->|"CLI, over the Unix socket or TLS"| bulkhead
     bulkhead["bulkhead (bin + lib)<br/>api: admin types, client<br/>node: daemon, store, gate, events, audit, serial path<br/>cli: commands, shell"]
-    host["bulkhead-host<br/>runtime, process core, services, supervisors,<br/>transport, failover, replication, http, listeners, native"]
+    host["bulkhead-host<br/>runtime, process core, services, supervisors,<br/>transport, failover, replication, routes, listeners, native"]
     bundle["bulkhead-bundle<br/>manifest, .rbp, verify, policy, grant"]
     native["bulkhead-native<br/>protocol, channel, snapshot, app, bulkhead-runner"]
     ext["extensions<br/>bulkhead-modbus, greeter service"]
@@ -18,6 +18,7 @@ flowchart TD
     napps["native apps<br/>rustbridge plugins, executables<br/>on bulkhead-native's app API"]
     helper["bulkhead-priv (bin, root)<br/>starts the node and each instance"]
     wire["bulkhead-priv-wire<br/>node to helper messages"]
+    ingress["bulkhead-ingress (bin)<br/>the HTTP ingress driver: hyper, rustls"]
     bulkhead --> host
     bulkhead --> bundle
     bulkhead -->|"modbus feature"| ext
@@ -29,6 +30,8 @@ flowchart TD
     host -->|"[priv]"| wire
     helper --> wire
     helper -.->|"starts, under each app's user"| napps
+    ingress -->|"SDK, sender_async"| guests
+    bulkhead -.->|"starts for [http]"| ingress
 ```
 
 Solid arrows point from a crate to the crates it depends on; dotted arrows are what runs on the host, not Cargo dependencies.
@@ -37,10 +40,11 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | --- | --- | --- |
 | `bulkhead` | binary and library | `api` (admin API types, and the client over the Unix socket or TLS), `node` (the daemon, feature `node`), `serial` (the tty layer and frames for the failover serial line), `cli` (commands, bundle building, the shell). |
 | `bulkhead-bundle` | library | The app manifest model and validation, `.rbp` opening and signature checks against operator keys (the program's platform variant), operator policy and the effective grant. |
-| `bulkhead-host` | library | The runtime: process table, instances, links and monitors, supervisors, app sets and pools, host services, the HTTP ingress, listeners, the cluster transport, liveness, membership, failover, replication, moving singletons and release versions. |
+| `bulkhead-host` | library | The runtime: process table, instances, links and monitors, supervisors, app sets and pools, host services, the HTTP route table, listeners, the cluster transport, liveness, membership, failover, replication, moving singletons and release versions. |
 | `bulkhead-priv-wire` | library | The messages between a node and its privileged helper (spawn, signal, bind; spawned, exited, refused) and their bounded parser, with no `unsafe`. |
 | `bulkhead-priv` | `bulkhead-priv` (root) | The privileged helper (ROADMAP PS1): started as root, it starts the node under its user and each native instance under its app's, in a cgroup, namespaces and a minimal root (Linux) or a process group with `rctl` rules (FreeBSD). Synchronous, no async runtime; `unsafe` only in `sys`. `bulkhead-host`'s `native::helper` is the node's side. |
 | `bulkhead-native` | library and `bulkhead-runner` | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, the app API for native executables (feature `app`), and `bulkhead-runner` (feature `runner`, default), the launcher that sandboxes itself and loads or executes a native app. `bulkhead-host` takes the protocol, the channel and the snapshot format. |
+| `bulkhead-ingress` | library and `bulkhead-ingress` | The HTTP ingress driver (ROADMAP DA2): an SDK app the node starts for `[http]`, hyper's HTTP/1.1 server and rustls on tokio, a current-thread runtime and a sender channel (`bulkhead_native::sender_async`) per worker thread; `config` (the node's init arguments), `serve` (one request, its limits and statuses), `tls` (certificates by SNI, reloaded), `driver` (threads, host events, metrics). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-modbus` | library | The Modbus TCP extension; depends on `bulkhead-host` alone. |
 | `bulkhead-modbus-client` | app library | Apps' client for the Modbus extension: calls through the node (`bulkhead_sdk::extension`). |
 | `bulkhead-sdk`, `bulkhead-sdk-macros` | app libraries | The Rust SDK: the `App` trait, envelopes, snapshots, service wrappers by feature. Its functions go over `bulkhead-native`'s protocol, and `app!` generates `bulkhead_main()`. |
@@ -58,7 +62,7 @@ Code areas and their interfaces are listed in ROADMAP.md, "Code areas".
 | Process core | `pid`, `table`, `registry`, `links`, `message`, `instance`, `instance_native`, `state`, `process`, `delivery`, `acl`, `lifecycle`, `output`, `health` | Instances, their mailboxes and callback loop, the per-instance host state and `process` functions, pid routing, messaging ACLs (checked on the target's node), links and monitors, health checks |
 | Orchestration | `apps`, `pool`, `supervisor`, `upgrade`, `spec` | App sets in dependency order, a root supervisor per app, pools with routing and a blue-green second side, snapshot, restart and blue-green upgrades |
 | Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, extension}`, `metrics` | What apps reach, on the `Service` pattern; extensions from other crates |
-| I/O | `http` (`http::tls`), `listener` | The HTTP ingress (a request is a call to a pool) and listeners (connections passed to the app's instances, many each) |
+| I/O | `routes`, `listener` | The HTTP route table the ingress driver serves (set by the node, sent as the `routes` event, its owners the apps the driver may call), and listeners (connections passed to the app's instances, many each) |
 | Native apps | `native::{port, cgroup, memory, convert, os, helper}`, `in_process` (feature `test-apps`) | An instance's process through `bulkhead-runner`, its limits, memory reporting and the conversions to the protocol's types; `native::os`, what differs between Linux and FreeBSD (a module per system); `native::helper`, the node's connection to the privileged helper, which starts the process instead under `[priv]`; apps that run in the instance's task for tests |
 | Cluster | `transport::{liveness, membership, wire, quic, memory, lane}`, `failover::{node, witness}`, `replication::{core, log}`, `handover`, `formats` | Frames between nodes, heartbeats and sessions, joining, QUIC with pinned keys, the in-memory mesh for tests, the HA pair and witness, replicated buckets, singletons moved with their state, the pair's version for what is kept |
 | Observability | `probe`, `metrics` | USDT probes on the message path; Prometheus text |
@@ -168,9 +172,10 @@ sequenceDiagram
 
 ### From HTTP
 
-The ingress (`http`; in the node, `daemon/ingress.rs`, behind the `http` and `tls` features) accepts on several tasks per address, matches a route by host and longest path prefix, and reads the body up to the route's limit.
+The ingress is a driver app, `bulkhead-ingress` (ROADMAP DA2): the node binds each `[http.<name>]` address before its apps start (`daemon/ingress.rs`, `bind`, behind the `http` feature) and runs the driver as a native instance with a driver profile (`DriverProfile`: the listeners, the certificate files, `calls_routed`, `routes`, `forward`). The driver accepts on its worker threads, matches a route by host and longest path prefix from the table the node sends (`routes` event, `bulkhead_sdk::http::Routes`), and reads the body up to the route's limit (`bulkhead-ingress`'s `serve`).
 
-- **To an app:** the request becomes a CBOR envelope, encoded straight from the borrowed request, and a call to the owning app's pool; the reply envelope becomes the response. On a standby, a singleton's route redirects to the primary (`partner_url`) or forwards the call over the cluster (`standby = "forward"`, `Frame::AppCall`).
+- **To an app:** the request becomes a CBOR envelope and a `CallApp` by app name on the worker's sender channel; the node checks the driver may call it (an owner of a route, `calls_routed`), picks the instance by the app's routing and passes the reply back; the reply envelope becomes the response. On a standby, a singleton's call answers `noproc` and the driver asks the node where it runs (`Request::Elsewhere`, for a redirect to `partner_url`) or sends the `CallApp` again with `partner` (`standby = "forward"`), which the node sends over the cluster (`Runtime::call_app_on`, `Frame::AppCall`).
+- **Certificates:** a reload is the node's call to the driver (schema `bulkhead/ingress-reload`), answered with the listeners that failed; the driver also checks the files' modification times on a timer.
 
 A listener (`listener`) hands each accepted connection to an instance of the app's pool: an operation ahead of the instance's mailbox (`Op::Connection`), whose stream the instance task passes on the descriptor socket and keeps a copy of in the instance's sockets (`services/sockets/native.rs`); the listener's own copy watches `TCP_INFO` for the idle timeout and is shut down on stop.
 
@@ -416,7 +421,6 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Timer | 1 per pending `send_after` | `process` | fires or is cancelled |
 | Supervisor | 1 per supervisor, plus 1 per child watching its exit | `supervisor` | supervisor exit |
 | App watcher | 1 per app, and 1 per blue-green new side | `apps` | root supervisor exit |
-| HTTP accept, connection; HTTP handler instance | several per address; 1 per connection; 1 per request | `http` | stop; connection close; response sent or cut |
 | Listener accept, connection instance | several per listener; 1 per connection | `listener` | stop; connection close or idle timeout |
 | HTTP egress connections | pooled, per host | `services::egress` | idle timeout |
 | Liveness loop | 1, once a node has a peer | `Liveness::add_peer` | runtime drop |
@@ -430,7 +434,8 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Admin server accept, connection; streams | 1; 1 per connection | `node::server` | stop |
 | Event hub | 1 | daemon | stop |
 | Metrics endpoint | 1 if configured | daemon | stop |
-| Seed join, identity reload, certificate watcher, SIGHUP reload | 1 each if configured | daemon | stop |
+| Seed join, identity reload, SIGHUP reload | 1 each if configured | daemon | stop |
+| The HTTP ingress driver (an OS process, `bulkhead-ingress`): worker threads, each a tokio runtime with a task per connection and a certificate timer per HTTPS listener | 1 per node with `[http]`; the largest `acceptors` threads | daemon (`ingress.rs`), as a native instance | the node's stop, before the apps |
 | Gate follower | 1 on a pair member | daemon | stop |
 | Modbus device, server | 1 per device; 1 per server | `bulkhead-modbus` | stop |
 
@@ -475,8 +480,8 @@ An app's state lives only in its process. A crash or restart starts from `init`;
 | State | Holder |
 | --- | --- |
 | Desired apps, blue-green sides and deploy info | `NodeState`, behind a `std::sync::Mutex` taken briefly and never across an await; a separate tokio `Mutex`, the change lock, keeps admin changes (deploy, upgrade, stop, start, remove, rollback) to one at a time across their awaits, and reads (`list`, `status`) do not take it |
-| Connection apps and their listeners; HTTP handlers | std `Mutex` |
-| HTTP route table, TLS certificates | `HttpIngress` |
+| Connection apps and their listeners | std `Mutex` |
+| HTTP route table | `routes::RouteTable` (the driver keeps its copy, and the TLS certificates) |
 | Held singletons | `gate::Gate` (std `Mutex`, and a tokio `Mutex` serializing starts and stops) |
 | Event subscribers | `node/events.rs` (a broadcast channel) |
 | Recent log records | `LogRing` (10,000 records) |

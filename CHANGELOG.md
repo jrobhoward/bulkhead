@@ -17,12 +17,16 @@ All notable changes are recorded here. The format follows
   that own routes (their `accept_from` passes, as before), answers its
   `Request::Elsewhere` (where an app runs on the failover partner, for
   `redirect`) and its `CallApp` with `partner` (for `forward`), and asks
-  it to reload certificates on SIGHUP and `bulkhead tls reload`. The
+  it to reload certificates on SIGHUP and `bulkhead reload-tls`. The
   `bulkhead_http_*` metrics gain `app="bulkhead-ingress"` and are added to
   every second. At most 6 `[http]` listeners, each a name, and
   certificate and key files of distinct file names; `bulkhead-ingress` is
   a reserved app name. The node's `http` and `tls` features no longer
-  build the in-node ingress (`bulkhead-host`'s `http`, `tls`).
+  build the in-node ingress (`bulkhead-host`'s `http`, `tls`). The driver
+  restarts after a crash within 0.1 to 1 s and its supervisor never gives
+  up (20 restarts in 10 s allowed, about 13 possible), so a client that
+  can crash it costs the ingress a second at a time, not until the node
+  restarts; the listening sockets stay open meanwhile.
 
 - An app thread waiting for its answer on a sender channel spins longer
   before it sleeps: node config `[native] sender_spin_us` (default 50 µs;
@@ -696,7 +700,7 @@ All notable changes are recorded here. The format follows
 - Under the privileged helper a driver app could not read its files (a
   key the node's user owns, mode 0640): it runs as a user of its own. The
   node now shares each driver file with its driver through the helper at
-  its start and before `bulkhead tls reload` or SIGHUP: the file gets the
+  its start and before `bulkhead reload-tls` or SIGHUP: the file gets the
   driver's group and `g+r`, and its directory, if the node's user owns
   it, `o+x` (search, no listing). A certificate replaced by rename, rather
   than rewritten in place, is read only once the driver restarts.

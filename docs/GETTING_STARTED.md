@@ -9,7 +9,7 @@ A node runs apps on Linux: each is a process started through `bulkhead-runner`.
 Rust 1.99 or newer:
 
 ```sh
-cargo build --release -p bulkhead -p bulkhead-native   # bulkhead, and bulkhead-runner beside it
+cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-ingress   # bulkhead, and bulkhead-runner and the HTTP ingress beside it
 export PATH="$PWD/target/release:$PATH"
 ```
 

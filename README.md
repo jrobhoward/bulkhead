@@ -107,11 +107,12 @@ two together:
 
 ```sh
 cargo test --workspace --all-features
-cargo build --release -p bulkhead -p bulkhead-native   # bulkhead, bulkhead-runner
+cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-ingress   # bulkhead, bulkhead-runner, the HTTP ingress
 ```
 
 `bulkhead`'s cargo features choose what a node can do. The default build has
-the node with its HTTP ingress (`http`), HTTPS and the remote admin API
+the node with its HTTP ingress (`http`; the node starts the `bulkhead-ingress`
+driver, built beside it), HTTPS and the remote admin API
 (`tls`), HTTP egress (`egress`), SQL datasources (`sql`) and probes
 (`probes`). The Modbus TCP extension is off by default (`--features modbus`).
 `--no-default-features --features node` builds a node with none of them, and

@@ -174,8 +174,22 @@ fn ingress_program(config: &NodeConfig) -> PathBuf {
     )
 }
 
-/// The driver's manifest: one instance, its init arguments, its metrics
-/// named as the node's ingress's were (`bulkhead_http_*`).
+/// The driver's restarts: at most `INGRESS_INTENSITY` within
+/// `INGRESS_PERIOD_MS`, each after a delay from `INGRESS_BACKOFF_MS`
+/// doubling to its cap. The cap keeps a driver crashing at once to about
+/// 13 restarts in the period, under the intensity, so its supervisor never
+/// gives up: a client that can crash it (by exhausting its memory, say)
+/// costs the node its ingress for a second at a time, not until a restart.
+#[cfg(feature = "http")]
+const INGRESS_INTENSITY: u32 = 20;
+#[cfg(feature = "http")]
+const INGRESS_PERIOD_MS: u64 = 10_000;
+#[cfg(feature = "http")]
+const INGRESS_BACKOFF_MS: (u64, u64) = (100, 1_000);
+
+/// The driver's manifest: one instance, its init arguments, restarts that
+/// never give up, its metrics named as the node's ingress's were
+/// (`bulkhead_http_*`).
 #[cfg(feature = "http")]
 fn ingress_manifest(args: serde_json::Value) -> Result<AppManifest, NodeError> {
     use bulkhead_bundle::manifest::{AppInfo, AppSpec, ProgramRef, Provenance};
@@ -184,6 +198,15 @@ fn ingress_manifest(args: serde_json::Value) -> Result<AppManifest, NodeError> {
         "native": { "program": "executable" },
         "instances": { "count": 1 },
         "lifecycle": { "start_args": args },
+        "supervision": {
+            "intensity": INGRESS_INTENSITY,
+            "period_ms": INGRESS_PERIOD_MS,
+            "backoff": {
+                "initial_ms": INGRESS_BACKOFF_MS.0,
+                "max_ms": INGRESS_BACKOFF_MS.1,
+                "jitter": false,
+            },
+        },
         "limits": {
             "memory_max": "512MiB",
             "message_max_bytes": "16MiB",
@@ -434,3 +457,7 @@ fn granted_routes(spec: &InstanceSpec) -> bool {
     spec.granted
         .contains(&bulkhead_bundle::manifest::Capability::HttpIncoming)
 }
+
+#[cfg(all(test, feature = "http"))]
+#[path = "ingress_tests.rs"]
+mod tests;
