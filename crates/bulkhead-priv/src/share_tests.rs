@@ -131,3 +131,53 @@ fn share____a_link_as_the_top____refused() {
 
     assert!(share(&link, uid, gid, false).is_err());
 }
+
+#[test]
+fn share____a_file_read_only____group_reads_it_and_others_only_search_its_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    std::fs::create_dir(&keys).unwrap();
+    let key = keys.join("web.key");
+    let other = keys.join("other.key");
+    std::fs::write(&key, b"key").unwrap();
+    std::fs::write(&other, b"other").unwrap();
+    set(&key, 0o604);
+    set(&other, 0o600);
+    set(&keys, 0o750);
+    let (uid, gid) = me();
+
+    share(&key, uid, gid, false).unwrap();
+
+    assert_eq!(mode(&key), 0o640);
+    assert_eq!(mode(&keys), 0o751, "searchable, not listable");
+    assert_eq!(mode(&other), 0o600);
+}
+
+#[test]
+fn share____a_file_read_write____refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("web.key");
+    std::fs::write(&key, b"key").unwrap();
+    set(&key, 0o600);
+    let (uid, gid) = me();
+
+    let err = share(&key, uid, gid, true).unwrap_err();
+
+    assert!(err.contains("not a directory"), "{err}");
+    assert_eq!(mode(&key), 0o600);
+}
+
+#[test]
+fn share____a_hard_linked_file____refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("web.key");
+    std::fs::write(&key, b"key").unwrap();
+    std::fs::hard_link(&key, dir.path().join("other")).unwrap();
+    set(&key, 0o600);
+    let (uid, gid) = me();
+
+    let err = share(&key, uid, gid, false).unwrap_err();
+
+    assert!(err.contains("other links"), "{err}");
+    assert_eq!(mode(&key), 0o600);
+}

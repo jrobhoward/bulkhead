@@ -291,13 +291,33 @@ impl Helper {
         Ok(resolved)
     }
 
-    /// Give a directory the node wrote to its app (ROADMAP PS2), picking
-    /// the app's user first if it has none yet.
+    /// As [`Self::bind_path`], or a regular file under the binds (a
+    /// driver's, shared read-only). `share::share` checks the type again
+    /// on the descriptor it changes.
+    fn file_or_bind_path(&self, path: &str) -> Result<PathBuf, String> {
+        let resolved = std::fs::canonicalize(path).map_err(|e| format!("bind {path}: {e}"))?;
+        if !check::under(&resolved, &self.config.binds)
+            || !(resolved.is_dir() || resolved.is_file())
+        {
+            return Err(format!(
+                "bind {path} is not a directory or a file under the helper's binds"
+            ));
+        }
+        Ok(resolved)
+    }
+
+    /// Give a directory the node wrote to its app (ROADMAP PS2), or
+    /// read-only a driver's file (ROADMAP DA2), picking the app's user
+    /// first if it has none yet.
     fn share(&mut self, app: &str, bind: &bulkhead_priv_wire::Bind) -> Result<Reply, String> {
         if !bulkhead_priv_wire::is_app_name(app) {
             return Err(format!("{app:?} is not an app name"));
         }
-        let path = self.bind_path(&bind.path)?;
+        let path = if bind.writable {
+            self.bind_path(&bind.path)?
+        } else {
+            self.file_or_bind_path(&bind.path)?
+        };
         let uid = self.app_user(app)?;
         share::share(&path, self.config.node_uid, uid, bind.writable)?;
         Ok(Reply::Done)

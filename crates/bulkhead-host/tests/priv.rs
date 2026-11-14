@@ -440,7 +440,11 @@ async fn helper____processes_together_over_memory_max____refused() {
 /// runs on a node with one: under a user of its own, it accepts on the
 /// listening socket the node passes and reads the file its profile gives
 /// it, which the node's user owns and others may not read, as an
-/// operator's key file is; a file beside it stays out of reach.
+/// operator's key file is, once the node has shared it
+/// (`share_driver_files`, at its start and before a reload); a file
+/// beside it stays out of reach. A key rewritten in place is read as the
+/// new one (one replaced by rename is not, until the driver restarts:
+/// Landlock's rule and the FreeBSD runner's descriptor hold the old file).
 #[tokio::test(flavor = "multi_thread")]
 async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     use std::io::Read;
@@ -479,6 +483,7 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     })
     .unwrap();
     let app = program(&started, &rt);
+    let unshared = rt.share_driver_files().await;
     let d = rt.spawn(&app, spec("drv")).unwrap();
 
     let ids = ask(&d, "ids").await;
@@ -494,13 +499,19 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     let greeted = client.join().unwrap();
     let given = ask(&d, "vcat /driver/web.key").await;
     let other = ask(&d, &format!("read {}", beside.display())).await;
+    std::fs::write(&file, "the renewed key").unwrap();
+    let reshared = rt.share_driver_files().await;
+    let renewed = ask(&d, "vcat /driver/web.key").await;
 
     let user = started.first_uid;
     assert_eq!(ids, format!("{user} {user}"), "a user of its own");
     assert_eq!(names, "main");
     assert!(!peer.starts_with("err:"), "{peer}");
     assert_eq!(greeted, "hello\n");
+    assert!(unshared.is_empty(), "{unshared:?}");
     assert_eq!(given, "the driver's key");
     assert!(other.starts_with("err:"), "{other}");
+    assert!(reshared.is_empty(), "{reshared:?}");
+    assert_eq!(renewed, "the renewed key");
     d.kill();
 }

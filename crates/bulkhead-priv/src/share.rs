@@ -25,6 +25,14 @@
 //!   Nothing below is walked: the app writes there, and a walk as root
 //!   through a place an app controls is how links get followed. Sharing it
 //!   again, once it is the app's, changes nothing.
+//! - A read-only file (a driver's certificate or key, ROADMAP DA2) gets
+//!   the app's group and `g+r` as a file in a shared directory would: a
+//!   regular file the node owns, not hard-linked. Its directory, bound
+//!   into the instance's root whole, gets search for others (`o+x`, no
+//!   listing) if the node owns it, so the app's user can reach the file;
+//!   what else is there keeps its own modes. The node shares a file at
+//!   its start and again before the driver reloads it, since a file
+//!   replaced by rename is a new one.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
@@ -49,12 +57,32 @@ const OPEN: OFlags = OFlags::RDONLY
 /// # Errors
 ///
 /// `path` is not a directory the node owns (or, read-write, the app
-/// already), or a change failed; a walk past [`MAX_ENTRIES`] or
-/// [`MAX_DEPTH`].
+/// already) or, read-only, a regular file the node owns with one link, or
+/// a change failed; a walk past [`MAX_ENTRIES`] or [`MAX_DEPTH`].
 pub fn share(path: &Path, node_uid: u32, app: u32, writable: bool) -> Result<(), String> {
-    let fd = open(path, OPEN | OFlags::DIRECTORY, Mode::empty())
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let fd = open(path, OPEN, Mode::empty()).map_err(|e| format!("{}: {e}", path.display()))?;
     let st = fstat(&fd).map_err(|e| format!("{}: {e}", path.display()))?;
+    match FileType::from_raw_mode(st.st_mode) {
+        FileType::Directory => {}
+        FileType::RegularFile if !writable => {
+            if st.st_uid != node_uid || st.st_nlink != 1 {
+                return Err(format!(
+                    "{} is not the node's, or has other links",
+                    path.display()
+                ));
+            }
+            grant(&fd, Gid::from_raw(app), false)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            return searchable(path, node_uid);
+        }
+        _ => {
+            return Err(format!(
+                "{} is not a directory{}",
+                path.display(),
+                if writable { "" } else { " or a regular file" }
+            ));
+        }
+    }
     // Already given: the app's, not the node's.
     if writable && app != node_uid && st.st_uid == app && st.st_gid == app {
         return Ok(());
@@ -115,6 +143,21 @@ fn walk(
         }
     }
     Ok(())
+}
+
+/// Let others search `file`'s directory (`o+x`) if the node owns it.
+fn searchable(file: &Path, node_uid: u32) -> Result<(), String> {
+    let Some(dir) = file.parent() else {
+        return Ok(());
+    };
+    let fd = open(dir, OPEN | OFlags::DIRECTORY, Mode::empty())
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let st = fstat(&fd).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if st.st_uid != node_uid {
+        return Ok(());
+    }
+    let mode = Mode::from_raw_mode(st.st_mode) | Mode::XOTH;
+    fchmod(&fd, mode).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
 /// Give `fd` to group `gid` with `g+r`, and `g+x` with `exec`, and

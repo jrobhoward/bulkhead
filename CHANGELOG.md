@@ -693,6 +693,14 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- Under the privileged helper a driver app could not read its files (a
+  key the node's user owns, mode 0640): it runs as a user of its own. The
+  node now shares each driver file with its driver through the helper at
+  its start and before `bulkhead tls reload` or SIGHUP: the file gets the
+  driver's group and `g+r`, and its directory, if the node's user owns
+  it, `o+x` (search, no listing). A certificate replaced by rename, rather
+  than rewritten in place, is read only once the driver restarts.
+
 - On FreeBSD an app opening one of its preopened files a second time (a
   driver's certificate under `/driver/`) read nothing: the duplicated
   descriptor kept the first read's offset. A read now starts at the

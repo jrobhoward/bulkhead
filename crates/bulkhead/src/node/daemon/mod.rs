@@ -261,6 +261,11 @@ impl Node {
             .map_err(|e| NodeError::Invalid(format!("{}: {e}", config.data_dir.display())))?;
         let apps = rt.start_apps(Vec::new()).await.map_err(internal)?;
         let stop = tokio::sync::watch::channel(false).0;
+        // Under the helper a driver is a user of its own: its files are
+        // given to it before it starts (ROADMAP DA2).
+        for e in rt.share_driver_files().await {
+            tracing::warn!(error = %e, "a driver's file not shared with it");
+        }
         let ingress = Ingress::open(&config, &rt, &apps, ingress_args).await?;
         let events = Events::new();
         let audit = Audit::new(store.audit_path(), events.clone());

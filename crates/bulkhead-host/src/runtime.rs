@@ -672,10 +672,29 @@ impl Runtime {
         self.inner.table.all()
     }
 
+    /// Give each driver app the files its profile names, read-only, to its
+    /// group (ROADMAP DA2): under the privileged helper a driver runs as a
+    /// user of its own, and its certificate and key files are the node's
+    /// user's. Without the helper this does nothing. Each file that could
+    /// not be shared, as `<app>: <why>`; the driver then reads it only if
+    /// its mode lets everyone. Again before a driver reloads its files: one
+    /// replaced by rename is a new file.
+    pub async fn share_driver_files(&self) -> Vec<String> {
+        let mut failed = Vec::new();
+        for (app, profile) in &self.inner.config.drivers {
+            for file in &profile.files {
+                if let Err(e) = self.share_with_app(app, file, false).await {
+                    failed.push(format!("{app}: {e}"));
+                }
+            }
+        }
+        failed
+    }
+
     /// Give `path`, a directory the node wrote for `app`, to that app's
     /// user (ROADMAP PS2), through the privileged helper: read-only, to its
-    /// group (the program's and `priv/` directories); read-write, the
-    /// directory itself (a volume). Without the helper the app runs as the
+    /// group (the program's and `priv/` directories, a driver's files);
+    /// read-write, the directory itself (a volume). Without the helper the app runs as the
     /// node's user and this does nothing.
     ///
     /// # Errors
