@@ -76,12 +76,17 @@ impl TcpStream {
         Self::from_answer(ask(p::NetRequest::Connect(addr))?)
     }
 
-    /// Connect to the first address `host` resolves to that accepts.
+    /// Connect to the first address `host` resolves to that accepts. The
+    /// node's resolver driver looks the name up (ROADMAP DA9); an address
+    /// written as text is used as it is.
     ///
     /// # Errors
     ///
-    /// As [`TcpStream::connect`]. A name lookup the manifest does not
-    /// allow (no `connect` rules) fails with `permanent-resolver-failure`.
+    /// As [`TcpStream::connect`]. [`NetError::Other`] with
+    /// `name-unresolvable` for a name that does not exist,
+    /// `temporary-resolver-failure` when no nameserver answered in time,
+    /// and `permanent-resolver-failure` for a lookup the manifest does not
+    /// allow (no `connect` rules).
     pub fn connect_host(host: &str, port: u16) -> Result<Self, NetError> {
         Self::from_answer(ask(p::NetRequest::ConnectHost {
             host: host.into(),

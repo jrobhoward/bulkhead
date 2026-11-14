@@ -107,7 +107,8 @@ two together:
 
 ```sh
 cargo test --workspace --all-features
-cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-ingress   # bulkhead, bulkhead-runner, the HTTP ingress
+cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-resolve -p bulkhead-ingress
+# bulkhead; beside it bulkhead-runner, the resolver of host names and the HTTP ingress
 ```
 
 `bulkhead`'s cargo features choose what a node can do. The default build has

@@ -19,6 +19,7 @@ flowchart TD
     helper["bulkhead-priv (bin, root)<br/>starts the node and each instance"]
     wire["bulkhead-priv-wire<br/>node to helper messages"]
     ingress["bulkhead-ingress (bin)<br/>the HTTP ingress driver: hyper, rustls"]
+    resolve["bulkhead-resolve (bin)<br/>the resolver driver: hickory-resolver"]
     bulkhead --> host
     bulkhead --> bundle
     bulkhead -->|"modbus feature"| ext
@@ -31,6 +32,8 @@ flowchart TD
     helper --> wire
     helper -.->|"starts, under each app's user"| napps
     ingress -->|"SDK, sender_async"| guests
+    resolve -->|"SDK, sender_async"| guests
+    bulkhead -.->|"starts on a member"| resolve
     bulkhead -.->|"starts for [http]"| ingress
 ```
 
@@ -45,6 +48,7 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-priv` | `bulkhead-priv` (root) | The privileged helper (ROADMAP PS1): started as root, it starts the node under its user and each native instance under its app's, in a cgroup, namespaces and a minimal root (Linux) or a process group with `rctl` rules (FreeBSD). Synchronous, no async runtime; `unsafe` only in `sys`. `bulkhead-host`'s `native::helper` is the node's side. |
 | `bulkhead-native` | library and `bulkhead-runner` | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, the app API for native executables (feature `app`), and `bulkhead-runner` (feature `runner`, default), the launcher that sandboxes itself and loads or executes a native app. `bulkhead-host` takes the protocol, the channel and the snapshot format. |
 | `bulkhead-ingress` | library and `bulkhead-ingress` | The HTTP ingress driver (ROADMAP DA2): an SDK app the node starts for `[http]`, hyper's HTTP/1.1 server and rustls on tokio, a current-thread runtime and a sender channel (`bulkhead_native::sender_async`) per worker thread; `config` (the node's init arguments), `serve` (one request, its limits and statuses), `tls` (certificates by SNI, reloaded), `driver` (threads, host events, metrics). No node crate depends on it (`scripts/check.sh deps`). |
+| `bulkhead-resolve` | library and `bulkhead-resolve` | The resolver driver (ROADMAP DA9): an SDK app every member node starts, hickory-resolver on a worker thread with a tokio runtime and a sender channel; `config` (the nameservers, `resolv.conf` and hosts text, TCP only), `lookup` (the `bulkhead/resolve` call), `provider` (hickory's I/O over streams the node opens, one per nameserver), `driver` (the callback thread answering the node, the worker casting back to it). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-modbus` | library | The Modbus TCP extension; depends on `bulkhead-host` alone. |
 | `bulkhead-modbus-client` | app library | Apps' client for the Modbus extension: calls through the node (`bulkhead_sdk::extension`). |
 | `bulkhead-sdk`, `bulkhead-sdk-macros` | app libraries | The Rust SDK: the `App` trait, envelopes, snapshots, service wrappers by feature. Its functions go over `bulkhead-native`'s protocol, and `app!` generates `bulkhead_main()`. |
@@ -61,7 +65,7 @@ Code areas and their interfaces are listed in ROADMAP.md, "Code areas".
 | Engine | `runtime`, `config` | `Runtime` and its `RuntimeInner`: the configuration, the process table, the services and the transport |
 | Process core | `pid`, `table`, `registry`, `links`, `message`, `instance`, `instance_native`, `state`, `process`, `delivery`, `acl`, `lifecycle`, `output`, `health` | Instances, their mailboxes and callback loop, the per-instance host state and `process` functions, pid routing, messaging ACLs (checked on the target's node), links and monitors, health checks |
 | Orchestration | `apps`, `pool`, `supervisor`, `upgrade`, `spec` | App sets in dependency order, a root supervisor per app, pools with routing and a blue-green second side, snapshot, restart and blue-green upgrades |
-| Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, extension}`, `metrics` | What apps reach, on the `Service` pattern; extensions from other crates |
+| Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, extension}`, `metrics`, `names` | What apps reach, on the `Service` pattern; extensions from other crates; `names` (`Names`, `RuntimeConfig::resolver`), host names to addresses for sockets, egress and SQL, through the resolver driver |
 | I/O | `routes`, `listener` | The HTTP route table the ingress driver serves (set by the node, sent as the `routes` event, its owners the apps the driver may call), and listeners (connections passed to the app's instances, many each) |
 | Native apps | `native::{port, cgroup, memory, convert, os, helper}`, `in_process` (feature `test-apps`) | An instance's process through `bulkhead-runner`, its limits, memory reporting and the conversions to the protocol's types; `native::os`, what differs between Linux and FreeBSD (a module per system); `native::helper`, the node's connection to the privileged helper, which starts the process instead under `[priv]`; apps that run in the instance's task for tests |
 | Cluster | `transport::{liveness, membership, wire, quic, memory, lane}`, `failover::{node, witness}`, `replication::{core, log}`, `handover`, `formats` | Frames between nodes, heartbeats and sessions, joining, QUIC with pinned keys, the in-memory mesh for tests, the HA pair and witness, replicated buckets, singletons moved with their state, the pair's version for what is kept |
@@ -181,8 +185,8 @@ A listener (`listener`) hands each accepted connection to an instance of the app
 
 ### Out of an app
 
-- **HTTP egress** (`services::egress`): the node's own client sends each request. A request goes out only if it matches the manifest's `allow` (inside node config's `[egress] allow`), through the node's connection pool, at most `max_concurrent` per app at once. Its resolver refuses names that resolve only to loopback or link-local addresses unless `allow_loopback`.
-- **App sockets** (`services::sockets`): the node makes each socket, checking every address (the manifest's `connect` and `bind` rules, `listen`, and the guard on loopback, link-local and unspecified destinations), and passes TCP streams on the descriptor socket; UDP sockets and listeners stay in the node. A semaphore permit per socket counts them per app (`max_sockets`).
+- **HTTP egress** (`services::egress`): the node's own client sends each request. A request goes out only if it matches the manifest's `allow` (inside node config's `[egress] allow`), through the node's connection pool, at most `max_concurrent` per app at once. Its resolver refuses names that resolve only to loopback or link-local addresses unless `allow_loopback`. Host names go to the resolver driver (`Names`), not libc.
+- **App sockets** (`services::sockets`): the node makes each socket, checking every address (the manifest's `connect` and `bind` rules, `listen`, and the guard on loopback, link-local and unspecified destinations), and passes TCP streams on the descriptor socket; UDP sockets and listeners stay in the node. A semaphore permit per socket counts them per app (`max_sockets`). A `connect_host` name goes to the resolver driver (`Names`); its addresses are checked as any.
 - **Waiting on a socket:** the app asks with a tag; the node watches the socket and delivers the host event `io-ready` once it is ready.
 - **SQL** (`services::sql`, feature `sql`): a Postgres pool per datasource, with a connection cap per app.
 
@@ -436,6 +440,8 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Metrics endpoint | 1 if configured | daemon | stop |
 | Seed join, identity reload, SIGHUP reload | 1 each if configured | daemon | stop |
 | The HTTP ingress driver (an OS process, `bulkhead-ingress`): worker threads, each a tokio runtime with a task per connection and a certificate timer per HTTPS listener | 1 per node with `[http]`; the largest `acceptors` threads | daemon (`ingress.rs`), as a native instance | the node's stop, before the apps |
+| The resolver driver (an OS process, `bulkhead-resolve`): its callback thread, and a worker thread with a tokio runtime, one stream per nameserver | 1 per member node | daemon (`resolve.rs`), as a native instance, after a first instance started on its own | the node's stop; a restart when `resolv.conf` or hosts changed |
+| Resolver files' reload | 1 per member node with `[resolver] reload_s` | daemon (`resolve.rs`) | stop |
 | Gate follower | 1 on a pair member | daemon | stop |
 | Modbus device, server | 1 per device; 1 per server | `bulkhead-modbus` | stop |
 

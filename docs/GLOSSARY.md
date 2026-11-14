@@ -71,6 +71,7 @@ Two words have more than one meaning:
 - **Signer:** a minisign key whose bundles a node runs (`trusted_keys`); policy can grant by signer.
 - **Grant:** the capabilities an instance gets: what the manifest asks for, narrowed by policy (the effective grant). A request outside it is answered `access-denied`.
 - **Host service:** what the host provides to apps (config, keyvalue, groups, logging, secrets, metrics, egress, sockets, SQL), each on the `Service` pattern. [DESIGN.md](DESIGN.md), "Host services".
+- **Resolver driver:** `bulkhead-resolve`, the driver app every member node starts to resolve host names (ROADMAP DA9), so no DNS reply is parsed in the node; it reaches its nameservers over TCP streams the node opens.
 - **Ingress:** the node's HTTP server, `bulkhead-ingress`, a driver app the node starts for `[http]` (ROADMAP DA2): a request to a route becomes a call to the owning app's pool.
 - **Listener, connection handler:** a TCP port the node owns, whose every accepted connection goes to an instance of the app's pool, each holding many (MANIFEST.md, `listeners`).
 - **Egress:** outgoing HTTP from an app, filtered by the manifest's `allow` and node config's ceiling, through the node's connection pool.
