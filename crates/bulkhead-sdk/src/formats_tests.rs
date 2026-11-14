@@ -96,6 +96,43 @@ fn http_response____documented_example____same_bytes() {
     assert_eq!(msg.body, example("cbor-hex", "http-response"));
 }
 
+#[cfg(feature = "http")]
+#[test]
+fn http_response____documented_example____read_as_the_ingress_does() {
+    use crate::http::{RESPONSE_SCHEMA, Response};
+    let msg = Envelope::new("application/cbor", example("cbor-hex", "http-response"))
+        .with_schema(RESPONSE_SCHEMA);
+
+    let response = Response::from_reply(&msg).unwrap();
+
+    assert_eq!(response.status, 201);
+    assert_eq!(
+        response.headers,
+        vec![("content-type".to_string(), "text/plain".to_string())]
+    );
+    assert_eq!(response.body, b"ok");
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn routes_event____documented_example____every_field() {
+    use crate::http::{Route, Routes};
+
+    let routes = Routes::from_event(&example("json", "routes")).unwrap();
+
+    assert_eq!(
+        routes.routes,
+        vec![Route {
+            app: "shop".into(),
+            host: None,
+            path_prefix: "/shop".into(),
+            hash_header: Some("x-customer".into()),
+            max_body: 1_048_576,
+            timeout_ms: 30_000,
+        }]
+    );
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct Item {
     device: String,

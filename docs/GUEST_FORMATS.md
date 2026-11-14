@@ -136,7 +136,7 @@ The JSON objects' keys come in any order.
 {"routes": [{"app": "shop", "host": null, "path_prefix": "/shop", "hash_header": "x-customer", "max_body": 1048576, "timeout_ms": 30000}]}
 ```
 
-`routes` is the whole table, every app's routes, ordered by app: the routes a node's own ingress serves, so a driver serving HTTP routes and limits requests as the ingress does and calls the app by name (`call_app`). `host` and `hash_header` are `null` when unset; `max_body` is bytes and `timeout_ms` milliseconds.
+`routes` is the whole table, every app's routes, ordered by app: the routes a node's own ingress serves, so a driver serving HTTP routes and limits requests as the ingress does and calls the app by name (`call_app`). `host` and `hash_header` are `null` when unset; `max_body` is bytes and `timeout_ms` milliseconds. The Rust SDK reads it as `bulkhead_sdk::http::Routes`, whose `pick` matches a request as the ingress does.
 
 ## Modbus updates
 

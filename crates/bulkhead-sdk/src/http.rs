@@ -256,6 +256,122 @@ impl Response {
     }
 }
 
+impl Response {
+    /// The HTTP response an app's reply to a request becomes, as the
+    /// node's ingress makes it, for a driver app serving HTTP (ROADMAP
+    /// DA2): a reply in the response format (`RESPONSE_SCHEMA`) gives its
+    /// status (200 when it has none), headers and body; any other reply is
+    /// `200` with the envelope's content type and its body. `None` for a
+    /// response that does not decode, a status outside 100 to 999, or a
+    /// header that is not a pair of texts: the ingress answers `502`
+    /// then. Header names and values are not checked against HTTP's
+    /// rules here; the caller's HTTP library does that.
+    #[must_use]
+    pub fn from_reply(msg: &Envelope) -> Option<Self> {
+        if msg.schema.as_deref() != Some(RESPONSE_SCHEMA) {
+            return Some(
+                Self::new(200)
+                    .header("content-type", msg.content_type.clone())
+                    .body(msg.body.clone()),
+            );
+        }
+        let value: Value = ciborium::from_reader(msg.body.as_slice()).ok()?;
+        let map = value.as_map()?;
+        let status = field(map, "status")
+            .and_then(Value::as_integer)
+            .and_then(|i| u16::try_from(i).ok())
+            .unwrap_or(200);
+        if !(100..=999).contains(&status) {
+            return None;
+        }
+        let mut headers = Vec::new();
+        if let Some(list) = field(map, "headers").and_then(Value::as_array) {
+            for pair in list {
+                let pair = pair.as_array()?;
+                headers.push((
+                    pair.first()?.as_text()?.to_string(),
+                    pair.get(1)?.as_text()?.to_string(),
+                ));
+            }
+        }
+        Some(Self {
+            status,
+            headers,
+            body: field(map, "body")
+                .and_then(Value::as_bytes)
+                .cloned()
+                .unwrap_or_default(),
+        })
+    }
+}
+
+/// The host event that carries the node's HTTP route table to a driver
+/// app whose profile asks for it (`[drivers.<app>] routes = true`).
+pub const ROUTES_EVENT: &str = "routes";
+
+/// One route of the node's table, as the `routes` event has it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Route {
+    /// The app that owns it, to call by name.
+    pub app: String,
+    /// Host to match, without port, any case; `None` matches any host.
+    pub host: Option<String>,
+    /// Path prefix, matched on segment boundaries.
+    pub path_prefix: String,
+    /// A header whose value becomes the request's `key`.
+    pub hash_header: Option<String>,
+    /// Largest body accepted, in bytes.
+    pub max_body: u64,
+    /// Time allowed for the reply, in milliseconds.
+    pub timeout_ms: u64,
+}
+
+impl Route {
+    /// Whether a request for `host` (without port) and `path` matches, as
+    /// the node's ingress matches it.
+    #[must_use]
+    pub fn matches(&self, host: Option<&str>, path: &str) -> bool {
+        let host_ok = match (&self.host, host) {
+            (None, _) => true,
+            (Some(want), Some(got)) => want.eq_ignore_ascii_case(got),
+            (Some(_), None) => false,
+        };
+        let Some(rest) = path.strip_prefix(self.path_prefix.as_str()) else {
+            return false;
+        };
+        host_ok && (self.path_prefix.ends_with('/') || rest.is_empty() || rest.starts_with('/'))
+    }
+}
+
+/// The node's route table, from the `routes` event ([`ROUTES_EVENT`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+pub struct Routes {
+    /// Every app's routes, in app order.
+    pub routes: Vec<Route>,
+}
+
+impl Routes {
+    /// The table a `routes` event's body holds.
+    ///
+    /// # Errors
+    ///
+    /// The body is not the event's JSON.
+    pub fn from_event(body: &[u8]) -> Result<Self, MessageError> {
+        serde_json::from_slice(body).map_err(|e| MessageError(e.to_string()))
+    }
+
+    /// The route a request for `host` (without port) and `path` goes to,
+    /// as the node's ingress picks it: the longest prefix, then a route
+    /// naming the host.
+    #[must_use]
+    pub fn pick(&self, host: Option<&str>, path: &str) -> Option<&Route> {
+        self.routes
+            .iter()
+            .filter(|r| r.matches(host, path))
+            .max_by_key(|r| (r.path_prefix.len(), r.host.is_some()))
+    }
+}
+
 impl From<Response> for Envelope {
     fn from(r: Response) -> Self {
         r.to_envelope()

@@ -644,7 +644,6 @@ impl Runtime {
     /// Keep the HTTP route table (JSON, `GUEST_FORMATS.md`'s "Routes") and
     /// announce it to the driver apps whose profile asks for it (host event
     /// `routes`, ROADMAP DA1).
-    #[cfg_attr(not(feature = "http"), allow(dead_code))]
     pub(crate) fn set_http_routes(&self, json: String) {
         *self
             .inner

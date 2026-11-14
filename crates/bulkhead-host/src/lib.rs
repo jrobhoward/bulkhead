@@ -51,6 +51,7 @@ mod probe;
 mod process;
 mod registry;
 mod replication;
+pub mod routes;
 mod runtime;
 pub mod services;
 mod spec;

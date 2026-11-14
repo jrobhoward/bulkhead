@@ -267,9 +267,11 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   series) and the host's per-app counters, rendered as Prometheus text;
   the `bulkhead:metrics` service is `src/services/metrics`. Metric names
   are an interface listed in `docs/OBSERVABILITY.md`.
-- `crates/bulkhead-host/src/http.rs`: the HTTP ingress (node-level routes,
-  hyper listeners, each request a call to the owning app's pool; the
-  request and response envelope formats). `examples/http-counter` is its
+- `crates/bulkhead-host/src/http.rs`: the HTTP ingress (hyper listeners,
+  each request a call to the owning app's pool; the request and response
+  envelope formats). `src/routes.rs` is the route table without hyper
+  (apps' routes, owners, the `routes` host event), which the node keeps
+  when the ingress moves to a driver (ROADMAP DA2). `examples/http-counter` is its
   example, `crates/bulkhead/tests/http.rs` runs it through a node.
 - `crates/bulkhead-host/src/listener.rs`: listeners and connection handlers:
   the app's instances, many connections each.

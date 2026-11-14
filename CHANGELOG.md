@@ -52,6 +52,13 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `bulkhead_sdk::http::{Routes, Route, ROUTES_EVENT}`: the node's HTTP route
+  table from the host event `routes`, matched and picked as the node's
+  ingress does (the longest prefix, then a route naming the host), and
+  `Response::from_reply`, an app's reply read as the ingress reads it
+  (200 without a status or in another format; `None` where the ingress
+  answers 502), for a driver app serving HTTP (ROADMAP DA2).
+
 - `bulkhead_native::sender_async::AsyncSender` (feature `tokio`): a sender
   channel whose calls are awaited on a tokio current-thread runtime, many
   in flight from one thread's tasks, its answers read by a pump task that

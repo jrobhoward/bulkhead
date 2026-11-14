@@ -47,14 +47,12 @@ mod tls;
 #[cfg(feature = "tls")]
 pub use tls::{IngressTls, TlsCertificate};
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use bulkhead_bundle::manifest::{AppManifest, ByteSize};
 use bytes::Bytes;
 use ciborium::Value;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -71,16 +69,14 @@ use tokio::sync::{Semaphore, watch};
 use crate::apps::Apps;
 use crate::error::HostError;
 use crate::message::{CallError, Envelope};
+use crate::routes::RouteTable;
 
 /// The `schema` of a request envelope.
 pub const REQUEST_SCHEMA: &str = "bulkhead/http-request";
 /// The `schema` of a response envelope.
 pub const RESPONSE_SCHEMA: &str = "bulkhead/http-response";
 
-/// Largest request body when the manifest sets no `max_body`.
-pub const DEFAULT_MAX_BODY: ByteSize = ByteSize::mib(1);
-/// Reply timeout when the manifest sets no `timeout_ms`.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+pub use crate::routes::{DEFAULT_MAX_BODY, DEFAULT_TIMEOUT, HttpRoute};
 
 /// One ingress address and its limits.
 #[derive(Debug, Clone)]
@@ -140,64 +136,6 @@ pub enum Standby {
     /// Send the request over the cluster to the app on the partner, and
     /// answer with its reply.
     Forward,
-}
-
-/// One route an app owns.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpRoute {
-    /// Host to match, without port, any case; `None` matches any host.
-    pub host: Option<String>,
-    /// Path prefix, matched on segment boundaries.
-    pub path_prefix: String,
-    /// A header whose value becomes the request's `key`.
-    pub hash_header: Option<String>,
-    /// Largest body accepted, in bytes.
-    pub max_body: u64,
-    /// Time allowed for the reply.
-    pub timeout: Duration,
-}
-
-impl HttpRoute {
-    /// The routes a manifest's `bulkhead:http-routes` scope declares
-    /// (none if it declares no scope).
-    #[must_use]
-    pub fn from_manifest(manifest: &AppManifest) -> Vec<Self> {
-        let Some(scope) = &manifest.spec.capabilities.http_incoming else {
-            return Vec::new();
-        };
-        let max_body = scope.max_body.unwrap_or(DEFAULT_MAX_BODY).bytes();
-        let timeout = scope
-            .timeout_ms
-            .map_or(DEFAULT_TIMEOUT, Duration::from_millis);
-        scope
-            .routes
-            .iter()
-            .map(|r| Self {
-                host: r.host.as_ref().map(|h| h.to_ascii_lowercase()),
-                path_prefix: r.path_prefix.clone(),
-                hash_header: r.hash_header.clone(),
-                max_body,
-                timeout,
-            })
-            .collect()
-    }
-
-    fn matches(&self, host: Option<&str>, path: &str) -> bool {
-        let host_ok = match (&self.host, host) {
-            (None, _) => true,
-            (Some(want), Some(got)) => want.eq_ignore_ascii_case(got),
-            (Some(_), None) => false,
-        };
-        host_ok && prefix_matches(&self.path_prefix, path)
-    }
-}
-
-/// Whether `prefix` covers `path` on a segment boundary.
-fn prefix_matches(prefix: &str, path: &str) -> bool {
-    let Some(rest) = path.strip_prefix(prefix) else {
-        return false;
-    };
-    prefix.ends_with('/') || rest.is_empty() || rest.starts_with('/')
 }
 
 /// What one ingress has served.
@@ -262,8 +200,7 @@ pub struct HttpIngress {
 #[derive(Debug)]
 struct Inner {
     apps: Apps,
-    /// Routes by app.
-    routes: RwLock<BTreeMap<String, Vec<HttpRoute>>>,
+    routes: RouteTable,
     stop: watch::Sender<bool>,
     counters: Counters,
     elsewhere: ElsewhereSlot,
@@ -275,8 +212,8 @@ impl HttpIngress {
     pub fn new(apps: Apps) -> Self {
         Self {
             inner: Arc::new(Inner {
+                routes: RouteTable::new(apps.runtime().clone()),
                 apps,
-                routes: RwLock::default(),
                 stop: watch::channel(false).0,
                 counters: Counters::default(),
                 elsewhere: ElsewhereSlot::default(),
@@ -318,62 +255,18 @@ impl HttpIngress {
     /// [`HostError::InvalidApps`] if another app owns a route with the same
     /// host and prefix; nothing changes then.
     pub fn set_routes(&self, app: &str, routes: Vec<HttpRoute>) -> Result<(), HostError> {
-        let mut table = self
-            .inner
-            .routes
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        for route in &routes {
-            let taken = table
-                .iter()
-                .filter(|(owner, _)| *owner != app)
-                .find_map(|(owner, rs)| {
-                    rs.iter()
-                        .any(|r| r.host == route.host && r.path_prefix == route.path_prefix)
-                        .then_some(owner)
-                });
-            if let Some(owner) = taken {
-                return Err(HostError::InvalidApps(format!(
-                    "HTTP route {}{} belongs to {owner}",
-                    route.host.as_deref().unwrap_or("*"),
-                    route.path_prefix
-                )));
-            }
-        }
-        if routes.is_empty() {
-            table.remove(app);
-        } else {
-            table.insert(app.to_string(), routes);
-        }
-        let json = routes_json(&table);
-        drop(table);
-        self.inner.apps.runtime().set_http_routes(json);
-        Ok(())
+        self.inner.routes.set(app, routes)
     }
 
     /// Withdraw `app`'s routes.
     pub fn remove_routes(&self, app: &str) {
-        let mut table = self
-            .inner
-            .routes
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        table.remove(app);
-        let json = routes_json(&table);
-        drop(table);
-        self.inner.apps.runtime().set_http_routes(json);
+        self.inner.routes.remove(app);
     }
 
     /// `app`'s routes.
     #[must_use]
     pub fn routes(&self, app: &str) -> Vec<HttpRoute> {
-        self.inner
-            .routes
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(app)
-            .cloned()
-            .unwrap_or_default()
+        self.inner.routes.routes(app)
     }
 
     /// Tell the ingress which apps run on the partner node now, for
@@ -518,43 +411,6 @@ fn redirect(base: &str, uri: &hyper::Uri) -> Reply {
     r
 }
 
-/// The route table as driver apps get it (host event `routes`, ROADMAP
-/// DA1; `GUEST_FORMATS.md`, "Routes"): every route with its app, in app
-/// order.
-fn routes_json(table: &BTreeMap<String, Vec<HttpRoute>>) -> String {
-    let routes: Vec<serde_json::Value> = table
-        .iter()
-        .flat_map(|(app, rs)| {
-            rs.iter().map(move |r| {
-                serde_json::json!({
-                    "app": app,
-                    "host": r.host,
-                    "path_prefix": r.path_prefix,
-                    "hash_header": r.hash_header,
-                    "max_body": r.max_body,
-                    "timeout_ms": u64::try_from(r.timeout.as_millis()).unwrap_or(u64::MAX),
-                })
-            })
-        })
-        .collect();
-    serde_json::json!({ "routes": routes }).to_string()
-}
-
-/// The best route for a request: longest prefix, and a route naming the
-/// host before one that does not.
-fn pick(
-    table: &BTreeMap<String, Vec<HttpRoute>>,
-    host: Option<&str>,
-    path: &str,
-) -> Option<(String, HttpRoute)> {
-    table
-        .iter()
-        .flat_map(|(app, rs)| rs.iter().map(move |r| (app, r)))
-        .filter(|(_, r)| r.matches(host, path))
-        .max_by_key(|(_, r)| (r.path_prefix.len(), r.host.is_some()))
-        .map(|(app, r)| (app.clone(), r.clone()))
-}
-
 async fn serve(
     inner: &Arc<Inner>,
     spec: &IngressListen,
@@ -589,10 +445,7 @@ async fn handle(
         .or_else(|| req.uri().host())
         .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase());
     let path = req.uri().path().to_string();
-    let picked = {
-        let table = inner.routes.read().unwrap_or_else(PoisonError::into_inner);
-        pick(&table, host.as_deref(), &path)
-    };
+    let picked = inner.routes.pick(host.as_deref(), &path);
     let Some((app, route)) = picked else {
         return status(StatusCode::NOT_FOUND, "no route");
     };
