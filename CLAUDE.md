@@ -281,6 +281,12 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   app. Its `tests/` run it on a runtime of their own, as the node does;
   `examples/http-counter` is its example, `crates/bulkhead/tests/http.rs`
   runs it through a node.
+- `crates/bulkhead-resolve`: host names resolved outside the node (ROADMAP
+  DA9): `config` (the nameservers, `resolv.conf` and hosts as text, into
+  hickory's configuration, TCP only), `lookup` (the `bulkhead/resolve`
+  call's request and answer), `provider` (hickory's I/O over streams the
+  node opens), `driver` (the callback thread answering the node; a worker
+  thread running hickory, handing back by casting to its own instance).
 - `crates/bulkhead-host/src/listener.rs`: listeners and connection handlers:
   the app's instances, many connections each.
   `crates/bulkhead-fixture-conn` is its test fixture (the SDK's

@@ -29,7 +29,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::sync::Notify;
 
 use crate::channel::Spin;
-use crate::protocol::{self, Answer, CallError, Envelope, Pid, Request, ToApp};
+use crate::protocol::{self, Answer, CallError, CastError, Envelope, Pid, Request, ToApp};
 use crate::sender::{Sender, gone, protocol_error, unexpected_frame};
 
 /// The bytes read from the ring at a time.
@@ -150,6 +150,14 @@ impl AsyncSender {
             msg,
             timeout_ms,
         })
+    }
+
+    /// Send `msg` to `to` (`Request::Cast`), as [`Sender::try_cast`]: the
+    /// future says whether it was queued. A thread's way to wake its own
+    /// instance's callbacks, by casting to the instance's pid (ROADMAP
+    /// DA9).
+    pub fn cast(&self, to: Pid, msg: Envelope) -> Casted {
+        Casted(self.ask(Request::Cast { to, msg }))
     }
 
     /// Where the app called `app`, which does not run here, runs now, if
@@ -375,6 +383,23 @@ impl Future for Called {
         self.0.poll_answer(cx).map(|answer| match answer {
             Answer::Called(result) => result,
             other => protocol_error(&format!("a call answered with {other:?}")),
+        })
+    }
+}
+
+/// Whether a cast was queued, awaited ([`AsyncSender::cast`]).
+#[derive(Debug)]
+#[must_use = "dropped, the cast is still sent and its answer thrown away"]
+pub struct Casted(Asked);
+
+impl Future for Casted {
+    type Output = Result<(), CastError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_answer(cx).map(|answer| match answer {
+            Answer::Unit => Ok(()),
+            Answer::CastFailed(e) => Err(e),
+            other => protocol_error(&format!("a cast answered with {other:?}")),
         })
     }
 }

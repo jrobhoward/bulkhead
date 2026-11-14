@@ -148,6 +148,19 @@ impl TcpStream {
     pub fn local_addr(&self) -> Result<SocketAddr, NetError> {
         Ok(self.local)
     }
+
+    /// A second descriptor for the same connection, as `std`'s, for an
+    /// async runtime of the app's own (a driver's tokio, ROADMAP DA9). The
+    /// node counts the stream until this `TcpStream` is dropped, which
+    /// shuts the connection down for both descriptors: keep it until the
+    /// clone is done with.
+    ///
+    /// # Errors
+    ///
+    /// The descriptor could not be duplicated.
+    pub fn try_clone_std(&self) -> Result<std::net::TcpStream, NetError> {
+        self.stream.try_clone().map_err(|e| io_error(&e))
+    }
 }
 
 impl Drop for TcpStream {

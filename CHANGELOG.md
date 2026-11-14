@@ -72,6 +72,17 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `bulkhead-resolve`, the resolver driver (ROADMAP DA9, step 1; the node
+  does not start it yet): hickory-resolver on a worker thread, over TCP
+  streams the node opens to the nameservers it names (no UDP), with
+  `resolv.conf`'s search list and options and the hosts file passed as
+  text. It answers calls with schema `bulkhead/resolve`
+  (`{"host": ...}`, answered `{"addrs": [...]}` or a `failure` of
+  `not-found`, `temporary` or `invalid`). `AsyncSender::cast`, which it
+  uses to hand results to its callback thread, and the SDK's
+  `TcpStream::try_clone_std`, which gives its tokio a stream the node
+  still counts.
+
 - Driver profiles' `calls_routed` (`may_call` is the apps owning HTTP
   routes, kept up to date) and `forward` (calls to the failover partner),
   `Runtime::set_elsewhere` (held weakly). Protocol 14 gains

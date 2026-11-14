@@ -126,3 +126,71 @@ fn async_sender____a_call_dropped_before_its_answer____the_answer_is_dropped_and
     assert_eq!(kept, b"kept".to_vec());
     assert_eq!(left, 0);
 }
+
+#[test]
+fn async_sender____casts_queued_and_refused____each_awaits_its_own_answer() {
+    let (channel, memfd) = Channel::create().unwrap();
+    let (_bell_read, bell_write) = bell().unwrap();
+    let (door_read, door_write) = door().unwrap();
+    let end = AppEnd::sender(memfd, bell_write, door_read, Spin(Duration::ZERO)).unwrap();
+    // The node: the first cast queued, the second refused (a full mailbox).
+    let node = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let mut answered = 0;
+        while answered < 2 {
+            let got = channel.to_node().read(&mut chunk).unwrap();
+            buf.extend_from_slice(&chunk[..got]);
+            while buf.len() >= 4 {
+                let len = protocol::frame_len(buf[..4].try_into().unwrap()).unwrap();
+                if buf.len() < 4 + len {
+                    break;
+                }
+                // A cast travels as a hot frame.
+                let Ok(crate::hot::FromAppHot::Frame(FromApp::Request {
+                    id,
+                    request: Request::Cast { .. },
+                })) = crate::hot::parse_from_app(&buf[4..4 + len])
+                else {
+                    panic!("not a cast");
+                };
+                let answer = if answered == 0 {
+                    Answer::Unit
+                } else {
+                    Answer::CastFailed(CastError::Overloaded)
+                };
+                let frame = protocol::encode(&ToApp::Answer { id, answer });
+                channel.to_app().write(&frame).unwrap();
+                wake_reader(channel.to_app().reader_waiting(), door_write.as_fd());
+                answered += 1;
+                buf.drain(..4 + len);
+            }
+            if got == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        door_write
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let local = tokio::task::LocalSet::new();
+    let to = Pid {
+        node: 1,
+        id: 7,
+        incarnation: 1,
+    };
+
+    let (first, second) = local.block_on(&rt, async {
+        let sender = AsyncSender::new(Sender::for_tests(end)).unwrap();
+        tokio::task::spawn_local(sender.clone().pump());
+        let first = sender.cast(to, text("one")).await;
+        let second = sender.cast(to, text("two")).await;
+        (first, second)
+    });
+
+    let _door = node.join().unwrap();
+    assert_eq!(first, Ok(()));
+    assert_eq!(second, Err(CastError::Overloaded));
+}
