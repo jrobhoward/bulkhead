@@ -2996,6 +2996,34 @@ S37's harness with S41's driver (`spikes/s37/driver-hyper`: hyper and rustls on 
 - **Chosen for DA2** with the user. What is left (tokio waking its reactor after each answer, a second task per answer) is ROADMAP PF2.
 - **Not measured:** FreeBSD (function checks only).
 
+## 2026-11-14: the HTTP ingress driver itself (DA2)
+
+S37's harness with `bulkhead-ingress` as the driver (`DRIVER=target/release/bulkhead-ingress S37_DRIVER=da1 S37_INGRESS=1`; 4 worker threads, the route table from the node, calls by name), beside the node's former ingress, now a copy in the bench (`spikes/s37/bench/src/node_ingress.rs`), two rounds each. Raspberry Pi 5 (Linux 7.0), nice 10, load under 1 at the start; the 16-core machine, no VM running, idle at the start (load 1.0 at no CPU). No errors. Results: `spikes/s37/results/{pi5,x86}-da2-2026-11-14.txt`.
+
+At 32 connections, the driver's requests a second as a share of the node's ingress's in the same run, and its CPU a request against the node's:
+
+| | Pi, DA2's driver | Pi, S41's driver (2026-11-13) | 16-core, DA2's driver | 16-core, S41's driver |
+| --- | --- | --- | --- | --- |
+| GET | 70–74%, 1.51–1.59× | 74–76%, 1.47–1.50× | 143–148%, 1.10–1.11× | 147–153%, 1.07–1.08× |
+| HTTPS GET | 71–74%, 1.51–1.56× | 74–75%, 1.51× | 133–137%, 1.11–1.12× | |
+| POST 1 KiB | 66–67%, 1.65–1.69× | 69%, 1.60× | 144–145%, 0.99–1.03× | |
+| GET, 256 connections | 66–69%, 1.57–1.64× | | 150–152%, 1.11× | |
+| POST 64 KiB | 54–55%, 2.1× | | 84%, 1.6× | |
+| POST 1 MiB | 60–61%, 1.85× | | 66–68%, 2.2× | |
+
+One connection, p50 (the node's in the same run):
+
+| | Pi | 16-core |
+| --- | --- | --- |
+| GET | 92–93 µs (65–66), +41% | 106–121 µs (87–106), +14 to +22% |
+| HTTPS GET | 96–97 µs (75), +28 to +30% | 118–123 µs (105–109), +13% |
+| POST 1 KiB | 97–99 µs (76–78), +25 to +30% | 127–128 µs (116–118), +8 to +11% |
+
+- **Against S41's spike driver,** the driver as built is 2 to 6 points behind on the Pi at 32 connections, at 2 to 6 µs more CPU a request, and the same for one connection; on the 16-core machine within a few points. It does per request what the spike did not: the route table's pick, `max_body` and timeouts, `max_connections`, the counters.
+- **Phase 7's target** (at most 1.5 times the node's CPU and at least two thirds of its requests at 32 connections, one connection's p50 at most 20% above the node's): met on the 16-core machine but for one round of GET on one connection (+22%) and large bodies; on the Pi missed for CPU (1.51 to 1.69 times), for POST's requests in one round (65.5%), and for one connection (+25 to +41%), as S41's were when DA2 went ahead (ROADMAP PF2).
+- **Large bodies** cost twice the node's CPU through the driver on both machines: each body crosses the driver's channel and then the app's (ROADMAP PF1).
+- **Not measured:** FreeBSD (function checks only); under the privileged helper.
+
 ## Not measured yet
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.

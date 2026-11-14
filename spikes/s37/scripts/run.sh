@@ -14,10 +14,13 @@ WORKERS=${WORKERS:-4}
 # DRIVER=s37-driver-da1 S37_DRIVER=da1: DA1's driver (one process, DRIVERS
 # worker threads, its own accepts, calls by name in flight) in place of
 # S37's connection handler.
+# DRIVER=target/release/bulkhead-ingress S37_DRIVER=da1 S37_INGRESS=1: the
+# HTTP ingress driver itself (ROADMAP DA2), given a path.
 DRIVER=${DRIVER:-s37-driver}
 S=spikes/s37/target/release
+case $DRIVER in */*) DRIVER_PATH=$DRIVER ;; *) DRIVER_PATH=$S/$DRIVER ;; esac
 LOG=$(mktemp)
-S37_WORKERS=$WORKERS $S/s37-bench node target/release/bulkhead-runner $S/s37-app $S/$DRIVER $POOL $DRIVERS > "$LOG" 2>&1 &
+S37_WORKERS=$WORKERS $S/s37-bench node target/release/bulkhead-runner $S/s37-app $DRIVER_PATH $POOL $DRIVERS > "$LOG" 2>&1 &
 NODE=$!
 trap 'kill $NODE 2>/dev/null; rm -f "$LOG"' EXIT
 for _ in $(seq 300); do grep -q '^ready' "$LOG" && break; sleep 0.1; done
