@@ -41,6 +41,7 @@ pub mod listener;
 mod mailbox;
 mod message;
 pub mod metrics;
+mod names;
 mod native;
 mod output;
 pub mod pid;
@@ -77,6 +78,7 @@ pub use lifecycle::LifecycleState;
 pub use links::LinkInfo;
 pub use listener::{Listener, ListenerSpec, ListenerStats};
 pub use message::{CallError, Envelope, ExitReason};
+pub use names::{Names, RESOLVE_SCHEMA, ResolveError, Resolver};
 pub use native::NativeCode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use native::helper::PrivHelper;

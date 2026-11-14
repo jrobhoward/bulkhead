@@ -51,6 +51,10 @@ fn runtime() -> (Runtime, LoadedApp) {
     let rt = Runtime::new(RuntimeConfig {
         max_instances: 16,
         native,
+        // A node resolves through its driver; here, a table.
+        resolver: bulkhead_host::Resolver::Table(
+            [("localhost".to_string(), vec!["127.0.0.1".parse().unwrap()])].into(),
+        ),
         ..RuntimeConfig::default()
     })
     .unwrap();

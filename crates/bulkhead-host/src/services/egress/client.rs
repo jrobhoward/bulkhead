@@ -1,7 +1,8 @@
 //! The node's HTTP client for egress: one connection pool for every app
 //! (spike S15),
 //! TLS through rustls with the system's roots and node config's CA file,
-//! and a resolver that refuses names resolving to loopback or link-local
+//! and names resolved by the node's resolver driver (ROADMAP DA9), never
+//! in the node, refusing those resolving only to loopback or link-local
 //! addresses.
 
 use std::future::Future;
@@ -17,7 +18,7 @@ use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::connect::dns::{GaiResolver, Name};
+use hyper_util::client::legacy::connect::dns::Name;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
@@ -71,8 +72,8 @@ pub(crate) struct Pool {
 }
 
 impl Pool {
-    /// A pool as node config describes it.
-    pub(crate) fn new(config: &Egress) -> Result<Self, String> {
+    /// A pool as node config describes it, resolving through `names`.
+    pub(crate) fn new(config: &Egress, names: &crate::names::Names) -> Result<Self, String> {
         let mut roots = rustls::RootCertStore::empty();
         if config.system_roots {
             let found = rustls_native_certs::load_native_certs();
@@ -106,7 +107,8 @@ impl Pool {
         .with_root_certificates(roots)
         .with_no_client_auth();
         let mut http = HttpConnector::new_with_resolver(Guard {
-            inner: GaiResolver::new(),
+            names: names.clone(),
+            timeout: config.connect_timeout,
             allow_loopback: config.allow_loopback,
         });
         http.enforce_http(false);
@@ -255,10 +257,12 @@ impl Body for Timed {
 #[error("{0} resolves only to loopback or link-local addresses")]
 struct Prohibited(String);
 
-/// The system resolver, without the addresses egress refuses.
+/// The node's resolver, without the addresses egress refuses.
 #[derive(Clone)]
 struct Guard {
-    inner: GaiResolver,
+    names: crate::names::Names,
+    /// How long a lookup may take: the connect timeout.
+    timeout: Duration,
     allow_loopback: bool,
 }
 
@@ -268,17 +272,21 @@ impl tower_service::Service<Name> for Guard {
     type Future =
         Pin<Box<dyn Future<Output = Result<Self::Response, std::io::Error>> + Send + 'static>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        self.inner.poll_ready(cx)
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, name: Name) -> Self::Future {
-        let allow_loopback = self.allow_loopback;
+        let (names, timeout, allow_loopback) =
+            (self.names.clone(), self.timeout, self.allow_loopback);
         let text = name.as_str().to_string();
-        let lookup = self.inner.call(name);
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> = lookup
-                .await?
+            // Port 0: the connector sets the URL's.
+            let addrs: Vec<SocketAddr> = names
+                .resolve(&text, 0, timeout)
+                .await
+                .map_err(std::io::Error::other)?
+                .into_iter()
                 .filter(|a| allow_loopback || !guarded(a.ip()))
                 .collect();
             if addrs.is_empty() {

@@ -40,6 +40,7 @@ pub(super) struct Datasource {
     cfg: SqlDatasource,
     pool: OnceCell<Pool>,
     caps: Mutex<HashMap<String, (u32, Arc<Semaphore>)>>,
+    names: crate::names::Names,
 }
 
 /// A connection held for a call or a transaction, and the app's permit for
@@ -50,12 +51,13 @@ pub(super) struct Conn {
 }
 
 impl Datasource {
-    pub(super) fn new(name: &str, cfg: SqlDatasource) -> Self {
+    pub(super) fn new(name: &str, cfg: SqlDatasource, names: crate::names::Names) -> Self {
         Self {
             name: name.to_string(),
             cfg,
             pool: OnceCell::new(),
             caps: Mutex::default(),
+            names,
         }
     }
 
@@ -84,7 +86,7 @@ impl Datasource {
 
     async fn pool(&self) -> Result<&Pool, Fault> {
         self.pool
-            .get_or_try_init(|| async { build(&self.name, &self.cfg).await })
+            .get_or_try_init(|| async { build(&self.name, &self.cfg, &self.names).await })
             .await
             .map_err(Fault::Unavailable)
     }
@@ -112,11 +114,28 @@ impl Datasource {
 }
 
 /// The pool for `cfg`: TLS as configured, statements cancelled after the
-/// statement timeout, connections reset when they come back.
-async fn build(name: &str, cfg: &SqlDatasource) -> Result<Pool, String> {
+/// statement timeout, connections reset when they come back. A host name
+/// is resolved here, through the node's resolver (ROADMAP DA9), once for
+/// the pool's life: each address becomes a `hostaddr`, tried in turn, with
+/// the name kept for TLS. A socket directory is used as it is.
+async fn build(
+    name: &str,
+    cfg: &SqlDatasource,
+    names: &crate::names::Names,
+) -> Result<Pool, String> {
     let mut pg = tokio_postgres::Config::new();
-    pg.host(&cfg.host)
-        .port(cfg.port)
+    if cfg.host.starts_with('/') {
+        pg.host(&cfg.host);
+    } else {
+        let addrs = names
+            .resolve(&cfg.host, cfg.port, cfg.connect_timeout)
+            .await
+            .map_err(|e| format!("datasource {name}: {e}"))?;
+        for addr in addrs {
+            pg.host(&cfg.host).hostaddr(addr.ip());
+        }
+    }
+    pg.port(cfg.port)
         .dbname(&cfg.dbname)
         .user(&cfg.user)
         .connect_timeout(cfg.connect_timeout)

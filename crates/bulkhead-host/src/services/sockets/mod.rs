@@ -49,6 +49,18 @@ pub struct SocketsSpec {
 /// Node-wide sockets state: each app's limit and its semaphore.
 pub(crate) struct Shared {
     limits: Mutex<HashMap<String, (u32, Arc<Semaphore>)>>,
+    /// Host names for `connect_host`.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    names: crate::names::Names,
+}
+
+impl Shared {
+    pub(crate) fn new(names: &crate::names::Names) -> Self {
+        Self {
+            limits: Mutex::default(),
+            names: names.clone(),
+        }
+    }
 }
 
 /// Sockets state for one instance.
@@ -95,9 +107,7 @@ impl Service for Sockets {
     }
 
     fn shared(_config: &RuntimeConfig) -> Result<Shared, HostError> {
-        Ok(Shared {
-            limits: Mutex::default(),
-        })
+        Ok(Shared::new(&crate::names::Names::default()))
     }
 
     fn instance(shared: &Arc<Shared>, spec: &SocketsSpec, info: &InstanceInfo<'_>) -> Instance {
@@ -123,6 +133,7 @@ impl Service for Sockets {
             native: native::Native::new(
                 spec.scope.as_ref().filter(|_| granted).map(Policy::new),
                 info.handle,
+                shared.names.clone(),
             ),
         }
     }

@@ -162,6 +162,9 @@ check_deps() {
     # The runtime alone has no HTTP server or client, no TLS stream.
     absent "bulkhead-host (no features)" 'hyper|hyper-util|http-body-util|tokio-rustls' \
         -p bulkhead-host --no-default-features || status=1
+    # DNS is the resolver driver's (DA9): no DNS library in the node.
+    absent "bulkhead (every feature)" 'bulkhead-resolve|hickory-.*|resolv-conf' \
+        -p bulkhead --all-features || status=1
     return $status
 }
 
@@ -272,6 +275,19 @@ check_conventions() {
     if [ -n "$out" ]; then
         found=1
         echo "test files without the header #![allow(non_snake_case)], #![allow(clippy::unwrap_used)], #![allow(clippy::expect_used)]:"
+        echo "$out" | sed 's/^/  /'
+    fi
+
+    # ROADMAP DA9: the node resolves no host name itself (libc's resolver
+    # parses DNS replies); names go to its resolver driver
+    # (bulkhead_host::Names). Tests may resolve.
+    out=$(git ls-files -- 'crates/bulkhead/src/*.rs' 'crates/bulkhead-host/src/*.rs' \
+            'crates/bulkhead-modbus/src/*.rs' ':!*_tests.rs' |
+        xargs grep -n -E '\b(lookup_host|to_socket_addrs|ToSocketAddrs|GaiResolver|getaddrinfo)\b' |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*//')
+    if [ -n "$out" ]; then
+        found=1
+        echo "the node resolving host names itself (ROADMAP DA9: through bulkhead_host::Names):"
         echo "$out" | sed 's/^/  /'
     fi
 

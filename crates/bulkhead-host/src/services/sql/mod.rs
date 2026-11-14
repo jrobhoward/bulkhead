@@ -110,21 +110,7 @@ impl Service for Sql {
     }
 
     fn shared(config: &RuntimeConfig) -> Result<Shared, HostError> {
-        #[cfg(not(feature = "sql"))]
-        let _ = config;
-        Ok(Shared {
-            #[cfg(feature = "sql")]
-            datasources: config
-                .datasources
-                .iter()
-                .map(|(name, cfg)| {
-                    (
-                        name.clone(),
-                        Arc::new(pool::Datasource::new(name, cfg.clone())),
-                    )
-                })
-                .collect(),
-        })
+        Ok(Shared::new(config, &crate::names::Names::default()))
     }
 
     fn instance(shared: &Arc<Shared>, spec: &SqlSpec, info: &InstanceInfo<'_>) -> Instance {
@@ -135,6 +121,28 @@ impl Service for Sql {
             granted: info.granted,
             native_txs: BTreeMap::new(),
             next_tx: 0,
+        }
+    }
+}
+
+impl Shared {
+    /// Each datasource, its pool opened on first use, its host resolved
+    /// through `names` (ROADMAP DA9).
+    pub(crate) fn new(config: &RuntimeConfig, names: &crate::names::Names) -> Self {
+        #[cfg(not(feature = "sql"))]
+        let _ = (config, names);
+        Self {
+            #[cfg(feature = "sql")]
+            datasources: config
+                .datasources
+                .iter()
+                .map(|(name, cfg)| {
+                    (
+                        name.clone(),
+                        Arc::new(pool::Datasource::new(name, cfg.clone(), names.clone())),
+                    )
+                })
+                .collect(),
         }
     }
 }

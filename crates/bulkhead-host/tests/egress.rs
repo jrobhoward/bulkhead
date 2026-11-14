@@ -139,6 +139,10 @@ fn runtime(egress: Egress) -> (Runtime, LoadedApp) {
         max_instances: 16,
         egress,
         native,
+        // A node resolves through its driver; here, a table.
+        resolver: bulkhead_host::Resolver::Table(
+            [("localhost".to_string(), vec!["127.0.0.1".parse().unwrap()])].into(),
+        ),
         ..RuntimeConfig::default()
     })
     .unwrap();

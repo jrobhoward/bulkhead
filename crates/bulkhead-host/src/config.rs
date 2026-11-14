@@ -261,6 +261,9 @@ pub struct RuntimeConfig {
     /// Driver apps (node config `[drivers.<app>]`, ROADMAP DA1): the
     /// profile each app of that name gets beyond its manifest.
     pub drivers: BTreeMap<String, DriverProfile>,
+    /// Where host names are resolved (ROADMAP DA9): a node names its
+    /// resolver driver; the default resolves none.
+    pub resolver: crate::names::Resolver,
 }
 
 /// What node config gives a driver app beyond its manifest (ROADMAP DA1).
@@ -444,6 +447,7 @@ impl Default for RuntimeConfig {
             cast_credit_bytes: 1 << 20,
             native: NativeConfig::default(),
             drivers: BTreeMap::new(),
+            resolver: crate::names::Resolver::None,
         }
     }
 }

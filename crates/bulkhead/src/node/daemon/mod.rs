@@ -219,6 +219,14 @@ impl Node {
                 cast_credit_bytes: config.cluster.cast_credit_bytes,
                 native,
                 drivers,
+                // A member's names go to its resolver driver (ROADMAP
+                // DA9); a witness resolves none.
+                resolver: match config.cluster.role {
+                    ClusterRole::Member => {
+                        bulkhead_host::Resolver::App(crate::node::config::RESOLVE_APP.to_string())
+                    }
+                    ClusterRole::Witness => bulkhead_host::Resolver::None,
+                },
                 secrets: config
                     .secrets
                     .iter()

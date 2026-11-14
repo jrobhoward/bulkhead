@@ -49,6 +49,8 @@ const MAX_DATAGRAM: usize = 64 << 10;
 pub(super) struct Native {
     /// The app's policy; `None` without the capability granted.
     policy: Option<Policy>,
+    /// Host names to addresses: the node's resolver driver.
+    names: crate::names::Names,
     handle: InstanceHandle,
     sockets: BTreeMap<u32, Socket>,
     next: u32,
@@ -93,9 +95,14 @@ impl Drop for Notice {
 pub(crate) type Reply = (p::NetAnswer, Option<OwnedFd>);
 
 impl Native {
-    pub(super) fn new(policy: Option<Policy>, handle: &InstanceHandle) -> Self {
+    pub(super) fn new(
+        policy: Option<Policy>,
+        handle: &InstanceHandle,
+        names: crate::names::Names,
+    ) -> Self {
         Self {
             policy,
+            names,
             handle: handle.clone(),
             sockets: BTreeMap::new(),
             next: 0,
@@ -245,15 +252,28 @@ impl Instance {
         port: u16,
         deadline: Duration,
     ) -> Result<Reply, p::NetError> {
-        if !self.native.policy.as_ref().is_some_and(Policy::name_lookup) {
+        // The resolver driver may not ask itself (ROADMAP DA9).
+        if !self.native.policy.as_ref().is_some_and(Policy::name_lookup)
+            || self.native.names.is_resolver(self.native.handle.app())
+        {
             return Err(p::NetError::Other("permanent-resolver-failure".into()));
         }
-        let found: Vec<SocketAddr> =
-            tokio::time::timeout(deadline, tokio::net::lookup_host((host, port)))
-                .await
-                .map_err(|_| p::NetError::Other("name lookup timed out".into()))?
-                .map_err(|e| p::NetError::Other(e.to_string()))?
-                .collect();
+        let found = self
+            .native
+            .names
+            .resolve(host, port, deadline)
+            .await
+            .map_err(|e| {
+                tracing::debug!(host, error = %e, "name lookup failed");
+                p::NetError::Other(
+                    match e {
+                        crate::names::ResolveError::NotFound(_) => "name-unresolvable",
+                        crate::names::ResolveError::Temporary(_) => "temporary-resolver-failure",
+                        crate::names::ResolveError::Refused(_) => "permanent-resolver-failure",
+                    }
+                    .into(),
+                )
+            })?;
         let mut last = p::NetError::Other(format!("{host} has no address"));
         for addr in found {
             match self.connect(addr, deadline).await {

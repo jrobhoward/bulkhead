@@ -19,7 +19,20 @@ All notable changes are recorded here. The format follows
   (default 5): both files are read again then, on SIGHUP and on
   `bulkhead reload-tls`, and the driver restarts when they changed.
   `bulkhead-resolve` is a reserved app name. `bulkhead ps` lists its
-  instance. Nothing resolves through it yet (step 3).
+  instance.
+- The node resolves no host name itself (ROADMAP DA9, step 3): an app's
+  `connect_host`, HTTP egress and datasources ask the resolver driver,
+  through `bulkhead_host::Names` (`RuntimeConfig::resolver`: the driver by
+  app name, a table for tests, or none), and never fall back to libc's
+  `getaddrinfo`. An address written as text is read in the node. While the
+  driver restarts, a lookup is tried again until its timeout. Failures
+  reach apps as `name-unresolvable`, `temporary-resolver-failure` or
+  `permanent-resolver-failure` (the resolver itself may not look names
+  up). A datasource's host name is resolved once, when its pool opens,
+  each address becoming a `hostaddr`; a changed DNS record is seen at the
+  node's next start. `scripts/check.sh` fails on `lookup_host`,
+  `to_socket_addrs`, `GaiResolver` or `getaddrinfo` in the node's source
+  and on a DNS library in its dependency tree.
 
 - The HTTP ingress runs outside the node (ROADMAP DA2, step 4): for
   `[http.<name>]` the node binds the addresses and starts the

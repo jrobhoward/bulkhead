@@ -65,6 +65,30 @@ pub(crate) struct Shared {
         std::sync::Mutex<std::collections::HashMap<String, (usize, Arc<tokio::sync::Semaphore>)>>,
 }
 
+impl Shared {
+    /// The pool node config describes, resolving names through `names`
+    /// (ROADMAP DA9).
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::Egress`]: the CA file cannot be read.
+    pub(crate) fn new(
+        config: &RuntimeConfig,
+        names: &crate::names::Names,
+    ) -> Result<Self, HostError> {
+        #[cfg(not(feature = "egress"))]
+        let _ = (config, names);
+        Ok(Self {
+            #[cfg(feature = "egress")]
+            pool: client::Pool::new(&config.egress, names).map_err(HostError::Egress)?,
+            #[cfg(feature = "egress")]
+            config: config.egress.clone(),
+            #[cfg(feature = "egress")]
+            limits: std::sync::Mutex::default(),
+        })
+    }
+}
+
 /// Egress state for one instance.
 pub(crate) struct Instance {
     #[cfg(feature = "egress")]
@@ -91,16 +115,7 @@ impl Service for Egress {
     }
 
     fn shared(config: &RuntimeConfig) -> Result<Shared, HostError> {
-        #[cfg(not(feature = "egress"))]
-        let _ = config;
-        Ok(Shared {
-            #[cfg(feature = "egress")]
-            pool: client::Pool::new(&config.egress).map_err(HostError::Egress)?,
-            #[cfg(feature = "egress")]
-            config: config.egress.clone(),
-            #[cfg(feature = "egress")]
-            limits: std::sync::Mutex::default(),
-        })
+        Shared::new(config, &crate::names::Names::default())
     }
 
     #[cfg_attr(not(feature = "egress"), allow(unused_variables))]

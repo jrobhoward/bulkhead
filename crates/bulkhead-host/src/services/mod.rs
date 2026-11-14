@@ -224,21 +224,30 @@ pub(crate) struct Shared {
     metrics: Arc<()>,
     sql: Arc<sql::Shared>,
     sockets: Arc<sockets::Shared>,
+    /// Host names to addresses, for sockets, egress and SQL (ROADMAP DA9).
+    names: crate::names::Names,
 }
 
 impl Shared {
     pub(crate) fn new(config: &RuntimeConfig) -> Result<Self, HostError> {
+        let names = crate::names::Names::new(config.resolver.clone());
         Ok(Self {
             config: Arc::new(config::Config::shared(config)?),
-            egress: Arc::new(egress::Egress::shared(config)?),
+            egress: Arc::new(egress::Shared::new(config, &names)?),
             groups: Arc::new(groups::Groups::shared(config)?),
             keyvalue: Arc::new(keyvalue::KeyValue::shared(config)?),
             logging: Arc::new(logging::Logging::shared(config)?),
             secrets: Arc::new(secrets::Secrets::shared(config)?),
             metrics: Arc::new(metrics::MetricsService::shared(config)?),
-            sql: Arc::new(sql::Sql::shared(config)?),
-            sockets: Arc::new(sockets::Sockets::shared(config)?),
+            sql: Arc::new(sql::Shared::new(config, &names)),
+            sockets: Arc::new(sockets::Shared::new(&names)),
+            names,
         })
+    }
+
+    /// Host names to addresses.
+    pub(crate) fn names(&self) -> &crate::names::Names {
+        &self.names
     }
 
     /// Process groups, which other nodes' frames update.

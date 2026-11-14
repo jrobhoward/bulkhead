@@ -319,6 +319,7 @@ impl Runtime {
             config,
         });
         inner.services.groups().attach(&inner);
+        inner.services.names().attach(&inner);
         Ok(Self { inner })
     }
 
