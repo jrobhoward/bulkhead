@@ -238,11 +238,20 @@ pub async fn sql_drivers(
     rt: &Runtime,
     datasources: &std::collections::BTreeMap<String, bulkhead_host::SqlDatasource>,
 ) -> bulkhead_host::Apps {
+    sql_drivers_from(rt, datasources, sql_program()).await
+}
+
+/// [`sql_drivers`] with the driver's program at `program`.
+pub async fn sql_drivers_from(
+    rt: &Runtime,
+    datasources: &std::collections::BTreeMap<String, bulkhead_host::SqlDatasource>,
+    program: &std::path::Path,
+) -> bulkhead_host::Apps {
     let apps = rt.start_apps(Vec::new()).await.unwrap();
     for (name, ds) in datasources {
         let app = bulkhead_host::SqlDatasource::driver_app(name);
         let code = rt.load_native(bulkhead_host::NativeCode {
-            path: sql_program().clone(),
+            path: program.to_path_buf(),
             kind: bulkhead_bundle::manifest::NativeProgram::Executable,
         });
         let manifest = app_manifest(

@@ -3,13 +3,19 @@
 # as root, never on a development machine: bulkhead-priv under systemd
 # (examples/systemd/bulkhead-priv.service) starts the node, which deploys
 # the board example; the app must run under a user of its own, in its own
-# cgroup, PID namespace and minimal root. It installs a `bulkhead` user,
+# cgroup, PID namespace and minimal root. With Postgres installed
+# (/usr/lib/postgresql/*/bin) it also deploys the tally example on a
+# datasource (ROADMAP DA3): a scratch cluster as `postgres`, reached first
+# over its Unix socket with peer authentication (the node connects, as
+# `bulkhead`), then, after a restart, over TCP by name with a password the
+# datasource's driver reads from its file. It installs a `bulkhead` user,
 # binaries under /usr/local, /etc/bulkhead and the unit, and removes them
 # all at the end unless KEEP=1.
 #
 #   cargo build -p bulkhead -p bulkhead-priv -p example-board   # as a user
 #   cargo build -p bulkhead-native --bin bulkhead-runner
 #   cargo build -p bulkhead-resolve -p bulkhead-ingress -p bulkhead-admin -p bulkhead-metrics
+#   cargo build -p bulkhead-sql -p example-tally
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
@@ -24,6 +30,7 @@ install -m 0755 $T/bulkhead-resolve /usr/local/libexec/bulkhead/bulkhead-resolve
 install -m 0755 $T/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress
 install -m 0755 $T/bulkhead-admin /usr/local/libexec/bulkhead/bulkhead-admin
 install -m 0755 $T/bulkhead-metrics /usr/local/libexec/bulkhead/bulkhead-metrics
+install -m 0755 $T/bulkhead-sql /usr/local/libexec/bulkhead/bulkhead-sql
 install -d -m 0755 /etc/bulkhead
 systemctl stop bulkhead 2>/dev/null || true
 rm -rf /var/lib/bulkhead
@@ -48,7 +55,38 @@ cat > /etc/bulkhead/policy.toml <<'TOML'
 [apps.board]
 grant = ["bulkhead:http-routes", "bulkhead:keyvalue", "bulkhead:logging"]
 buckets = ["board"]
+
+[apps.tally]
+grant = ["bulkhead:http-routes", "bulkhead:sql", "bulkhead:logging"]
+datasources = ["main"]
 TOML
+# A scratch Postgres for the datasource (ROADMAP DA3): peer authentication
+# on its socket, a password over TCP; the password in a file of the node's
+# that the helper shares with the datasource's driver alone.
+PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)
+P=/var/lib/bulkhead-e2e-pg; PGPORT=5544
+pg_down() { [ -d $P/data ] && runuser -u postgres -- $PGBIN/pg_ctl -D $P/data -m fast stop >/dev/null 2>&1 || true; }
+pg_down; rm -rf $P
+DATASOURCE=""
+if [ -n "$PGBIN" ]; then
+    install -d -m 0755 -o postgres -g postgres $P
+    runuser -u postgres -- $PGBIN/initdb -D $P/data -U postgres --auth-local=peer --auth-host=scram-sha-256 >/dev/null
+    runuser -u postgres -- $PGBIN/pg_ctl -D $P/data -l $P/log -w \
+        -o "-k $P -p $PGPORT -c listen_addresses=127.0.0.1" start >/dev/null
+    runuser -u postgres -- psql -q -h $P -p $PGPORT -d postgres \
+        -c "CREATE ROLE bulkhead LOGIN PASSWORD 'e2e-secret'" -c "CREATE DATABASE tally OWNER bulkhead"
+    printf 'e2e-secret\n' > $K/pg.password
+    chown bulkhead:bulkhead $K/pg.password; chmod 0600 $K/pg.password
+    cp $SRC/examples/tally/bulkhead.toml tally.toml
+    /usr/local/bin/bulkhead bundle tally.toml $T/example-tally --key signer.key --out tally.rbp >/dev/null
+    chmod 0644 tally.rbp
+    DATASOURCE="[datasources.main]
+host = \"$P\"
+port = $PGPORT
+dbname = \"tally\"
+user = \"bulkhead\"
+"
+fi
 cat > /etc/bulkhead/node.toml <<TOML
 node = 1
 data_dir = "/var/lib/bulkhead"
@@ -69,6 +107,10 @@ operators = "$K/operators.toml"
 [buckets.board]
 durability = "disk"
 
+[secrets.pg]
+file = "$K/pg.password"
+
+$DATASOURCE
 # The node's own drivers (bulkhead-resolve, bulkhead-ingress) beside the
 # helper's runner, in every instance's root.
 [native]
@@ -106,6 +148,39 @@ curl -s http://127.0.0.1:8080/board; echo
 echo "== metrics (bulkhead-metrics)"; curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_instances{app="board"}'
 echo "== remote admin (bulkhead-admin, signed requests)"
 /usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
+if [ -n "$PGBIN" ]; then
+    echo "== tally on the datasource, over its socket (peer authentication)"
+    cli deploy $W/tally.rbp
+    for i in $(seq 100); do curl -sf http://127.0.0.1:8080/tally >/dev/null && break; sleep 0.1; done
+    curl -s -X POST http://127.0.0.1:8080/tally >/dev/null
+    curl -s -X POST -d 4 http://127.0.0.1:8080/tally; echo
+    runuser -u postgres -- psql -Atq -h $P -p $PGPORT -d postgres \
+        -c "SELECT 'session: ' || usename || ' ' || coalesce(client_addr::text, 'socket') || ' ' || application_name FROM pg_stat_activity WHERE datname = 'tally'"
+    echo "== the datasource's driver"
+    ps -eo user:12,uid,pid,args | grep "bulkhead-sql" | grep -v grep
+    DRV=$(pgrep -f "bulkhead-sql" | head -1)
+    echo "its view: uid $(awk '/^Uid/ {print $2}' /proc/$DRV/status), root $(ls /proc/$DRV/root/ | tr '\n' ' ')"
+    echo "== the datasource over TCP by name, its password from a file"
+    sed -i "s|^host = \"$P\"|host = \"localhost\"\npassword_secret = \"pg\"|" /etc/bulkhead/node.toml
+    systemctl restart bulkhead
+    # The driver starts before the apps, its pool empty: trace both before
+    # the first statement opens a connection.
+    for i in $(seq 100); do pgrep -f "bulkhead-sql" >/dev/null && break; sleep 0.1; done
+    NODE=$(pgrep -x bulkhead | head -1); DRV=$(pgrep -f "bulkhead-sql" | head -1)
+    if command -v strace >/dev/null; then
+        strace -f -qq -e trace=connect -p $NODE -o $W/node.strace & S1=$!
+        strace -f -qq -e trace=connect -p $DRV -o $W/driver.strace & S2=$!
+        sleep 0.5
+    fi
+    for i in $(seq 100); do curl -sf http://127.0.0.1:8080/tally >/dev/null && break; sleep 0.2; done
+    echo "count after the restart: $(curl -s http://127.0.0.1:8080/tally)"
+    if command -v strace >/dev/null; then
+        sleep 0.3; kill $S1 $S2; wait $S1 $S2 2>/dev/null || true
+        echo "connects to :$PGPORT by the node: $(grep -c "htons($PGPORT)" $W/node.strace), by the driver: $(grep -c connect $W/driver.strace)"
+    fi
+    runuser -u postgres -- psql -Atq -h $P -p $PGPORT -d postgres \
+        -c "SELECT 'session: ' || usename || ' ' || coalesce(client_addr::text, 'socket') FROM pg_stat_activity WHERE datname = 'tally'"
+fi
 echo "== status"; cli status board
 echo "== processes with the app"
 ps -eo user:12,uid,gid,pid,args | grep -E "bulkhead-priv|bulkhead node|^60000" | grep -v grep
@@ -134,7 +209,8 @@ journalctl -u bulkhead --no-pager -n 40 | grep -E "bulkhead-priv|error|ERROR|WAR
 if [ "${KEEP:-0}" != 1 ]; then
     rm -f /etc/systemd/system/bulkhead.service && systemctl daemon-reload
     rm -f /usr/local/sbin/bulkhead-priv /usr/local/bin/bulkhead
-    rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W $K
+    pg_down
+    rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W $K $P
     userdel bulkhead
     echo "== removed"
 fi

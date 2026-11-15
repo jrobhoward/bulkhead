@@ -659,3 +659,67 @@ async fn helper____admin_and_metrics_driver____streams_and_metrics_reach_it_unde
     assert_eq!(metrics, "node_metric 1\n");
     d.kill();
 }
+
+/// A datasource's driver under the helper (ROADMAP DA3): a user of its
+/// own, its password file shared with it and read under `/driver/`, its
+/// one connection opened by the node, and an app's statements forwarded
+/// to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____sql_driver____reads_its_password_and_logs_in_over_the_nodes_stream() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(started) = helper("helper____sql_driver") else {
+        return;
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
+    let Some(pg) = common::pg::Scratch::start_with(&common::pg::Options {
+        tcp: true,
+        password: Some("s3cret"),
+        ..common::pg::Options::default()
+    }) else {
+        return;
+    };
+    let keys = privhelper::dir_owned(&started.dir.path().join("keys"), started.node_uid, 0o750);
+    let file = keys.join("main.password");
+    std::fs::write(&file, "s3cret\n").unwrap();
+    std::os::unix::fs::chown(&file, Some(started.node_uid), Some(started.node_uid)).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let mut ds = bulkhead_host::SqlDatasource::new("127.0.0.1", "postgres", "bulkhead");
+    ds.port = pg.port();
+    ds.password = Some(bulkhead_host::SecretSource::File(file));
+    let datasources = std::collections::BTreeMap::from([("main".to_string(), ds)]);
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        datasources: datasources.clone(),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let unshared = rt.share_driver_files().await;
+    let dir = privhelper::dir_owned(&started.dir.path().join("sql"), started.node_uid, 0o755);
+    let program_path = privhelper::copy_owned(common::sql_program(), &dir, started.node_uid);
+    let apps = common::sql_drivers_from(&rt, &datasources, &program_path).await;
+    let app = program(&started, &rt);
+    let mut s = spec("a");
+    s.callback_deadline = LONG;
+    s.granted.insert(Capability::Sql);
+    s.services.sql.datasources = std::collections::BTreeMap::from([("main".to_string(), 1)]);
+    let a = rt.spawn(&app, s).unwrap();
+
+    let user = ask(&a, "sql-q main SELECT current_user::text AS u").await;
+
+    assert!(unshared.is_empty(), "{unshared:?}");
+    assert_eq!(
+        user,
+        "u=bulkhead",
+        "the driver: {:?}",
+        apps.app("bulkhead-sql-main").map(|d| d.status())
+    );
+    a.kill();
+    apps.stop().await;
+}

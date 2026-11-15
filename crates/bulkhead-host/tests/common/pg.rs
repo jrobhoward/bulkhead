@@ -1,13 +1,35 @@
 //! A scratch Postgres for tests: `initdb` and `pg_ctl` in a temporary
-//! directory, as the current user, on a Unix socket only. Shared by
-//! `bulkhead-host`'s and `bulkhead`'s tests (the latter include this file by
-//! path). `BULKHEAD_PG_BIN` names the directory holding `initdb` and
-//! `pg_ctl`; otherwise `/usr/lib/postgresql/*/bin` and `PATH` are searched.
+//! directory, as the current user (as `nobody` under root, which `initdb`
+//! refuses), on a Unix socket (and TCP if asked). Shared by
+//! `bulkhead-host`'s, `bulkhead`'s and `bulkhead-sql`'s tests (the others
+//! include this file by path). `BULKHEAD_PG_BIN` names the directory
+//! holding `initdb` and `pg_ctl`; otherwise `/usr/lib/postgresql/*/bin`
+//! and `PATH` are searched.
 
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// The user the server runs as when the tests run as root: `nobody`.
+const NOBODY: u32 = 65_534;
+
+/// A command for `program`, as [`NOBODY`] when `as_nobody`.
+fn command(program: PathBuf, as_nobody: bool) -> Command {
+    let mut c = Command::new(program);
+    if as_nobody {
+        use std::os::unix::process::CommandExt;
+        c.uid(NOBODY).gid(NOBODY);
+    }
+    c
+}
+
+/// Give `path` to [`NOBODY`] when `as_nobody`.
+fn give(path: &Path, as_nobody: bool) {
+    if as_nobody {
+        std::os::unix::fs::chown(path, Some(NOBODY), Some(NOBODY)).unwrap();
+    }
+}
 
 /// The socket's port number (no TCP listener).
 pub const PORT: u16 = 5433;
@@ -53,6 +75,8 @@ pub struct Scratch {
     dir: tempfile::TempDir,
     /// Its port: [`PORT`] on the socket alone, a free one with TCP.
     port: u16,
+    /// It runs as [`NOBODY`]: the tests run as root.
+    as_nobody: bool,
 }
 
 impl Scratch {
@@ -90,13 +114,19 @@ impl Scratch {
             .prefix("pg")
             .tempdir_in("/tmp")
             .unwrap();
+        let as_nobody = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(dir.path()).unwrap().uid() == 0
+        };
+        give(dir.path(), as_nobody);
         let data = dir.path().join("data");
-        let mut initdb = Command::new(bin.join("initdb"));
+        let mut initdb = command(bin.join("initdb"), as_nobody);
         initdb.args(["-A", "trust", "-U", "bulkhead", "-E", "UTF8", "--no-sync"]);
         if let Some(password) = options.password {
             // After `-A`, which sets both: the socket stays trusted.
             let file = dir.path().join("pwfile");
             std::fs::write(&file, password).unwrap();
+            give(&file, as_nobody);
             initdb
                 .arg("--auth-host=scram-sha-256")
                 .arg(format!("--pwfile={}", file.display()));
@@ -121,13 +151,15 @@ impl Scratch {
             std::fs::write(&k, key).unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&k, std::fs::Permissions::from_mode(0o600)).unwrap();
+            give(&c, as_nobody);
+            give(&k, as_nobody);
             opts.push_str(&format!(
                 " -c ssl=on -c ssl_cert_file={} -c ssl_key_file={}",
                 c.display(),
                 k.display()
             ));
         }
-        let ok = Command::new(bin.join("pg_ctl"))
+        let ok = command(bin.join("pg_ctl"), as_nobody)
             .arg("-D")
             .arg(&data)
             .args(["-o", &opts, "-l"])
@@ -140,7 +172,12 @@ impl Scratch {
             "pg_ctl start: {}",
             String::from_utf8_lossy(&ok.stderr)
         );
-        Some(Self { bin, dir, port })
+        Some(Self {
+            bin,
+            dir,
+            port,
+            as_nobody,
+        })
     }
 
     /// Its port, on the socket and on TCP if it listens there.
@@ -156,7 +193,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = Command::new(self.bin.join("pg_ctl"))
+        let _ = command(self.bin.join("pg_ctl"), self.as_nobody)
             .arg("-D")
             .arg(self.dir.path().join("data"))
             .args(["-m", "immediate", "stop"])

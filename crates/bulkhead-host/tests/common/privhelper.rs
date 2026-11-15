@@ -98,11 +98,14 @@ fn remove_tree(dir: &Path) {
     let _ = std::fs::remove_dir(dir);
 }
 
-/// Copy `file` into `dir`, owned by `uid`, keeping its mode.
+/// Copy the program `file` into `dir`, owned by `uid`, mode 0755: not
+/// the build's mode, which a test process that opened a node (umask 077)
+/// may have made 0700.
 pub fn copy_owned(file: &Path, dir: &Path, uid: u32) -> PathBuf {
     let to = dir.join(file.file_name().unwrap());
     std::fs::copy(file, &to).unwrap();
     std::os::unix::fs::chown(&to, Some(uid), None).unwrap();
+    std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755)).unwrap();
     to
 }
 

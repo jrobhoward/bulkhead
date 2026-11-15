@@ -30,8 +30,10 @@ fn manifest() -> PathBuf {
     root().join("examples/tally/bulkhead.toml")
 }
 
-/// Node config for the native program: its runner.
+/// Node config for the native program: its runner, with the HTTP
+/// ingress driver built beside it.
 fn node_extra() -> String {
+    common::ingress_built();
     format!("[native]\nrunner = {:?}\n", common::native_fixtures().0)
 }
 

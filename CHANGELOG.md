@@ -8,6 +8,20 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- DA3's tests under the privileged helper and end to end (ROADMAP DA3,
+  step 5): `tests/priv.rs` runs a datasource's driver under its own user,
+  reading its shared password file and logging in over the node's TCP
+  stream (Linux and FreeBSD, as root). `scripts/priv-e2e-systemd.sh`
+  deploys the tally example on a scratch Postgres when one is installed,
+  over its socket with peer authentication and then over TCP by name with
+  a password file, checking with strace that the node connects and the
+  driver does not; `scripts/priv-e2e-rcd.sh` starts two datasources'
+  drivers, each jailed under a user of its own. The scratch Postgres for
+  tests runs as `nobody` under root. Fixed in the tests: programs copied
+  for the helper are made 0755, since one built from a test process that
+  had opened a node (umask 077) was 0700 and its app's user could not run
+  it; `tests/tally.rs` builds the HTTP ingress driver it needs.
+
 - SQL runs outside the node (ROADMAP DA3, step 4): for each
   `[datasources.<name>]` the node starts `bulkhead-sql` as the app
   `bulkhead-sql-<name>` (beside the runner, or the new `[native] sql`),
