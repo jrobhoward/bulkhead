@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- New crate `bulkhead-sql` (ROADMAP DA3, step 3): a datasource's Postgres
+  client as a driver app, not yet started by the node. It takes the
+  node's requests as calls (schema `bulkhead/sql`, the protocol's
+  `SqlRequest` in CBOR) and answers `Result<SqlAnswer, SqlError>` from its
+  worker thread. Its pool (deadpool) logs in over streams the node opens
+  (`Request::Connect`, with `tokio_postgres::Config::connect_raw`), TLS
+  through tokio-postgres-rustls against a CA file, each connection reset
+  with `ROLLBACK; DISCARD ALL` when handed out again. Its init arguments
+  name the database, user, TLS, pool size, timeouts and result limit; the
+  password is a file under `/driver/` or, for a secret from the node's
+  environment, the value itself. Statements and values come from
+  `bulkhead-host`'s SQL service, which still runs them until step 4.
+  `scripts/check.sh deps` fails if the node depends on it. The scratch
+  Postgres for tests (`bulkhead-host/tests/common/pg.rs`) can ask for a
+  password over TCP and serve TLS.
+
 - A driver may ask the node for a connection to the one endpoint its
   profile names (`Request::Connect`, protocol 14; ROADMAP DA3, step 2):
   `Ctx::connect`, `Sender::connect` and `AsyncSender::connect` answer the

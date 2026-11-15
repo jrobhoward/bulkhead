@@ -26,6 +26,7 @@ members = [
     "crates/bulkhead-sdk",
     "crates/bulkhead-sdk-macros",
     "crates/bulkhead-soak",
+    "crates/bulkhead-sql",
     "examples/board",
     "examples/counter",
     "examples/ping-pong",
@@ -98,6 +99,7 @@ base64 = "0.23"
 # SQL datasources: Postgres, pooled, TLS on rustls with ring.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
 deadpool-postgres = { version = "0.14", default-features = false, features = ["rt_tokio_1"] }
+deadpool = { version = "0.13", default-features = false, features = ["managed", "rt_tokio_1"] }
 futures-util = { version = "0.3", default-features = false }
 # MIT OR Apache-2.0. The resolver driver's DNS (ROADMAP DA9), never the node's:
 # over TCP streams the node opens, configuration given as text.

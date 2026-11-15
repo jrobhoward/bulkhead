@@ -617,6 +617,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bulkhead-sql"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-bundle",
+ "bulkhead-host",
+ "bulkhead-native",
+ "bulkhead-sdk",
+ "bytes",
+ "ciborium",
+ "deadpool",
+ "futures-util",
+ "rcgen",
+ "rstest",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

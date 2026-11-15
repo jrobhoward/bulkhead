@@ -153,8 +153,8 @@ absent() {
 # until DA6 decides them.
 check_deps() {
     local status=0
-    # The HTTP ingress driver is a program the node starts, never a library.
-    absent "bulkhead (every feature)" 'bulkhead-ingress|bulkhead-metrics|bulkhead-admin' -p bulkhead --all-features || status=1
+    # The drivers are programs the node starts, never libraries.
+    absent "bulkhead (every feature)" 'bulkhead-ingress|bulkhead-metrics|bulkhead-admin|bulkhead-sql' -p bulkhead --all-features || status=1
     # The node with its HTTP ingress and nothing else: the ingress's TLS
     # (tokio-rustls) is the driver's.
     absent "bulkhead (node, http)" 'tokio-rustls|bulkhead-ingress' \
