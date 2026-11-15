@@ -128,6 +128,13 @@ pub fn sql_built() -> PathBuf {
     driver_built("bulkhead-sql", &BUILT)
 }
 
+/// `bulkhead-egress`: a node starts it for each app granted
+/// `bulkhead:http-egress` (ROADMAP DA4).
+pub fn egress_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    driver_built("bulkhead-egress", &BUILT)
+}
+
 /// Node config from `toml`, with the fixtures' runner and resolver where
 /// it names none: a member node runs its resolver of host names as a
 /// native instance, so every test node needs both.
@@ -147,6 +154,10 @@ pub fn node_config(toml: &str) -> NodeConfig {
     }
     if !config.datasources.is_empty() && config.native.sql.is_none() {
         config.native.sql = Some(sql_built());
+    }
+    // Any app may be granted egress; its driver starts with it.
+    if config.native.egress.is_none() {
+        config.native.egress = Some(egress_built());
     }
     config
 }
@@ -170,6 +181,7 @@ pub async fn ps(client: &Client) -> Vec<bulkhead::api::InstanceInfo> {
         .filter(|i| {
             !NODE_DRIVERS.contains(&i.app.as_str())
                 && !i.app.starts_with(bulkhead_host::SQL_DRIVER_PREFIX)
+                && !i.app.starts_with(bulkhead_host::EGRESS_DRIVER_PREFIX)
         })
         .collect()
 }

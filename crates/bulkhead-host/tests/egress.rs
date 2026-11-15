@@ -1,7 +1,9 @@
 //! HTTP egress (`bulkhead:http-egress`) through the SDK fixture's
 //! `fetch` command, against a local server: the allow list, methods, the
 //! address guard, the per-app limit, timeouts, the pool and TLS, on the
-//! fixture built as a native program, whose requests the node sends.
+//! fixture built as a native program. The node checks each request and
+//! its app's egress driver (`bulkhead-egress`, ROADMAP DA4) sends it, over
+//! connections the node opens.
 
 // Native apps run on Linux only.
 #![cfg(target_os = "linux")]
@@ -20,10 +22,12 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bulkhead_bundle::manifest::{Capability, NativeProgram};
+use bulkhead_bundle::manifest::{
+    AppInfo, AppManifest, AppSpec, Capability, NativeProgram, ProgramRef, Provenance,
+};
 use bulkhead_host::{
-    Egress, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, NativeConfig, Runtime,
-    RuntimeConfig,
+    AppDeployment, Apps, Egress, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, NativeConfig,
+    Runtime, RuntimeConfig,
 };
 use bytes::Bytes;
 use common::ask;
@@ -132,7 +136,30 @@ fn native_sdk() -> &'static PathBuf {
 }
 
 /// A runtime with `egress` and the fixture loaded.
-fn runtime(egress: Egress) -> (Runtime, LoadedApp) {
+/// `bulkhead-egress`, built on first use beside the runner.
+fn egress_driver() -> &'static PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let ok = std::process::Command::new(cargo)
+            .current_dir(&root)
+            .args(["build", "-p", "bulkhead-egress", "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "building bulkhead-egress failed");
+        target.join("debug/bulkhead-egress")
+    })
+}
+
+/// A runtime, the SDK fixture, the apps (where drivers run) and the
+/// egress driver's program.
+struct Node(Runtime, LoadedApp, Apps, LoadedApp);
+
+async fn runtime(egress: Egress) -> Node {
     let mut native = NativeConfig::default();
     native.runner = Some(common::native_fixtures().0.clone());
     let rt = Runtime::new(RuntimeConfig {
@@ -150,7 +177,46 @@ fn runtime(egress: Egress) -> (Runtime, LoadedApp) {
         path: native_sdk().clone(),
         kind: NativeProgram::Executable,
     });
-    (rt, app)
+    let driver = rt.load_native(NativeCode {
+        path: egress_driver().clone(),
+        kind: NativeProgram::Executable,
+    });
+    let apps = rt.start_apps(Vec::new()).await.unwrap();
+    Node(rt, app, apps, driver)
+}
+
+/// The node's manifest for `app`'s egress driver.
+fn driver_manifest(driver: &str, args: &serde_json::Value) -> AppManifest {
+    let spec = serde_json::json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "instances": { "count": 1 },
+        "lifecycle": { "start_args": args },
+        "supervision": { "intensity": 100, "backoff": { "initial_ms": 1, "max_ms": 50 } },
+        "limits": { "memory_max": "128MiB" },
+        "messaging_acl": { "accept_from": [driver], "may_call": [driver] },
+        "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_egress" } },
+    });
+    AppManifest {
+        app: AppInfo {
+            name: driver.into(),
+            version: "1.0.0".parse().unwrap(),
+            description: None,
+            authors: vec![],
+            license: None,
+            repository: None,
+        },
+        program: ProgramRef {
+            path: String::new(),
+            checksum: String::new(),
+        },
+        provenance: Provenance {
+            signer_key: String::new(),
+            build_info: None,
+            sbom: None,
+        },
+        spec: AppSpec::from_json_value(&spec).unwrap(),
+    }
 }
 
 fn spec(app: &str, allow: &[String], granted: bool) -> InstanceSpec {
@@ -167,15 +233,27 @@ fn spec(app: &str, allow: &[String], granted: bool) -> InstanceSpec {
     s
 }
 
-fn up(rt: &(Runtime, LoadedApp), spec: InstanceSpec) -> InstanceHandle {
+/// An instance of `spec`'s app, and its egress driver, as the node starts
+/// it, unless it runs already.
+async fn up(rt: &Node, spec: InstanceSpec) -> InstanceHandle {
+    let driver = bulkhead_host::egress_driver_app(&spec.app);
+    if rt.2.app(&driver).is_none() {
+        let args = rt.0.egress_driver_args(&spec.app).unwrap();
+        rt.2.add(AppDeployment::new(
+            driver_manifest(&driver, &args),
+            rt.3.clone(),
+        ))
+        .await
+        .unwrap();
+    }
     rt.0.spawn(&rt.1, spec).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch____allowed_address____responses_over_one_pooled_connection() {
     let (address, accepted) = server(None).await;
-    let rt = runtime(Egress::default());
-    let h = up(&rt, spec("egress-ok", &[format!("http://{address}")], true));
+    let rt = runtime(Egress::default()).await;
+    let h = up(&rt, spec("egress-ok", &[format!("http://{address}")], true)).await;
 
     let first = ask(&h, &format!("fetch GET http://{address}/hello")).await;
     let second = ask(&h, &format!("fetch POST http://{address}/echo payload")).await;
@@ -194,9 +272,9 @@ async fn fetch____allowed_address____responses_over_one_pooled_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch____not_granted_other_port_or_method____denied() {
     let (address, accepted) = server(None).await;
-    let rt = runtime(Egress::default());
+    let rt = runtime(Egress::default()).await;
     let allow = [format!("http://{address}")];
-    let ungranted = up(&rt, spec("egress-ungranted", &allow, false));
+    let ungranted = up(&rt, spec("egress-ungranted", &allow, false)).await;
     let other_port = up(
         &rt,
         spec(
@@ -204,10 +282,11 @@ async fn fetch____not_granted_other_port_or_method____denied() {
             &[format!("http://127.0.0.1:{}", address.port() + 1)],
             true,
         ),
-    );
+    )
+    .await;
     let mut get_only = spec("egress-methods", &allow, true);
     get_only.services.egress.methods = vec!["GET".into()];
-    let get_only = up(&rt, get_only);
+    let get_only = up(&rt, get_only).await;
 
     let a = ask(&ungranted, &format!("fetch GET http://{address}/hello")).await;
     let b = ask(&other_port, &format!("fetch GET http://{address}/hello")).await;
@@ -230,12 +309,12 @@ async fn fetch____name_resolving_to_loopback____prohibited_unless_node_allows() 
     let (address, _) = server(None).await;
     let url = format!("fetch GET http://localhost:{}/hello", address.port());
     let allow = [format!("http://localhost:{}", address.port())];
-    let guarded = runtime(Egress::default());
+    let guarded = runtime(Egress::default()).await;
     let mut open = Egress::default();
     open.allow_loopback = true;
-    let open = runtime(open);
-    let a = up(&guarded, spec("egress-guarded", &allow, true));
-    let b = up(&open, spec("egress-open", &allow, true));
+    let open = runtime(open).await;
+    let a = up(&guarded, spec("egress-guarded", &allow, true)).await;
+    let b = up(&open, spec("egress-open", &allow, true)).await;
 
     let refused = ask(&a, &url).await;
     let allowed = ask(&b, &url).await;
@@ -249,15 +328,15 @@ async fn fetch____name_resolving_to_loopback____prohibited_unless_node_allows() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fetch____app_at_max_concurrent____limited_until_one_finishes() {
     let (address, _) = server(None).await;
-    let rt = runtime(Egress::default());
+    let rt = runtime(Egress::default()).await;
     let allow = [format!("http://{address}")];
     let with_limit = |app| {
         let mut s = spec(app, &allow, true);
         s.services.egress.max_concurrent = Some(1);
         s
     };
-    let a = up(&rt, with_limit("egress-limit"));
-    let b = up(&rt, with_limit("egress-limit"));
+    let a = up(&rt, with_limit("egress-limit")).await;
+    let b = up(&rt, with_limit("egress-limit")).await;
 
     let slow = tokio::spawn({
         let a = a.clone();
@@ -282,11 +361,12 @@ async fn fetch____slow_headers_or_stalled_body____timeout_and_instance_lives() {
     let mut egress = Egress::default();
     egress.first_byte_timeout = Duration::from_millis(300);
     egress.between_bytes_timeout = Duration::from_millis(300);
-    let rt = runtime(egress);
+    let rt = runtime(egress).await;
     let h = up(
         &rt,
         spec("egress-timeout", &[format!("http://{address}")], true),
-    );
+    )
+    .await;
 
     let slow = ask(&h, &format!("fetch GET http://{address}/slow")).await;
     let stalled = ask(&h, &format!("fetch GET http://{address}/stall")).await;
@@ -329,11 +409,11 @@ async fn fetch____https____trusted_with_the_ca_file_only() {
     trusting.ca_file = Some(ca_file);
     let mut system_only = Egress::default();
     system_only.system_roots = false;
-    let trusting = runtime(trusting);
-    let untrusting = runtime(system_only);
+    let trusting = runtime(trusting).await;
+    let untrusting = runtime(system_only).await;
     let allow = [format!("https://{address}")];
-    let a = up(&trusting, spec("egress-tls", &allow, true));
-    let b = up(&untrusting, spec("egress-tls-no-ca", &allow, true));
+    let a = up(&trusting, spec("egress-tls", &allow, true)).await;
+    let b = up(&untrusting, spec("egress-tls-no-ca", &allow, true)).await;
 
     let good = ask(&a, &format!("fetch GET https://{address}/hello")).await;
     let bad = ask(&b, &format!("fetch GET https://{address}/hello")).await;
@@ -347,15 +427,15 @@ async fn fetch____https____trusted_with_the_ca_file_only() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fetch____instance_killed_mid_request____its_slot_freed() {
     let (address, _) = server(None).await;
-    let rt = runtime(Egress::default());
+    let rt = runtime(Egress::default()).await;
     let allow = [format!("http://{address}")];
     let with_limit = |app| {
         let mut s = spec(app, &allow, true);
         s.services.egress.max_concurrent = Some(1);
         s
     };
-    let a = up(&rt, with_limit("egress-killed"));
-    let b = up(&rt, with_limit("egress-killed"));
+    let a = up(&rt, with_limit("egress-killed")).await;
+    let b = up(&rt, with_limit("egress-killed")).await;
     let slow = tokio::spawn({
         let a = a.clone();
         let url = format!("fetch GET http://{address}/slow");
@@ -383,11 +463,12 @@ async fn fetch____instance_killed_mid_request____its_slot_freed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch____forbidden_header____invalid_and_nothing_sent() {
     let (address, accepted) = server(None).await;
-    let rt = runtime(Egress::default());
+    let rt = runtime(Egress::default()).await;
     let h = up(
         &rt,
         spec("egress-headers", &[format!("http://{address}")], true),
-    );
+    )
+    .await;
 
     let forbidden = ask(&h, &format!("fetch-with connection http://{address}/hello")).await;
     let plain = ask(&h, &format!("fetch-with x-trace http://{address}/hello")).await;
@@ -400,4 +481,73 @@ async fn fetch____forbidden_header____invalid_and_nothing_sent() {
         "only the plain one went out"
     );
     h.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fetch____driver_killed_mid_request____answered_its_slot_freed_and_served_again() {
+    let (address, _) = server(None).await;
+    let rt = runtime(Egress::default()).await;
+    let mut limited = spec("egress-driver-killed", &[format!("http://{address}")], true);
+    limited.services.egress.max_concurrent = Some(1);
+    let h = up(&rt, limited).await;
+    let slow = tokio::spawn({
+        let h = h.clone();
+        let url = format!("fetch GET http://{address}/slow");
+        async move { ask(&h, &url).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let driver = bulkhead_host::egress_driver_app("egress-driver-killed");
+    for i in rt.0.instances().into_iter().filter(|i| i.app() == driver) {
+        i.kill();
+    }
+    let killed = slow.await.unwrap();
+    let mut after = String::new();
+    for _ in 0..50 {
+        after = ask(&h, &format!("fetch GET http://{address}/hello")).await;
+        if after == "200 hi" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert!(killed.starts_with("err:"), "{killed}");
+    assert_ne!(killed, "err:limited");
+    assert_eq!(after, "200 hi");
+    h.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fetch____two_apps____each_through_its_own_driver_to_its_own_allow_list() {
+    let (first, first_accepted) = server(None).await;
+    let (second, second_accepted) = server(None).await;
+    let rt = runtime(Egress::default()).await;
+    let a = up(
+        &rt,
+        spec("egress-first", &[format!("http://{first}")], true),
+    )
+    .await;
+    let b = up(
+        &rt,
+        spec("egress-second", &[format!("http://{second}")], true),
+    )
+    .await;
+
+    let a_own = ask(&a, &format!("fetch GET http://{first}/hello")).await;
+    let a_other = ask(&a, &format!("fetch GET http://{second}/hello")).await;
+    let b_own = ask(&b, &format!("fetch GET http://{second}/hello")).await;
+
+    assert_eq!((a_own.as_str(), a_other.as_str()), ("200 hi", "err:denied"));
+    assert_eq!(b_own, "200 hi");
+    assert_eq!(first_accepted.load(Ordering::Relaxed), 1);
+    assert_eq!(second_accepted.load(Ordering::Relaxed), 1);
+    let drivers: Vec<String> =
+        rt.0.instances()
+            .iter()
+            .map(|i| i.app().to_string())
+            .filter(|a| a.starts_with(bulkhead_host::EGRESS_DRIVER_PREFIX))
+            .collect();
+    assert_eq!(drivers.len(), 2, "{drivers:?}");
+    a.kill();
+    b.kill();
 }

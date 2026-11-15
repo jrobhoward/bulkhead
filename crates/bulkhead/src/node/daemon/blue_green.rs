@@ -305,6 +305,7 @@ impl Node {
             .await?;
         self.install(&built).await?;
         let deployment = built.run;
+        self.ensure_egress_driver(name, &deployment).await?;
         // Approved when it was first started.
         self.apps
             .start_new(name, deployment, true)

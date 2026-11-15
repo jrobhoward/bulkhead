@@ -233,7 +233,7 @@ impl Shared {
         let names = crate::names::Names::new(config.resolver.clone());
         Ok(Self {
             config: Arc::new(config::Config::shared(config)?),
-            egress: Arc::new(egress::Shared::new(config, &names)?),
+            egress: Arc::new(egress::Shared::new(config)?),
             groups: Arc::new(groups::Groups::shared(config)?),
             keyvalue: Arc::new(keyvalue::KeyValue::shared(config)?),
             logging: Arc::new(logging::Logging::shared(config)?),
@@ -252,7 +252,6 @@ impl Shared {
 
     /// HTTP egress: where each app's egress driver may connect (ROADMAP
     /// DA4).
-    #[cfg(feature = "egress")]
     pub(crate) fn egress(&self) -> &Arc<egress::Shared> {
         &self.egress
     }

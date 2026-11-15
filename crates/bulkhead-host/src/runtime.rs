@@ -401,6 +401,7 @@ impl Runtime {
         inner.services.groups().attach(&inner);
         inner.services.names().attach(&inner);
         inner.services.sql().attach(&inner);
+        inner.services.egress().attach(&inner);
         Ok(Self { inner })
     }
 
@@ -773,6 +774,14 @@ impl Runtime {
     #[must_use]
     pub fn instances(&self) -> Vec<InstanceHandle> {
         self.inner.table.all()
+    }
+
+    /// The init arguments of `app`'s egress driver, `bulkhead-egress-<app>`
+    /// (ROADMAP DA4): node config's egress settings and the trusted roots
+    /// as PEM. `None` without the `egress` feature.
+    #[must_use]
+    pub fn egress_driver_args(&self, app: &str) -> Option<serde_json::Value> {
+        self.inner.services.egress().driver_args(app)
     }
 
     /// Give each driver app the files its profile names, read-only, to its

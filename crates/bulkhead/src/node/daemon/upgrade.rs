@@ -141,6 +141,8 @@ impl Node {
             )));
         }
         self.install(&built).await?;
+        // A version that starts sending HTTP requests needs its driver.
+        self.ensure_egress_driver(name, &built.run).await?;
         self.store.keep_upload(upload, name, &version)?;
         let info = built.info.clone();
         if built.run.manifest.spec.upgrade.mode == UpgradeMode::BlueGreen && !params.restart {
@@ -317,9 +319,13 @@ impl Node {
                     .map_err(|e| rollout_error(e, snapshot, params));
                 if rolled.is_ok()
                     && let Some(app) = self.apps.app(name)
-                    && let Err(e) = self.ingress.set_routes(name, &app.deployment())
                 {
-                    tracing::warn!(app = name, error = %e, "routes after rollback");
+                    if let Err(e) = self.ingress.set_routes(name, &app.deployment()) {
+                        tracing::warn!(app = name, error = %e, "routes after rollback");
+                    }
+                    if let Err(e) = self.ensure_egress_driver(name, &app.deployment()).await {
+                        tracing::warn!(app = name, error = %e, "egress driver after rollback");
+                    }
                 }
                 if let Some(gate) = &self.gate {
                     gate.sync(name);

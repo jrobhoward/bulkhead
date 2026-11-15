@@ -109,6 +109,7 @@ futures-io = "0.3"
 tokio-postgres-rustls = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 http-body-util = "0.1"
+http = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 rustyline = { version = "19", default-features = false, features = ["with-file-history"] }

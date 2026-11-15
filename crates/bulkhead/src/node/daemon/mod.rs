@@ -6,6 +6,7 @@ mod builtin;
 mod cluster;
 mod connections;
 mod deploy;
+mod egress;
 mod ingress;
 mod metrics;
 mod queries;

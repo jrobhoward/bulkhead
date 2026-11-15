@@ -573,6 +573,9 @@ pub struct Egress {
     /// Requests in flight at once per app, when its manifest does not set
     /// `max_concurrent`.
     pub max_concurrent: u32,
+    /// The largest response body an app's request reads; a larger one
+    /// fails the request. At most a frame's body (16 MiB).
+    pub max_response_body: u64,
 }
 
 impl Default for Egress {
@@ -588,6 +591,7 @@ impl Default for Egress {
             pool_idle_timeout: Duration::from_secs(90),
             pool_max_idle_per_host: 32,
             max_concurrent: 64,
+            max_response_body: 16 << 20,
         }
     }
 }

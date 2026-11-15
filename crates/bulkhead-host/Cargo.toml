@@ -11,9 +11,10 @@ publish = false
 
 [features]
 default = ["sql", "egress"]
-# HTTP egress (`bulkhead:http-egress`): a filtering
-# sender with a connection pool. Without it, the interface is deny-stubbed.
-egress = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:hyper-rustls", "dep:rustls-native-certs", "dep:tower-service", "hyper-util/client-legacy", "hyper-util/http1"]
+# HTTP egress (`bulkhead:http-egress`): each app's requests checked and
+# forwarded to its egress driver (`bulkhead-egress`, ROADMAP DA4), which
+# runs HTTP and TLS outside the node. Without it, requests answer `Other`.
+egress = ["dep:http", "dep:rustls-native-certs"]
 # SQL datasources (`bulkhead:sql`): each app's statements forwarded to its
 # datasource's driver (`bulkhead-sql`, ROADMAP DA3), which runs Postgres's
 # client outside the node.
@@ -33,9 +34,6 @@ atomic-waker = { workspace = true }
 bytes = { workspace = true }
 ciborium = { workspace = true }
 ciborium-ll = { workspace = true }
-http-body-util = { workspace = true, optional = true }
-hyper = { workspace = true, optional = true }
-hyper-util = { workspace = true, optional = true }
 base64 = { workspace = true }
 quinn = { workspace = true }
 rcgen = { workspace = true }
@@ -56,9 +54,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "io-util", "process", "net"] }
 tracing = { workspace = true }
-hyper-rustls = { workspace = true, optional = true }
 rustls-native-certs = { workspace = true, optional = true }
-tower-service = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["param", "pipe", "net", "fs"] }
@@ -71,8 +68,11 @@ libc = { workspace = true }
 # simulation).
 bulkhead-host = { path = ".", features = ["test-apps"] }
 rcgen = { workspace = true }
-# The egress tests' HTTPS server.
+# The egress tests' HTTP and HTTPS servers.
 tokio-rustls = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }

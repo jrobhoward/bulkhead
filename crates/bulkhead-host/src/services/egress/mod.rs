@@ -3,35 +3,34 @@
 //! An app sends a request as a frame, and this module's filter (`Hooks`)
 //! checks it. A request goes out only if the operator granted the
 //! capability, its scheme, host and port match an entry of the manifest's
-//! `allow` (the `policy` module), and its method is in `methods` (when listed). It
-//! then goes through the node's connection pool (the `client` module), at most
-//! `max_concurrent` per app at once (node config's default otherwise). A
-//! host name that resolves only to loopback or link-local addresses is
-//! refused unless node config sets `allow_loopback`; an address written in
-//! an allow entry is reached as written. Refusals are answers
-//! (`HttpError::Denied`, `Limited`, `Prohibited`), never a crash of the
+//! `allow` (the `policy` module), its method is in `methods` (when
+//! listed), and it sets no forbidden header, at most `max_concurrent` per
+//! app at once (node config's default otherwise). Refusals are answers
+//! (`HttpError::Denied`, `Limited`, `Invalid`), never a crash of the
 //! instance.
+//!
+//! Since ROADMAP DA4 the node sends nothing itself: a request it allows is
+//! a call to the app's egress driver (`bulkhead-egress-<app>`, schema
+//! [`EGRESS_SCHEMA`]), which runs HTTP and TLS in a process of its own and
+//! answers with the whole response. The app's permit is held until it
+//! answers. The driver's connections are opened by the node
+//! (`Request::ConnectTo`) only where the app's running instances may send
+//! requests (`Shared::reach`); a name that resolves only to loopback or
+//! link-local addresses is refused unless node config sets
+//! `allow_loopback`, and an address written in an allow entry is reached
+//! as written.
 //!
 //! Node config's `[egress] allow` is a ceiling every app's `allow` must fit
 //! inside; the node checks it at deploy ([`within`]).
 //!
 //! The `allow` entries of each app's running instances are kept here by
-//! pid ([`Shared::reach`]): an app's egress driver (ROADMAP DA4) has the
-//! node connect it there and nowhere else, so an upgrade, or a blue-green
-//! pair with two lists, needs no driver restart.
+//! pid: an upgrade, or a blue-green pair with two lists, needs no driver
+//! restart.
 //!
-//! A native app asks over the protocol (`Instance::native`, ROADMAP Z8f):
-//! the same filter, cap, timeouts and pool, with the forbidden headers
-//! refused, and the whole response, up to a frame's size, in the answer.
-//!
-//! Without the `egress` cargo feature the interface is not linked, so an
-//! app importing it gets the usual deny stubs, and a native app's request
-//! is answered `Other`.
+//! Without the `egress` cargo feature the interface is not linked, so a
+//! native app's request is answered `Other`.
 
 mod policy;
-
-#[cfg(feature = "egress")]
-mod client;
 
 #[cfg(feature = "egress")]
 pub(crate) use policy::guarded;
@@ -45,6 +44,10 @@ use super::{InstanceInfo, Service};
 use crate::config::RuntimeConfig;
 use crate::error::HostError;
 use crate::pid::Pid;
+
+/// The schema of the node's calls to an egress driver and of its answers
+/// (`bulkhead_egress::EGRESS_SCHEMA`).
+pub const EGRESS_SCHEMA: &str = "bulkhead/egress";
 
 /// The egress service.
 pub(crate) struct Egress;
@@ -61,12 +64,23 @@ pub struct EgressSpec {
     pub max_concurrent: Option<u32>,
 }
 
+impl EgressSpec {
+    /// Whether an app with this spec, granted `bulkhead:http-egress`, can
+    /// send any request, and so needs an egress driver.
+    #[must_use]
+    pub fn sends(&self) -> bool {
+        !self.allow.is_empty()
+    }
+}
+
 /// Node-wide egress state.
 pub(crate) struct Shared {
     #[cfg(feature = "egress")]
-    pool: client::Pool,
-    #[cfg(feature = "egress")]
     config: crate::config::Egress,
+    /// The trusted roots for every driver, PEM: the system's (when
+    /// `system_roots`) and the CA file's, read once.
+    #[cfg(feature = "egress")]
+    roots_pem: String,
     /// Each app's limit on requests in flight, and its semaphore.
     #[cfg(feature = "egress")]
     limits:
@@ -77,6 +91,9 @@ pub(crate) struct Shared {
     allows: std::sync::Mutex<
         std::collections::HashMap<String, std::collections::BTreeMap<Pid, Vec<policy::Allow>>>,
     >,
+    /// The runtime, through which requests reach the drivers.
+    #[cfg(feature = "egress")]
+    rt: std::sync::OnceLock<std::sync::Weak<crate::runtime::RuntimeInner>>,
 }
 
 /// How an egress driver may reach a destination ([`Shared::reach`]).
@@ -94,28 +111,108 @@ pub(crate) enum Reach {
 }
 
 impl Shared {
-    /// The pool node config describes, resolving names through `names`
-    /// (ROADMAP DA9).
+    /// Egress as node config describes it.
     ///
     /// # Errors
     ///
-    /// [`HostError::Egress`]: the CA file cannot be read.
-    pub(crate) fn new(
-        config: &RuntimeConfig,
-        names: &crate::names::Names,
-    ) -> Result<Self, HostError> {
+    /// [`HostError::Egress`]: the CA file cannot be read or holds no
+    /// certificate.
+    pub(crate) fn new(config: &RuntimeConfig) -> Result<Self, HostError> {
         #[cfg(not(feature = "egress"))]
-        let _ = (config, names);
+        let _ = config;
         Ok(Self {
             #[cfg(feature = "egress")]
-            pool: client::Pool::new(&config.egress, names).map_err(HostError::Egress)?,
-            #[cfg(feature = "egress")]
             config: config.egress.clone(),
+            #[cfg(feature = "egress")]
+            roots_pem: roots::pem(&config.egress).map_err(HostError::Egress)?,
             #[cfg(feature = "egress")]
             limits: std::sync::Mutex::default(),
             #[cfg(feature = "egress")]
             allows: std::sync::Mutex::default(),
+            #[cfg(feature = "egress")]
+            rt: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Calls to the drivers go through `rt`.
+    pub(crate) fn attach(&self, rt: &Arc<crate::runtime::RuntimeInner>) {
+        #[cfg(feature = "egress")]
+        let _ = self.rt.set(Arc::downgrade(rt));
+        #[cfg(not(feature = "egress"))]
+        let _ = rt;
+    }
+
+    /// The init arguments of `app`'s egress driver
+    /// (`bulkhead_egress::config::Config`); `None` without the `egress`
+    /// feature.
+    pub(crate) fn driver_args(&self, app: &str) -> Option<serde_json::Value> {
+        #[cfg(feature = "egress")]
+        {
+            let ms = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+            Some(serde_json::json!({
+                "app": app,
+                "connect_timeout_ms": ms(self.config.connect_timeout),
+                "pool_idle_timeout_ms": ms(self.config.pool_idle_timeout),
+                "pool_max_idle_per_host": self.config.pool_max_idle_per_host,
+                "max_response_body": self.config.max_response_body,
+                "roots_pem": self.roots_pem,
+            }))
+        }
+        #[cfg(not(feature = "egress"))]
+        {
+            let _ = app;
+            None
+        }
+    }
+}
+
+#[cfg(feature = "egress")]
+mod roots {
+    //! The roots every egress driver trusts, as PEM text for its init
+    //! arguments: read by the node from the operating system's files and
+    //! the operator's CA file, which it trusts; the driver parses them.
+
+    use base64::Engine;
+    use rustls_pki_types::CertificateDer;
+    use rustls_pki_types::pem::PemObject;
+
+    /// One certificate as PEM.
+    fn pem_of(der: &[u8]) -> String {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+        let mut out = String::from("-----BEGIN CERTIFICATE-----\n");
+        for line in b64.as_bytes().chunks(64) {
+            out.push_str(&String::from_utf8_lossy(line));
+            out.push('\n');
+        }
+        out.push_str("-----END CERTIFICATE-----\n");
+        out
+    }
+
+    /// The system's roots (when `system_roots`) and the CA file's.
+    pub(super) fn pem(config: &crate::config::Egress) -> Result<String, String> {
+        let mut out = String::new();
+        if config.system_roots {
+            let found = rustls_native_certs::load_native_certs();
+            for e in &found.errors {
+                tracing::warn!(error = %e, "egress: a system root certificate could not be read");
+            }
+            for cert in &found.certs {
+                out.push_str(&pem_of(cert));
+            }
+        }
+        if let Some(path) = &config.ca_file {
+            let fail =
+                |e: &dyn std::fmt::Display| format!("egress CA file {}: {e}", path.display());
+            let mut any = false;
+            for cert in CertificateDer::pem_file_iter(path).map_err(|e| fail(&e))? {
+                out.push_str(&pem_of(&cert.map_err(|e| fail(&e))?));
+                any = true;
+            }
+            if !any {
+                return Err(fail(&"no certificates"));
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -213,7 +310,7 @@ impl Service for Egress {
     }
 
     fn shared(config: &RuntimeConfig) -> Result<Shared, HostError> {
-        Shared::new(config, &crate::names::Names::default())
+        Shared::new(config)
     }
 
     #[cfg_attr(not(feature = "egress"), allow(unused_variables))]
@@ -254,14 +351,16 @@ impl Instance {
 #[cfg(feature = "egress")]
 mod hooks {
     use std::sync::{Arc, PoisonError};
-
-    use super::client::{Error, HttpBody};
-    use tokio::sync::Semaphore;
+    use std::time::Duration;
 
     use bulkhead_native::protocol as p;
+    use serde::{Deserialize, Serialize};
+    use tokio::sync::Semaphore;
+    use tokio::time::Instant;
 
     use super::policy::{self, Allow, Scheme};
-    use super::{EgressSpec, InstanceInfo, Shared};
+    use super::{EGRESS_SCHEMA, EgressSpec, InstanceInfo, Shared};
+    use crate::message::{CallError, Envelope};
     use crate::metrics::AppStats;
 
     const SENT: usize = 0;
@@ -269,10 +368,28 @@ mod hooks {
     const LIMITED: usize = 2;
     const FAILED: usize = 3;
 
+    /// How often a request is tried again while the app's driver is not
+    /// running.
+    const RETRY_EVERY: Duration = Duration::from_millis(100);
+
+    /// The body the driver reads per wait in the worst case: the
+    /// between-bytes timeout counts once per this much of the cap.
+    const CHUNK: u64 = 64 << 10;
+
+    /// What the node sends the driver (`bulkhead_egress::EgressRequest`,
+    /// the same fields).
+    #[derive(Debug, Serialize, Deserialize)]
+    struct EgressRequest {
+        request: p::HttpRequest,
+        first_byte_ms: u64,
+        between_ms: u64,
+    }
+
     /// The filter for one instance.
     pub(crate) struct Hooks {
         granted: bool,
         app: String,
+        driver: String,
         allow: Vec<Allow>,
         methods: Vec<String>,
         limit: Arc<Semaphore>,
@@ -316,6 +433,7 @@ mod hooks {
             Self {
                 granted: info.granted,
                 stats: info.metrics.stats(&app),
+                driver: crate::config::egress_driver_app(&app),
                 app,
                 allow,
                 methods: spec.methods.clone(),
@@ -324,144 +442,153 @@ mod hooks {
             }
         }
 
-        /// Why `request` may not go out, if it may not.
-        fn refuse(&self, request: &hyper::Request<HttpBody>) -> Option<&'static str> {
-            if !self.granted {
-                return Some("the capability is not granted");
+        /// Why `request` may not go out, if it may not: the grant, the
+        /// URL's scheme, host and port against `allow`, the method against
+        /// `methods`, and forbidden headers (`Invalid`).
+        fn refuse(&self, request: &p::HttpRequest) -> Result<(), p::HttpError> {
+            let invalid = |what: &str, e: &dyn std::fmt::Display| {
+                p::HttpError::Invalid(format!("{what}: {e}"))
+            };
+            let method = http::Method::from_bytes(request.method.as_bytes())
+                .map_err(|e| invalid("method", &e))?;
+            let uri: http::Uri = request.url.parse().map_err(|e| invalid("url", &e))?;
+            for (name, value) in &request.headers {
+                let name = http::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|e| invalid("header", &e))?;
+                if forbidden(&name) {
+                    return Err(p::HttpError::Invalid(format!("header {name} is forbidden")));
+                }
+                http::header::HeaderValue::from_bytes(&value.0)
+                    .map_err(|e| invalid("header", &e))?;
             }
-            let uri = request.uri();
+            let denied = |why: &str| {
+                tracing::debug!(app = %self.app, uri = %uri, why, "egress request denied");
+                Err(p::HttpError::Denied)
+            };
+            if !self.granted {
+                return denied("the capability is not granted");
+            }
             let scheme = match uri.scheme_str() {
                 Some("https") => Scheme::Https,
                 Some("http") => Scheme::Http,
-                _ => return Some("not http or https"),
+                _ => return denied("not http or https"),
             };
             let Some(host) = uri.host() else {
-                return Some("no host");
+                return denied("no host");
             };
             let port = uri.port_u16().unwrap_or(match scheme {
                 Scheme::Https => 443,
                 Scheme::Http => 80,
             });
             if !self.allow.iter().any(|a| a.allows(scheme, host, port)) {
-                return Some("not in the manifest's allow list");
+                return denied("not in the manifest's allow list");
             }
-            if !self.methods.is_empty()
-                && !self.methods.iter().any(|m| m == request.method().as_str())
-            {
-                return Some("method not in the manifest's methods");
+            if !self.methods.is_empty() && !self.methods.iter().any(|m| m == method.as_str()) {
+                return denied("method not in the manifest's methods");
             }
-            None
+            Ok(())
         }
-    }
 
-    /// The most a native app's response body carries: a frame holds it.
-    const MAX_NATIVE_BODY: usize = 16 << 20;
-
-    impl Hooks {
-        /// An app's request: checked against the filter (forbidden headers
-        /// too), then sent through the pool, and the whole response read.
+        /// An app's request: checked against the filter, then sent by the
+        /// app's egress driver while the app's permit is held.
         pub(crate) async fn native(
             &self,
             request: p::HttpRequest,
         ) -> Result<p::HttpResponse, p::HttpError> {
-            use http_body_util::BodyExt;
-
-            let invalid = |what: &str, e: &dyn std::fmt::Display| {
-                p::HttpError::Invalid(format!("{what}: {e}"))
-            };
-            let method = hyper::Method::from_bytes(request.method.as_bytes())
-                .map_err(|e| invalid("method", &e))?;
-            let uri: hyper::Uri = request.url.parse().map_err(|e| invalid("url", &e))?;
-            let mut builder = hyper::Request::builder().method(method).uri(uri);
-            for (name, value) in &request.headers {
-                let name = hyper::header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|e| invalid("header", &e))?;
-                if forbidden(&name) {
-                    return Err(p::HttpError::Invalid(format!("header {name} is forbidden")));
+            if let Err(e) = self.refuse(&request) {
+                if e == p::HttpError::Denied {
+                    self.stats.egress(DENIED);
                 }
-                let value = hyper::header::HeaderValue::from_bytes(&value.0)
-                    .map_err(|e| invalid("header", &e))?;
-                builder = builder.header(name, value);
+                return Err(e);
             }
-            let body: HttpBody = http_body_util::Full::new(bytes::Bytes::from(request.body.0))
-                .map_err(|never| match never {})
-                .boxed_unsync();
-            let request_out = builder.body(body).map_err(|e| invalid("request", &e))?;
-            if let Some(why) = self.refuse(&request_out) {
-                tracing::debug!(app = %self.app, uri = %request_out.uri(), why, "egress request denied");
-                self.stats.egress(DENIED);
-                return Err(p::HttpError::Denied);
-            }
-            let Ok(permit) = self.limit.clone().try_acquire_owned() else {
+            let Ok(_permit) = self.limit.clone().try_acquire_owned() else {
                 self.stats.egress(LIMITED);
                 return Err(p::HttpError::Limited);
             };
             let config = &self.shared.config;
             let asked = request
                 .timeout_ms
-                .map(|ms| std::time::Duration::from_millis(ms.into()));
-            let shorter = |node: std::time::Duration| asked.map_or(node, |a| a.min(node));
-            let sent = self.shared.pool.send(
-                request_out,
+                .map(|ms| Duration::from_millis(ms.into()));
+            let shorter = |node: Duration| asked.map_or(node, |a| a.min(node));
+            let (first_byte, between) = (
                 shorter(config.first_byte_timeout),
                 shorter(config.between_bytes_timeout),
-                permit,
             );
-            let read = async {
-                let response = sent.await?;
-                let status = response.status().as_u16();
-                let headers = response
-                    .headers()
-                    .iter()
-                    .filter(|(n, _)| !forbidden(n))
-                    .map(|(n, v)| (n.as_str().to_string(), p::Bytes(v.as_bytes().to_vec())))
-                    .collect();
-                let mut body = response.into_body();
-                let mut bytes = Vec::new();
-                while let Some(frame) = body.frame().await {
-                    if let Ok(data) = frame?.into_data() {
-                        if bytes.len() + data.len() > MAX_NATIVE_BODY {
-                            return Err(Error::HttpResponseBodySize);
-                        }
-                        bytes.extend_from_slice(&data);
-                    }
-                }
-                Ok(p::HttpResponse {
-                    status,
-                    headers,
-                    body: p::Bytes(bytes),
-                })
+            let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+            let body = EgressRequest {
+                request,
+                first_byte_ms: ms(first_byte),
+                between_ms: ms(between),
             };
-            let response = read.await;
+            // Longer than the driver may take: a connect, the headers, and
+            // a wait per chunk of the largest body.
+            let chunks =
+                u32::try_from(config.max_response_body.div_ceil(CHUNK)).unwrap_or(u32::MAX);
+            let backstop =
+                config.connect_timeout + first_byte + between.saturating_mul(chunks.max(1));
+            let mut cbor = Vec::new();
+            let response = match ciborium::into_writer(&body, &mut cbor) {
+                Ok(()) => {
+                    let msg = Envelope {
+                        content_type: "application/cbor".into(),
+                        schema: Some(EGRESS_SCHEMA.into()),
+                        body: cbor,
+                    };
+                    self.ask(msg, backstop).await
+                }
+                Err(e) => Err(p::HttpError::Other(format!("request: {e}"))),
+            };
             self.stats
                 .egress(if response.is_ok() { SENT } else { FAILED });
-            response.map_err(|e| native_error(&e))
+            response
+        }
+
+        /// `msg` to the app's driver, and its answer. While the driver is
+        /// not running (starting, or restarting) it is tried again until
+        /// the connect timeout.
+        async fn ask(
+            &self,
+            msg: Envelope,
+            timeout: Duration,
+        ) -> Result<p::HttpResponse, p::HttpError> {
+            let deadline = Instant::now() + self.shared.config.connect_timeout;
+            loop {
+                let Some(rt) = self.shared.rt.get().and_then(std::sync::Weak::upgrade) else {
+                    return Err(p::HttpError::Other("the runtime is stopping".into()));
+                };
+                let target = rt.route_app(&self.driver, &msg);
+                drop(rt);
+                if let Some(target) = target {
+                    return match target.call(msg, timeout).await {
+                        Ok(reply) => answer(&self.driver, &reply),
+                        Err(CallError::Timeout) => Err(p::HttpError::Timeout),
+                        Err(e) => Err(p::HttpError::Other(format!("{}: {e}", self.driver))),
+                    };
+                }
+                if Instant::now() + RETRY_EVERY >= deadline {
+                    return Err(p::HttpError::Other(format!(
+                        "{} (the app's egress driver) is not running",
+                        self.driver
+                    )));
+                }
+                tokio::time::sleep(RETRY_EVERY).await;
+            }
         }
     }
 
-    /// An egress error as the native protocol's.
-    fn native_error(e: &Error) -> p::HttpError {
-        match e {
-            Error::DestinationIpProhibited => p::HttpError::Prohibited,
-            Error::ConnectionReadTimeout | Error::ConnectionTimeout => p::HttpError::Timeout,
-            Error::ConnectionRefused
-            | Error::DestinationUnavailable
-            | Error::Dns
-            | Error::ConnectionTerminated => p::HttpError::Unreachable(format!("{e:?}")),
-            Error::TlsProtocol | Error::TlsCertificate | Error::TlsAlertReceived(_) => {
-                p::HttpError::Tls(format!("{e:?}"))
-            }
-            Error::HttpResponseBodySize => {
-                p::HttpError::Other(format!("response body over {MAX_NATIVE_BODY} bytes"))
-            }
-            Error::HttpProtocol => p::HttpError::Other(format!("{e:?}")),
+    /// The driver's answer, from its reply.
+    fn answer(driver: &str, reply: &Envelope) -> Result<p::HttpResponse, p::HttpError> {
+        if reply.schema.as_deref() != Some(EGRESS_SCHEMA) {
+            return Err(p::HttpError::Other(format!("{driver}: not an answer")));
         }
+        ciborium::from_reader::<Result<p::HttpResponse, p::HttpError>, _>(reply.body.as_slice())
+            .map_err(|e| p::HttpError::Other(format!("{driver}'s answer: {e}")))?
     }
 
-    /// Whether `name` is a header an app may not set or see (hop-by-hop
-    /// headers and `host`).
-    fn forbidden(name: &hyper::header::HeaderName) -> bool {
-        use hyper::header;
+    /// Whether `name` is a header an app may not set (hop-by-hop headers
+    /// and `host`).
+    fn forbidden(name: &http::header::HeaderName) -> bool {
+        use http::header;
         matches!(
             *name,
             header::CONNECTION

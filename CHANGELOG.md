@@ -8,6 +8,29 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP egress runs outside the node (ROADMAP DA4, step 3): for each app
+  granted `bulkhead:http-egress` with an `allow` list, the node starts
+  `bulkhead-egress` as the app `bulkhead-egress-<app>` (beside the runner,
+  or the new `[native] egress`) before the app, with one instance, the
+  supervisor that never gives up and messages from itself alone, and
+  removes it after the app stops; upgrades keep it, and one that adds
+  egress starts it. `bulkhead:http-egress` keeps its checks in the node
+  (the grant, `allow`, `methods`, forbidden headers, `max_concurrent`)
+  and forwards each request it allows to the app's driver, holding the
+  permit until it answers; the driver's connections are the node's
+  (`Request::ConnectTo`). The apps' interface is unchanged. **Install
+  `bulkhead-egress` with the node where apps use egress**; a deploy of
+  such an app without it fails. An app declaring `bulkhead:http-egress`
+  may have a name of at most 48 characters (its driver's name must be a
+  valid app name); a longer one is refused at deploy. New
+  `[egress] max_response_body` (default and most 16 MiB). The node
+  reads the system's and `ca_file`'s roots and passes them to each driver
+  as PEM. `bulkhead-host` no longer depends on hyper, hyper-util,
+  http-body-util, hyper-rustls or tower-service (it takes `http` for the
+  checks; `scripts/check.sh deps` checks it); `Egress.max_response_body`,
+  `Runtime::egress_driver_args` and `services::egress::EGRESS_SCHEMA`
+  are new.
+
 - New crate `bulkhead-egress` (ROADMAP DA4, step 2): an app's outgoing
   HTTP as a driver app, not yet started by the node. It takes the node's
   checked requests as calls (schema `bulkhead/egress`, an

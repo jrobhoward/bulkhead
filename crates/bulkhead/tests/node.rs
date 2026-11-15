@@ -1021,6 +1021,46 @@ async fn egress____inside_and_outside_the_node_ceiling____fetches_or_refused() {
     );
     assert_eq!(fetched, "200 hi");
     assert_eq!(other, "err:denied");
+    let drivers = |ps: Vec<bulkhead::api::InstanceInfo>| {
+        ps.into_iter()
+            .filter(|i| i.app == "bulkhead-egress-fetcher")
+            .count()
+    };
+    assert_eq!(
+        drivers(n.client.ps().await.unwrap()),
+        1,
+        "its egress driver runs"
+    );
+    n.client.stop("fetcher").await.unwrap();
+    assert_eq!(
+        drivers(n.client.ps().await.unwrap()),
+        0,
+        "and stops with it"
+    );
+    n.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress____an_app_name_too_long_for_its_driver____refused() {
+    let mut n = TestNode::start_native("").await;
+    let name = "a".repeat(49);
+    let manifest = fast(json!({ "capabilities": {
+        "bulkhead:config": {},
+        "bulkhead:keyvalue": {},
+        "bulkhead:groups": {},
+        "bulkhead:secrets": { "secrets": [] },
+        "bulkhead:sql": {},
+        "bulkhead:metrics": { "prefix": "fetcher" },
+        "bulkhead:http-egress": { "allow": ["https://api.example.com"] }
+    } }));
+
+    let err = n
+        .client
+        .deploy(app_bundle(&n.key, &name, "1.0.0", &native_sdk(), manifest))
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("at most 48 characters"), "{err}");
     n.shutdown().await;
 }
 

@@ -678,6 +678,13 @@ pub const RESOLVE_APP: &str = "bulkhead-resolve";
 /// `[drivers.<app>]` may take a name with that prefix.
 pub const SQL_PROGRAM: &str = "bulkhead-sql";
 
+/// The program of each app's egress driver (ROADMAP DA4), which runs as
+/// the app `bulkhead-egress-<app>`
+/// ([`bulkhead_host::EGRESS_DRIVER_PREFIX`]) for each app granted
+/// `bulkhead:http-egress`; no bundle and no `[drivers.<app>]` may take a
+/// name with that prefix.
+pub const EGRESS_PROGRAM: &str = "bulkhead-egress";
+
 /// The most nameservers the resolver driver is given
 /// (`bulkhead_resolve::config::MAX_NAMESERVERS`).
 pub const MAX_NAMESERVERS: usize = 8;
@@ -817,6 +824,10 @@ pub struct EgressBinding {
     /// `max_concurrent`.
     #[serde(default = "default_egress_concurrent")]
     pub max_concurrent: u32,
+    /// The largest response body an app's request reads (ROADMAP DA4); a
+    /// larger one fails the request. At most 16 MiB, a frame's body.
+    #[serde(default = "default_egress_max_body")]
+    pub max_response_body: ByteSize,
 }
 
 impl Default for EgressBinding {
@@ -832,6 +843,7 @@ impl Default for EgressBinding {
             pool_idle_timeout_ms: default_egress_idle_ms(),
             pool_max_idle_per_host: default_egress_idle_per_host(),
             max_concurrent: default_egress_concurrent(),
+            max_response_body: default_egress_max_body(),
         }
     }
 }
@@ -851,6 +863,7 @@ impl EgressBinding {
         e.pool_idle_timeout = std::time::Duration::from_millis(self.pool_idle_timeout_ms);
         e.pool_max_idle_per_host = self.pool_max_idle_per_host;
         e.max_concurrent = self.max_concurrent;
+        e.max_response_body = self.max_response_body.bytes();
         e
     }
 }
@@ -927,6 +940,9 @@ pub struct NativeBinding {
     /// The `bulkhead-sql` executable, each datasource's driver (ROADMAP
     /// DA3); unset for the one beside the runner.
     pub sql: Option<PathBuf>,
+    /// The `bulkhead-egress` executable, each app's egress driver (ROADMAP
+    /// DA4); unset for the one beside the runner.
+    pub egress: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -960,6 +976,7 @@ impl Default for NativeBinding {
             metrics: None,
             admin: None,
             sql: None,
+            egress: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1006,6 +1023,10 @@ fn default_egress_idle_ms() -> u64 {
 
 fn default_egress_idle_per_host() -> usize {
     32
+}
+
+fn default_egress_max_body() -> ByteSize {
+    ByteSize::mib(16)
 }
 
 fn default_egress_concurrent() -> u32 {
@@ -1370,6 +1391,13 @@ impl NodeConfig {
         if e.max_concurrent == 0 {
             return Err(NodeError::Invalid(
                 "node config: egress.max_concurrent must be more than 0".into(),
+            ));
+        }
+        let body = e.max_response_body.bytes();
+        if body == 0 || body > ByteSize::mib(16).bytes() {
+            return Err(NodeError::Invalid(
+                "node config: egress.max_response_body must be more than 0 and at most 16MiB"
+                    .into(),
             ));
         }
         Ok(())

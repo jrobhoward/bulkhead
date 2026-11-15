@@ -195,6 +195,7 @@ impl Node {
                 bulkhead_host::EGRESS_DRIVER_PREFIX
             )));
         }
+        super::egress::check_name(&name, &manifest)?;
         let rt = self.rt.clone();
         let program = bundle.program.clone();
         // A program is written where only the node can change it.
@@ -369,6 +370,11 @@ impl Node {
                     )));
                 }
                 self.ingress.set_routes(name, &deployment)?;
+                // Its egress driver first: the app may send as it starts.
+                if let Err(e) = self.ensure_egress_driver(name, &deployment).await {
+                    self.ingress.remove_routes(name);
+                    return Err(e);
+                }
                 let manifest = deployment.manifest.clone();
                 let added = match &self.gate {
                     Some(gate) if gate::is_singleton(&deployment) => {
@@ -393,6 +399,7 @@ impl Node {
                 };
                 if added.is_err() {
                     self.ingress.remove_routes(name);
+                    self.stop_egress_driver(name).await;
                 }
                 added
             }
@@ -417,6 +424,7 @@ impl Node {
                 .await
                 .map_err(|e| NodeError::Conflict(e.to_string()))?
         {
+            self.stop_egress_driver(name).await;
             return Ok(());
         }
         self.stop_native_listeners(name);
@@ -426,6 +434,7 @@ impl Node {
                 .await
                 .map_err(|e| NodeError::Conflict(e.to_string()))?;
         }
+        self.stop_egress_driver(name).await;
         Ok(())
     }
 

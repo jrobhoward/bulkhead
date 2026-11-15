@@ -149,7 +149,7 @@ absent() {
 
 # ROADMAP CR1: protocol stacks that parse outside input leave the node for
 # driver apps, and stay out. hyper stays in the node for the admin socket
-# and its client; egress stays (DA6).
+# and its client.
 check_deps() {
     local status=0
     # The drivers are programs the node starts, never libraries.
@@ -161,6 +161,11 @@ check_deps() {
     # The runtime alone has no HTTP server or client, no TLS stream.
     absent "bulkhead-host (no features)" 'hyper|hyper-util|http-body-util|tokio-rustls' \
         -p bulkhead-host --no-default-features || status=1
+    # HTTP egress is each app's driver's (DA4): the runtime with egress has
+    # no HTTP client or TLS for servers, and the node no hyper-rustls.
+    absent "bulkhead-host (egress)" 'hyper|hyper-util|http-body-util|hyper-rustls|tower-service' \
+        -p bulkhead-host --no-default-features --features egress || status=1
+    absent "bulkhead (every feature)" 'hyper-rustls' -p bulkhead --all-features || status=1
     # Postgres's client is each datasource's driver's (DA3): none in the
     # node, nor its TLS for databases.
     absent "bulkhead (every feature)" 'tokio-postgres|postgres-protocol|deadpool-postgres|deadpool|tokio-postgres-rustls' \
