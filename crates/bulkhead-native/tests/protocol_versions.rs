@@ -128,6 +128,7 @@ fn request_name(r: &Request) -> &'static str {
         Request::CallApp { .. } => "CallApp",
         Request::AdminStream => "AdminStream",
         Request::MetricsText => "MetricsText",
+        Request::Connect => "Connect",
     }
 }
 
@@ -155,6 +156,7 @@ fn answer_name(a: &Answer) -> &'static str {
         Answer::Elsewhere(_) => "Elsewhere",
         Answer::AdminStream(_) => "AdminStream",
         Answer::MetricsText(_) => "MetricsText",
+        Answer::Connected(_) => "Connected",
     }
 }
 
@@ -218,6 +220,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "Elsewhere",
             "AdminStream",
             "MetricsText",
+            "Connect",
         ],
     ),
     (
@@ -245,6 +248,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "Elsewhere",
             "AdminStream",
             "MetricsText",
+            "Connected",
         ],
     ),
 ];
@@ -425,6 +429,7 @@ fn requests() -> Vec<Request> {
         Request::Elsewhere { app: "shop".into() },
         Request::AdminStream,
         Request::MetricsText,
+        Request::Connect,
     ]
 }
 
@@ -463,6 +468,7 @@ fn answers() -> Vec<Answer> {
         Answer::Elsewhere(Some(2)),
         Answer::AdminStream(Ok(FdRef(3))),
         Answer::MetricsText(Ok("# TYPE x counter\nx 1\n".into())),
+        Answer::Connected(Ok(FdRef(4))),
     ]
 }
 

@@ -302,6 +302,25 @@ pub struct DriverProfile {
     ///
     /// [`Runtime::set_metrics_text`]: crate::Runtime::set_metrics_text
     pub metrics: bool,
+    /// The one endpoint the node connects it to on request
+    /// (`Request::Connect`, a datasource's driver, ROADMAP DA3).
+    pub connect: Option<DriverEndpoint>,
+}
+
+/// Where the node connects a driver ([`DriverProfile::connect`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverEndpoint {
+    /// A TCP address, its host name resolved on every connect.
+    Tcp {
+        /// A host name or an address.
+        host: String,
+        /// The port.
+        port: u16,
+        /// How long a connect may take, the lookup included.
+        timeout: Duration,
+    },
+    /// A Unix stream socket's path (Postgres's `<dir>/.s.PGSQL.<port>`).
+    Unix(PathBuf),
 }
 
 /// A listening socket of a driver app's, by name.

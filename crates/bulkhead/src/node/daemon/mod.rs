@@ -672,6 +672,7 @@ fn bind_drivers(
                     forward: false,
                     admin: false,
                     metrics: false,
+                    connect: None,
                 },
             ))
         })

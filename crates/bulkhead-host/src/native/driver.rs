@@ -1,6 +1,7 @@
-//! The node's own drivers' requests (ROADMAP DA7): a stream into the
-//! admin API, and the metrics as text, each for a driver whose profile
-//! allows it ([`crate::DriverProfile`]'s `admin`, `metrics`), from a
+//! The node's own drivers' requests: a stream into the admin API and the
+//! metrics as text (ROADMAP DA7), and a connection to the driver's one
+//! endpoint (DA3), each for a driver whose profile allows it
+//! ([`crate::DriverProfile`]'s `admin`, `metrics`, `connect`), from a
 //! callback or a sender channel alike.
 
 use std::os::fd::{AsFd, BorrowedFd};
@@ -42,5 +43,59 @@ pub(crate) fn answer(
         other => Answer::MetricsText(Err(NetError::Other(format!(
             "not a driver's request: {other:?}"
         )))),
+    }
+}
+
+/// A connection to `endpoint`, which the node opens for the driver: a
+/// host name resolved through the runtime's resolver each time, the
+/// addresses tried in turn within the timeout. The stream is passed in
+/// blocking mode, as a new socket is; the node keeps no copy.
+///
+/// # Errors
+///
+/// `denied` without an endpoint; otherwise why it could not connect.
+pub(crate) async fn connect(
+    rt: &Arc<RuntimeInner>,
+    endpoint: Option<&crate::config::DriverEndpoint>,
+) -> Result<std::os::fd::OwnedFd, NetError> {
+    use crate::config::DriverEndpoint;
+    match endpoint {
+        None => Err(NetError::Denied),
+        Some(DriverEndpoint::Tcp {
+            host,
+            port,
+            timeout,
+        }) => {
+            let deadline = tokio::time::Instant::now() + *timeout;
+            let addrs = rt
+                .services
+                .names()
+                .resolve(host, *port, *timeout)
+                .await
+                .map_err(|e| NetError::Other(e.to_string()))?;
+            let mut last = NetError::Other(format!("{host} has no address"));
+            for addr in addrs {
+                match tokio::time::timeout_at(deadline, tokio::net::TcpStream::connect(addr)).await
+                {
+                    Ok(Ok(stream)) => {
+                        let _ = stream.set_nodelay(true);
+                        let stream = stream
+                            .into_std()
+                            .and_then(|s| s.set_nonblocking(false).map(|()| s))
+                            .map_err(|e| NetError::Other(e.to_string()))?;
+                        return Ok(stream.into());
+                    }
+                    Ok(Err(e)) => last = NetError::Other(format!("{addr}: {e}")),
+                    Err(_) => return Err(NetError::Other(format!("{host}: connect timed out"))),
+                }
+            }
+            Err(last)
+        }
+        Some(DriverEndpoint::Unix(path)) => tokio::net::UnixStream::connect(path)
+            .await
+            .and_then(tokio::net::UnixStream::into_std)
+            .and_then(|s| s.set_nonblocking(false).map(|()| s))
+            .map(Into::into)
+            .map_err(|e| NetError::Other(format!("{}: {e}", path.display()))),
     }
 }

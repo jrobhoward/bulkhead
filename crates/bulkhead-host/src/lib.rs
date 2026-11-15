@@ -67,8 +67,8 @@ pub use bulkhead_bundle::manifest::{RestartType, Strategy};
 /// Address networks (`10.0.0.0/24`), for extensions' node configuration.
 pub use bulkhead_bundle::manifest::{cidr_contains, parse_cidr};
 pub use config::{
-    DriverListener, DriverProfile, Egress, HostObjectRequest, HostObjects, NativeConfig,
-    RuntimeConfig, SecretSource, SharedBucket, SqlDatasource, SqlTls,
+    DriverEndpoint, DriverListener, DriverProfile, Egress, HostObjectRequest, HostObjects,
+    NativeConfig, RuntimeConfig, SecretSource, SharedBucket, SqlDatasource, SqlTls,
 };
 pub use error::HostError;
 pub use formats::{FIRST_FORMATS, FinalizeRefused, Finalized};

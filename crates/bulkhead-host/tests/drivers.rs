@@ -400,3 +400,103 @@ async fn app____not_a_driver____admin_streams_and_metrics_denied() {
     );
     app.kill();
 }
+
+/// A peer that greets each connection with `greeting`, late enough that a
+/// read on a non-blocking stream would find nothing yet, and closes it.
+fn greeter(listener: TcpListener, greeting: &'static str) {
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            use std::io::Write;
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = stream.unwrap().write_all(greeting.as_bytes());
+        }
+    });
+}
+
+/// A runtime whose app `drv` is a driver with `connect` as its endpoint,
+/// names resolved from a table (`db.test` is loopback).
+fn node_connect(connect: Option<bulkhead_host::DriverEndpoint>) -> (Runtime, LoadedApp) {
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native: native_config(),
+        drivers: BTreeMap::from([(
+            "drv".to_string(),
+            DriverProfile {
+                connect,
+                ..DriverProfile::default()
+            },
+        )]),
+        resolver: bulkhead_host::Resolver::Table(BTreeMap::from([(
+            "db.test".to_string(),
+            vec!["127.0.0.1".parse().unwrap()],
+        )])),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let code = rt.load_native(NativeCode {
+        path: native_fixtures().1.clone(),
+        kind: NativeProgram::Executable,
+    });
+    (rt, code)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____tcp_endpoint_by_name____the_node_connects_it_from_a_callback_or_a_sender() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    greeter(listener, "hello from the database");
+    let (rt, code) = node_connect(Some(bulkhead_host::DriverEndpoint::Tcp {
+        host: "db.test".into(),
+        port,
+        timeout: Duration::from_secs(5),
+    }));
+    let d = spawn(&rt, &code, "drv");
+
+    let from_callback = ask(&d, "driver-connect").await;
+    let from_sender = ask(&d, "sender-connect").await;
+
+    assert_eq!(from_callback, "hello from the database");
+    assert_eq!(from_sender, "hello from the database");
+    d.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____unix_endpoint____the_node_connects_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".s.PGSQL.5432");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            use std::io::Write;
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = stream.unwrap().write_all(b"hello over a socket");
+        }
+    });
+    let (rt, code) = node_connect(Some(bulkhead_host::DriverEndpoint::Unix(path)));
+    let d = spawn(&rt, &code, "drv");
+
+    let got = ask(&d, "driver-connect").await;
+
+    assert_eq!(got, "hello over a socket");
+    d.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____no_endpoint_or_an_unknown_name____denied_or_failed() {
+    let (rt, code) = node_connect(None);
+    let none = spawn(&rt, &code, "drv");
+    let (rt2, code2) = node_connect(Some(bulkhead_host::DriverEndpoint::Tcp {
+        host: "nowhere.test".into(),
+        port: 5432,
+        timeout: Duration::from_secs(1),
+    }));
+    let unknown = spawn(&rt2, &code2, "drv");
+
+    let denied = ask(&none, "driver-connect").await;
+    let failed = ask(&unknown, "driver-connect").await;
+
+    assert_eq!(denied, "err:Denied");
+    assert!(failed.contains("nowhere.test"), "{failed}");
+    none.kill();
+    unknown.kill();
+}

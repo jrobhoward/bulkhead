@@ -69,6 +69,8 @@ pub struct InstanceState {
     pub(crate) admin: bool,
     /// A driver that may read the node's metrics (ROADMAP DA7).
     pub(crate) metrics: bool,
+    /// The endpoint a driver may have the node connect it to (DA3).
+    pub(crate) connect: Option<crate::config::DriverEndpoint>,
     /// The node's failover lease, for an instance bound to it
     /// ([`InstanceSpec::bound_to_lease`]).
     pub(crate) lease: Option<watch::Receiver<RunUntil>>,
@@ -108,6 +110,7 @@ impl InstanceState {
             announce_routes: spec.driver.as_ref().is_some_and(|d| d.routes),
             admin: spec.driver.as_ref().is_some_and(|d| d.admin),
             metrics: spec.driver.as_ref().is_some_and(|d| d.metrics),
+            connect: spec.driver.as_ref().and_then(|d| d.connect.clone()),
             lease,
             services,
         })

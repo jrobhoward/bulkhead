@@ -935,6 +935,34 @@ impl InstanceTask {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 Some(Incoming::Frame(FromApp::Request {
                     id,
+                    request: Request::Connect,
+                })) => {
+                    let rt = state.ctx.rt.clone();
+                    let connected = super::killable(
+                        &self.kill,
+                        &self.control,
+                        crate::native::driver::connect(&rt, state.connect.as_ref()),
+                    )
+                    .await;
+                    let answer = match connected {
+                        Ok(Ok(fd)) => Answer::Connected(
+                            port.send_fd(
+                                std::os::fd::AsFd::as_fd(&fd),
+                                crate::native::Passed::Stream,
+                            )
+                            .map_err(p::NetError::Other),
+                        ),
+                        Ok(Err(e)) => Answer::Connected(Err(e)),
+                        Err(killed) => {
+                            port.kill();
+                            return Err(killed);
+                        }
+                    };
+                    port.send(&ToApp::Answer { id, answer });
+                }
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                Some(Incoming::Frame(FromApp::Request {
+                    id,
                     request: request @ (Request::AdminStream | Request::MetricsText),
                 })) => {
                     let allowed = crate::native::driver::Allowed {

@@ -499,9 +499,11 @@ impl Fixture {
                 Some((_, fd)) => accept_and_greet(std::os::fd::AsFd::as_fd(fd)),
                 None => "err:no such listener".into(),
             },
-            "admin-stream" | "metrics-text" | "sender-metrics-text" => {
-                driver_request(ctx, verb, rest)
-            }
+            "admin-stream"
+            | "metrics-text"
+            | "sender-metrics-text"
+            | "driver-connect"
+            | "sender-connect" => driver_request(ctx, verb, rest),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             "accept-fd" => {
                 let n: i32 = rest.parse().unwrap_or(-1);
@@ -948,7 +950,9 @@ fn forks(n: usize, mib: usize) -> String {
 /// writes `text` into a stream to the node's admin API and answers what
 /// the node sent back until it closed; `metrics-text` and
 /// `sender-metrics-text` (through a sender channel of a thread of its own)
-/// answer the node's metrics.
+/// answer the node's metrics; `driver-connect` and `sender-connect`
+/// answer what a connection the node made to the profile's endpoint gave
+/// until its peer closed it (ROADMAP DA3).
 fn driver_request(ctx: &mut Ctx, verb: &str, rest: &str) -> String {
     match verb {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -981,6 +985,32 @@ fn driver_request(ctx: &mut Ctx, verb: &str, rest: &str) -> String {
             .unwrap_or_else(|_| "err:thread".into()),
             Err(e) => format!("err:{e:?}"),
         },
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        "driver-connect" => match ctx.connect() {
+            Ok(fd) => read_all(fd),
+            Err(e) => format!("err:{e:?}"),
+        },
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        "sender-connect" => match ctx.sender() {
+            Ok(mut sender) => std::thread::spawn(move || match sender.connect() {
+                Ok(fd) => read_all(fd),
+                Err(e) => format!("err:{e:?}"),
+            })
+            .join()
+            .unwrap_or_else(|_| "err:thread".into()),
+            Err(e) => format!("err:{e:?}"),
+        },
         other => format!("err:unknown {other}"),
+    }
+}
+
+/// What a passed stream gave until its peer closed it.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn read_all(fd: std::os::fd::OwnedFd) -> String {
+    let mut file = std::fs::File::from(fd);
+    let mut got = String::new();
+    match file.read_to_string(&mut got) {
+        Ok(_) => got,
+        Err(e) => format!("err:{e}"),
     }
 }

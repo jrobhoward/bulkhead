@@ -176,6 +176,22 @@ impl AsyncSender {
         }
     }
 
+    /// A connection to the driver's endpoint (ROADMAP DA3), as
+    /// [`Sender::connect`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Sender::connect`].
+    pub async fn connect(&self) -> Result<std::os::fd::OwnedFd, crate::protocol::NetError> {
+        use crate::protocol::NetError;
+        match Answered(self.ask(Request::Connect)).await {
+            Answer::Connected(result) => {
+                crate::app::take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => protocol_error(&format!("Connect answered with {other:?}")),
+        }
+    }
+
     /// The node's metrics as text (ROADMAP DA7), as
     /// [`Sender::metrics_text`].
     ///

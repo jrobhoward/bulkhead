@@ -142,6 +142,7 @@ pub(super) fn bind(
         forward,
         admin: false,
         metrics: false,
+        connect: None,
     };
     let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
     Ok(Some((profile, args)))

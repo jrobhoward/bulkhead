@@ -118,6 +118,21 @@ impl Sender {
         }
     }
 
+    /// A connection to the endpoint the driver's profile names (ROADMAP
+    /// DA3), which the node opened.
+    ///
+    /// # Errors
+    ///
+    /// `denied` without an endpoint, or why the node could not connect.
+    pub fn connect(&mut self) -> Result<std::os::fd::OwnedFd, NetError> {
+        match self.request(Request::Connect) {
+            Answer::Connected(result) => {
+                take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => unexpected(&other),
+        }
+    }
+
     /// The node's metrics in the Prometheus text format (ROADMAP DA7), for
     /// a driver whose profile has `metrics`.
     ///

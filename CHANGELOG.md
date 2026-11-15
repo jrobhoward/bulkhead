@@ -8,6 +8,15 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A driver may ask the node for a connection to the one endpoint its
+  profile names (`Request::Connect`, protocol 14; ROADMAP DA3, step 2):
+  `Ctx::connect`, `Sender::connect` and `AsyncSender::connect` answer the
+  stream's descriptor. `DriverProfile.connect` is a `DriverEndpoint`: TCP
+  to a host and port, the host resolved through the node's names on every
+  connect and each address tried within the timeout, or a Unix socket's
+  path. Without an endpoint the request is denied. The stream is passed in
+  blocking mode, and the node keeps no copy.
+
 - A sender channel may answer a call its instance's callback left waiting
   (`Request::Reply`, ROADMAP AP1b; DA3, step 1): `Sender::reply` and
   `AsyncSender::reply`. The node hands the reply to the instance's task,

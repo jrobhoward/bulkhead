@@ -219,6 +219,7 @@ pub async fn serve(
                 forward: true,
                 admin: false,
                 metrics: false,
+                connect: None,
             },
         )]),
         ..RuntimeConfig::default()
