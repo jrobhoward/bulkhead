@@ -455,7 +455,12 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     let keys = privhelper::dir_owned(&started.dir.path().join("keys"), started.node_uid, 0o750);
     let file = keys.join("web.key");
     let beside = keys.join("other.key");
-    for (path, body) in [(&file, "the driver's key"), (&beside, "not given")] {
+    let second = keys.join("web.pem");
+    for (path, body) in [
+        (&file, "the driver's key"),
+        (&beside, "not given"),
+        (&second, "the driver's certificate"),
+    ] {
         std::fs::write(path, body).unwrap();
         std::os::unix::fs::chown(path, Some(started.node_uid), Some(started.node_uid)).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o640)).unwrap();
@@ -475,7 +480,8 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
                     name: "main".into(),
                     socket: std::sync::Arc::new(socket),
                 }],
-                files: vec![file.clone()],
+                // Two files in one directory: bound once.
+                files: vec![file.clone(), second.clone()],
                 ..bulkhead_host::DriverProfile::default()
             },
         )]),
@@ -498,6 +504,7 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     let peer = ask(&d, "accept main").await;
     let greeted = client.join().unwrap();
     let given = ask(&d, "vcat /driver/web.key").await;
+    let certificate = ask(&d, "vcat /driver/web.pem").await;
     let other = ask(&d, &format!("read {}", beside.display())).await;
     std::fs::write(&file, "the renewed key").unwrap();
     let reshared = rt.share_driver_files().await;
@@ -510,6 +517,7 @@ async fn helper____driver____accepts_on_its_listener_and_reads_its_file() {
     assert_eq!(greeted, "hello\n");
     assert!(unshared.is_empty(), "{unshared:?}");
     assert_eq!(given, "the driver's key");
+    assert_eq!(certificate, "the driver's certificate");
     assert!(other.starts_with("err:"), "{other}");
     assert!(reshared.is_empty(), "{reshared:?}");
     assert_eq!(renewed, "the renewed key");
@@ -602,4 +610,52 @@ async fn helper____resolver____answers_from_hosts_and_reaches_its_nameserver_thr
         "no stream reached the nameserver"
     );
     apps.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____admin_and_metrics_driver____streams_and_metrics_reach_it_under_its_user() {
+    let Some(started) = helper("helper____admin_and_metrics_driver") else {
+        return;
+    };
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        drivers: std::collections::BTreeMap::from([(
+            "drv".to_string(),
+            bulkhead_host::DriverProfile {
+                admin: true,
+                metrics: true,
+                ..bulkhead_host::DriverProfile::default()
+            },
+        )]),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    // The node's side, played here: an admin stream answers what it got.
+    let streams: bulkhead_host::AdminStreams = std::sync::Arc::new(|mut stream| {
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut got = String::new();
+            stream.read_to_string(&mut got).unwrap();
+            stream.write_all(format!("admin:{got}").as_bytes()).unwrap();
+        });
+    });
+    let text: bulkhead_host::MetricsText = std::sync::Arc::new(|| "node_metric 1\n".to_string());
+    rt.set_admin_streams(&streams);
+    rt.set_metrics_text(&text);
+    let app = program(&started, &rt);
+    let d = rt.spawn(&app, spec("drv")).unwrap();
+
+    let ids = ask(&d, "ids").await;
+    let answered = ask(&d, "admin-stream GET /v1/apps").await;
+    let metrics = ask(&d, "metrics-text").await;
+
+    let user = started.first_uid;
+    assert_eq!(ids, format!("{user} {user}"), "a user of its own");
+    assert_eq!(answered, "admin:GET /v1/apps");
+    assert_eq!(metrics, "node_metric 1\n");
+    d.kill();
 }

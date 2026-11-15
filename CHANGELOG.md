@@ -784,6 +784,12 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- Under the privileged helper a driver given two files in one directory
+  (the admin key and the operators file, or an HTTPS certificate and its
+  key) did not start: the node asked the helper to bind the directory
+  twice, which it refuses. It is bound once now (ROADMAP DA7, step 5). The
+  e2e scripts run `[admin]` and `[metrics]` under the helper.
+
 - Under the privileged helper the node's own drivers (`bulkhead-ingress`,
   `bulkhead-resolve`) did not start: the node asked the helper to bind
   their program's directory, the runner's, which every instance's root

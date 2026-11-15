@@ -9,7 +9,7 @@
 #
 #   cargo build -p bulkhead -p bulkhead-priv -p example-board   # as a user
 #   cargo build -p bulkhead-native --bin bulkhead-runner
-#   cargo build -p bulkhead-resolve -p bulkhead-ingress
+#   cargo build -p bulkhead-resolve -p bulkhead-ingress -p bulkhead-admin -p bulkhead-metrics
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
@@ -22,12 +22,23 @@ install -d -m 0755 /usr/local/libexec/bulkhead
 install -m 0755 $T/bulkhead-runner /usr/local/libexec/bulkhead/bulkhead-runner
 install -m 0755 $T/bulkhead-resolve /usr/local/libexec/bulkhead/bulkhead-resolve
 install -m 0755 $T/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress
+install -m 0755 $T/bulkhead-admin /usr/local/libexec/bulkhead/bulkhead-admin
+install -m 0755 $T/bulkhead-metrics /usr/local/libexec/bulkhead/bulkhead-metrics
 install -d -m 0755 /etc/bulkhead
 systemctl stop bulkhead 2>/dev/null || true
 rm -rf /var/lib/bulkhead
 install -d -m 0700 -o bulkhead -g bulkhead /var/lib/bulkhead
 W=/var/lib/bulkhead-e2e; rm -rf $W; install -d -m 0755 $W
 cd $W
+# The remote admin API (ROADMAP DA7): the admin key and the operators file,
+# the node's, in a directory the helper binds into the admin driver's root;
+# an operator's key for the CLI.
+K=/var/lib/bulkhead-admin; rm -rf $K; install -d -m 0700 -o bulkhead -g bulkhead $K
+/usr/local/bin/bulkhead cluster keygen $K/admin.key >/dev/null
+/usr/local/bin/bulkhead cluster keygen $W/operator.key >/dev/null
+ADMIN_KEY=$(/usr/local/bin/bulkhead cluster pubkey $K/admin.key)
+printf '[operators]\ne2e = ["%s"]\n' "$(/usr/local/bin/bulkhead cluster pubkey $W/operator.key)" > $K/operators.toml
+chown bulkhead:bulkhead $K/admin.key $K/operators.toml; chmod 0600 $K/admin.key $K/operators.toml
 /usr/local/bin/bulkhead keygen signer --no-password >/dev/null
 SIGNER=$(tail -n 1 signer.pub)
 cp $SRC/examples/board/bulkhead.toml board.toml
@@ -47,6 +58,14 @@ policy = "/etc/bulkhead/policy.toml"
 [http.main]
 address = "127.0.0.1:8080"
 
+[metrics]
+address = "127.0.0.1:9101"
+
+[admin]
+address = "127.0.0.1:7443"
+key = "$K/admin.key"
+operators = "$K/operators.toml"
+
 [buckets.board]
 durability = "disk"
 
@@ -65,7 +84,7 @@ node_gid = $NGID
 runner = /usr/local/libexec/bulkhead/bulkhead-runner
 uids = 60000-60999
 state = /var/lib/bulkhead-priv
-binds = /var/lib/bulkhead
+binds = /var/lib/bulkhead, $K
 memory_max = 2GiB
 pids_max = 1024
 cgroup = /sys/fs/cgroup/system.slice/bulkhead.service
@@ -84,6 +103,9 @@ for i in $(seq 100); do curl -sf http://127.0.0.1:8080/board >/dev/null && break
 echo "== board"; curl -s http://127.0.0.1:8080/board; echo
 curl -s -X POST http://127.0.0.1:8080/board >/dev/null
 curl -s http://127.0.0.1:8080/board; echo
+echo "== metrics (bulkhead-metrics)"; curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_instances{app="board"}'
+echo "== remote admin (bulkhead-admin, signed requests)"
+/usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
 echo "== status"; cli status board
 echo "== processes with the app"
 ps -eo user:12,uid,gid,pid,args | grep -E "bulkhead-priv|bulkhead node|^60000" | grep -v grep
@@ -112,7 +134,7 @@ journalctl -u bulkhead --no-pager -n 40 | grep -E "bulkhead-priv|error|ERROR|WAR
 if [ "${KEEP:-0}" != 1 ]; then
     rm -f /etc/systemd/system/bulkhead.service && systemctl daemon-reload
     rm -f /usr/local/sbin/bulkhead-priv /usr/local/bin/bulkhead
-    rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W
+    rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W $K
     userdel bulkhead
     echo "== removed"
 fi

@@ -384,8 +384,11 @@ mod process {
                     launch.args.push("--read".into());
                     launch.args.push(file.clone().into());
                     // Under the helper the file's directory is bound into
-                    // the instance's root; Landlock narrows it to the file.
-                    if let Some(dir) = file.parent() {
+                    // the instance's root, once however many files it
+                    // holds; Landlock narrows it to the files.
+                    if let Some(dir) = file.parent()
+                        && !launch.dirs.iter().any(|(d, _)| d == dir)
+                    {
                         launch.dirs.push((dir.to_path_buf(), false));
                     }
                     driver_files.push((
