@@ -109,6 +109,7 @@ two together:
 cargo test --workspace --all-features
 cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-resolve -p bulkhead-ingress
 # bulkhead; beside it bulkhead-runner, the resolver of host names and the HTTP ingress
+# (and -p bulkhead-admin -p bulkhead-metrics for [admin] and [metrics])
 ```
 
 `bulkhead`'s cargo features choose what a node can do. The default build has

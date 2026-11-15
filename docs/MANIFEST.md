@@ -327,7 +327,7 @@ address = "0.0.0.0:7070"               # binds a manifest listener named "lines"
 acceptors = 4                          # default 4: tasks accepting connections at once
 
 [drivers.ingress]                      # the app named "ingress", deployed as any app, as a driver app (DA1)
-                                       # (not bulkhead-ingress or bulkhead-resolve: the node's own drivers have those names)
+                                       # (not bulkhead-ingress, -resolve, -admin or -metrics: the node's own drivers have those names)
 listeners = { https = "0.0.0.0:8443" } # listening sockets the node binds and keeps; the driver accepts on them
                                        # itself (inherited at descriptors 8..13, named in BULKHEAD_LISTENERS),
                                        # accept4 allowed on them alone; at most 6
@@ -380,6 +380,8 @@ spin_us = 20                           # the node and a native app spin this lon
 sender_spin_us = 50                    # how long an app's thread waits spinning for an answer on a sender channel (its own threads, a driver's requests); at most 10000
 ingress = "/usr/local/bin/bulkhead-ingress"  # the HTTP ingress driver, needed with [http]; unset: bulkhead-ingress beside the runner
 resolve = "/usr/local/bin/bulkhead-resolve"  # the resolver of host names every member starts; unset: bulkhead-resolve beside the runner
+admin = "/usr/local/bin/bulkhead-admin"      # the remote admin API's driver, with [admin]; unset: beside the runner
+metrics = "/usr/local/bin/bulkhead-metrics"  # the metrics endpoint's driver, with [metrics]; unset: beside the runner
 
 [resolver]                             # host names (ROADMAP DA9), resolved by bulkhead-resolve; every key optional
 resolv_conf = "/etc/resolv.conf"       # search, domain, options ndots/timeout/attempts; and its nameservers, unless:
@@ -390,12 +392,13 @@ reload_s = 5                           # read both again; the resolver restarts 
 [priv]                                 # native instances start through the privileged helper, bulkhead-priv, each app under a user of its own (OPERATIONS.md); the node must be started by it. Nothing to set: the helper's own configuration holds its checks; [native] runner names the helper's runner, beside which the node finds its own drivers. Not with [native] cgroup
 
 [metrics]
-address = "127.0.0.1:9100"             # GET /metrics for Prometheus; unauthenticated, keep it off public networks
+address = "127.0.0.1:9100"             # GET /metrics for Prometheus, served by the bulkhead-metrics driver; unauthenticated, keep it off public networks
 
 [admin]
-address = "10.0.0.1:7443"              # the admin API over TCP with TLS 1.3 (cargo feature `tls`, on by default), for operators on other machines
+address = "10.0.0.1:7443"              # the admin API over TCP with TLS 1.3 (cargo feature `tls`, on by default), for operators on other machines;
+                                       # TLS by the bulkhead-admin driver; each request signed by the operator's key, checked by the node
 operators = "/etc/bulkhead/operators.toml"  # [operators] alice = ["ed25519:..."]; reread on SIGHUP and `bulkhead reload-tls`
-key = "/etc/bulkhead/node.key"          # default: [cluster] key; operators pin its public key (`bulkhead cluster pubkey`)
+key = "/etc/bulkhead/admin.key"         # required, its own (never [cluster] key: the driver holds it); operators pin its public key (`bulkhead cluster pubkey`)
 
 [http.main]
 address = "0.0.0.0:8080"               # HTTP ingress (cargo feature `http`, on by default): serves every app's routes, through

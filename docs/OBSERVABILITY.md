@@ -60,7 +60,7 @@ A call through the admin API costs about 65 µs against about 4 µs inside the n
 
 ## Metrics
 
-The node renders every app's metrics and its own in the Prometheus text format (version 0.0.4): `bulkhead metrics`, `GET /v1/metrics` on the admin API, and, with `[metrics] address = "127.0.0.1:9100"` in node config, `GET /metrics` on that address for a Prometheus scraper (unauthenticated; bind it to loopback or a management network). OpenTelemetry collectors can scrape the same endpoint.
+The node renders every app's metrics and its own in the Prometheus text format (version 0.0.4): `bulkhead metrics`, `GET /v1/metrics` on the admin API, and, with `[metrics] address = "127.0.0.1:9100"` in node config, `GET /metrics` on that address for a Prometheus scraper, served by the node's `bulkhead-metrics` driver, which asks the node for the same text on each scrape (ROADMAP DA7; unauthenticated, bind it to loopback or a management network). OpenTelemetry collectors can scrape the same endpoint.
 
 Apps' own metrics (`bulkhead:metrics`) are named `<prefix>_<name>` and carry an `app` label plus their own labels. They are per app: every instance of an app updating the same name and labels updates one series, so counters and histograms add up across a pool and survive restarts.
 

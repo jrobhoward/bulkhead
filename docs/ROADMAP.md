@@ -61,7 +61,7 @@ Measured against the goals on 2026-11-10:
 | Performance | Good: a request 1.3 to 4.3 µs, a call between instances 5 to 8 µs, a published read 0.16 to 0.39 µs | Each new boundary's cost; large bodies through a driver (PF1) |
 | Platform: SDK, keyvalue, logging | Good | Client libraries that open their own sockets (S40) |
 | Observability | Good: probes, metrics, audit, events, `ps`, `state` | A trace id across calls and nodes (O1) |
-| A small, protected core | Half: HTTP ingress and its TLS (DA2) and host names (DA9) run in drivers since 2026-11-14; the node still parses Postgres replies, egress responses and Modbus in the process holding every secret, the cluster key and all bucket data, and the remote admin API and the metrics endpoint too (SECURITY.md, "What the node parses from outside") | The rest of Phase 7 |
+| A small, protected core | Half: HTTP ingress and its TLS (DA2), host names (DA9), the remote admin API's TLS and the metrics endpoint (DA7) run in drivers since 2026-11-14, so no listener any client reaches is served by the node before a key is checked; the node still parses Postgres replies, egress responses and Modbus in the process holding every secret, the cluster key and all bucket data (SECURITY.md, "What the node parses from outside") | The rest of Phase 7 |
 | No root; apps unprivileged | Half: nothing runs as root, but apps run as the node's user (their system calls are an allow-list since 2026-11-11) | Phase 6a |
 | FreeBSD, jails, ZFS | Missing: native apps are Linux only; PB5 (`paddock-b/spikes/pb5`) showed jails and Capsicum working | Phase 6b, ZFS volumes |
 | A disaster-recovery site | Partial: the third node is a witness and holds no data | Phase 8 |
@@ -80,7 +80,7 @@ flowchart LR
 ```
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
-- **Next:** DA7 (the remote admin API and metrics, the last listeners in the node any client can reach before a key is checked).
+- **Next:** DA3 (SQL as a driver: Postgres replies are the next protocol parsed in the node, with the credentials in it).
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
 - **Disaster recovery in parallel** with Phases 6 and 7: it touches replication, failover and the transport, which they do not. Its model (S38) comes first, under V1. Shipping volumes (DR6) waits for ZFS volumes.
@@ -149,7 +149,6 @@ Items:
 - [ ] **DA3 SQL as a driver** (M). `tokio-postgres` and `deadpool-postgres` in a driver per datasource; the credentials only there; apps name the datasource as now, and the node passes the caller's identity so the connection cap per app holds. A datasource's host name resolved for each new connection through the resolver driver (since DA9 it is resolved once, when the pool opens). Areas: services (`sql`), new driver.
 - [ ] **DA4 HTTP egress as a driver** (M). The policy stays in the core and the parsing leaves it: the node resolves each name through DA9's driver and checks each destination (allow list, address guard) and passes the connected socket to the egress driver, which runs TLS and HTTP. With it, the open egress items: HTTP/2, an outbound proxy (`CONNECT`), client certificates, a deny list of private ranges per CIDR, a cap on response bodies, fewer task hand-offs per request. Areas: services (`http_egress`), new driver.
 - [ ] **DA5 Modbus as a driver** (M). `bulkhead-modbus`'s polling and server in a driver, updates into buckets and casts as now, devices reached on sockets the node passes. Measured with `modbus_load` against the in-node figures (BASELINE.md, 2026-10-16). With it, deadbands, scaling and data types beyond raw registers. Areas: `bulkhead-modbus`, new driver.
-- [ ] **DA7 The remote admin API and metrics as a driver** (M; on DA1). A driver holding the admin TLS key and the operators file, terminating TLS and forwarding each request to the admin Unix socket with the operator's name for the audit log; the metrics endpoint served from the same driver or one of its own. The node then listens for operators on the Unix socket only. Areas: node (`daemon/remote.rs`), new driver, SECURITY.md, OPERATIONS.md.
 - [ ] **DA8 The `Extension` trait removed** (S; after DA5). `services/extension.rs`, `examples/greeter` and the `extensions` capability go, or the capability stays as a name for calls to a driver; MANIFEST.md and WRITING_APPS.md follow. Areas: host services, examples, docs.
 - [ ] **CR1 Crates along trust boundaries** (M; with each driver; the ingress's part done with DA2, 2026-11-14: `bulkhead-host` has no hyper, rustls server or `http` feature, and `scripts/check.sh deps` checks the node's tree). `bulkhead-host` is one crate of about 56,000 lines with HTTP, SQL and egress behind cargo features, so nothing but review keeps a protocol stack out of the node. As each driver moves, its code leaves `bulkhead-host` for the driver's crate, and `scripts/check.sh` gains a check that the node's dependency tree (`cargo tree -p bulkhead`) holds none of what left (hyper's server, the ingress TLS, `tokio-postgres`, the egress client, `tokio-modbus`). `bulkhead-native` is split the same way when the helper's crate lands: the protocol and channel (shared by the node, apps and drivers) apart from the runner (the sandbox). Areas: `bulkhead-host`, `bulkhead-native`, new crates, scripts.
 
@@ -308,7 +307,7 @@ An area is a set of modules with a narrow interface to the rest: modules in crat
 | Manifest and bundle | `bulkhead-bundle` | `AppSpec`, `VerifiedBundle`, the effective grant |
 | Process core | `bulkhead-host`: `pid`, `table`, `registry`, `links`, `message`, `mailbox`, `instance`, `runtime`, `state`, `process`, `delivery`, `native/` | Spawn, call, cast, link, monitor, exit; `delivery` routes every pid |
 | Host services | `bulkhead-host::services`, one module each; `metrics` | The `Service` trait; extensions through `Extension` |
-| Drivers | `bulkhead-ingress` (HTTP, since DA2), `bulkhead-resolve` (host names, DA9); the services named in Phase 7 still in the node; driver crates after it | Calls to apps through the node; the driver profile |
+| Drivers | `bulkhead-ingress` (HTTP, since DA2), `bulkhead-resolve` (host names, DA9), `bulkhead-admin` and `bulkhead-metrics` (DA7); the services named in Phase 7 still in the node; driver crates after it | Calls to apps through the node; the driver profile |
 | Orchestration | `bulkhead-host`: `apps`, `pool`, `supervisor`, `upgrade`, `lifecycle`, `spec` | `Apps`, `AppHandle`, `UpgradeOptions` |
 | Cluster | `bulkhead-host`: `transport` (`liveness`, `membership`, `memory`, `quic`, `wire`), `failover`, `replication`, `credit` | The `Transport` trait, node events, `FailoverHandle`, `ReplicationStatus`; replicated buckets reach the keyvalue service through `KvStore` |
 | I/O and protocols | `bulkhead-host`: `listener`; `bulkhead-modbus` | Listeners, connection handlers |
@@ -336,7 +335,7 @@ Crates meant for publishing (all `publish = false` while the project is private)
 | Async runtime | tokio, multi-threaded (in the node; the helper has none) |
 | Persistent store | redb |
 | Default envelope encoding | CBOR, with JSON and text allowed |
-| Admin API transport | JSON over HTTP on a Unix socket, and over TCP with TLS and pinned keys (`[admin]`, 2026-10-14) |
+| Admin API transport | JSON over HTTP on a Unix socket, and over TCP with TLS and pinned keys (`[admin]`, 2026-10-14), the TLS in a driver and each remote request signed by the operator's key (DA7, 2026-11-14) |
 | Node identity | Pinned Ed25519 keys and peers files, not a CA (2026-10-09) |
 | Failover | Epochs, heartbeat paths, a witness and a lease; no Raft (2026-10-08) |
 | Disaster recovery | An asynchronous copy at a remote site, best effort within about 5 minutes, activated by hand (2026-11-10) |

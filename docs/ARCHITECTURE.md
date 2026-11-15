@@ -42,6 +42,7 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | Crate | Builds | What it holds |
 | --- | --- | --- |
 | `bulkhead` | binary and library | `api` (admin API types, and the client over the Unix socket or TLS), `node` (the daemon, feature `node`), `serial` (the tty layer and frames for the failover serial line), `cli` (commands, bundle building, the shell). |
+| `bulkhead-admin` | library and `bulkhead-admin` | The remote admin API's TLS as a driver (ROADMAP DA7): accepts only operators' keys, then copies each connection's bytes to and from a stream into the node's admin API (`Request::AdminStream`). |
 | `bulkhead-bundle` | library | The app manifest model and validation, `.rbp` opening and signature checks against operator keys (the program's platform variant), operator policy and the effective grant. |
 | `bulkhead-host` | library | The runtime: process table, instances, links and monitors, supervisors, app sets and pools, host services, the HTTP route table, listeners, the cluster transport, liveness, membership, failover, replication, moving singletons and release versions. |
 | `bulkhead-priv-wire` | library | The messages between a node and its privileged helper (spawn, signal, bind; spawned, exited, refused) and their bounded parser, with no `unsafe`. |
@@ -49,6 +50,8 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-native` | library and `bulkhead-runner` | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, the app API for native executables (feature `app`), and `bulkhead-runner` (feature `runner`, default), the launcher that sandboxes itself and loads or executes a native app. `bulkhead-host` takes the protocol, the channel and the snapshot format. |
 | `bulkhead-ingress` | library and `bulkhead-ingress` | The HTTP ingress driver (ROADMAP DA2): an SDK app the node starts for `[http]`, hyper's HTTP/1.1 server and rustls on tokio, a current-thread runtime and a sender channel (`bulkhead_native::sender_async`) per worker thread; `config` (the node's init arguments), `serve` (one request, its limits and statuses), `tls` (certificates by SNI, reloaded), `driver` (threads, host events, metrics). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-resolve` | library and `bulkhead-resolve` | The resolver driver (ROADMAP DA9): an SDK app every member node starts, hickory-resolver on a worker thread with a tokio runtime and a sender channel; `config` (the nameservers, `resolv.conf` and hosts text, TCP only), `lookup` (the `bulkhead/resolve` call), `provider` (hickory's I/O over streams the node opens, one per nameserver), `driver` (the callback thread answering the node, the worker casting back to it). No node crate depends on it (`scripts/check.sh deps`). |
+| `bulkhead-keys` | library | Pinned Ed25519 keys (nodes', operators'), TLS 1.3 with raw public keys, the operators file, and the remote admin request signature; shared by the node, the CLI and the admin driver, no tokio. |
+| `bulkhead-metrics` | library and `bulkhead-metrics` | The metrics endpoint as a driver (DA7): hyper serving `GET /metrics`, the text asked of the node (`Request::MetricsText`). |
 | `bulkhead-modbus` | library | The Modbus TCP extension; depends on `bulkhead-host` alone. |
 | `bulkhead-modbus-client` | app library | Apps' client for the Modbus extension: calls through the node (`bulkhead_sdk::extension`). |
 | `bulkhead-sdk`, `bulkhead-sdk-macros` | app libraries | The Rust SDK: the `App` trait, envelopes, snapshots, service wrappers by feature. Its functions go over `bulkhead-native`'s protocol, and `app!` generates `bulkhead_main()`. |
@@ -404,7 +407,7 @@ What outlives a connection (the replicated log, the `@cluster` records) follows 
 
 ## The node's admin side
 
-- **The admin API** (`node::server`) serves JSON over HTTP on the admin socket, and over TLS with pinned keys on `[admin]`. Long answers stream (`server.rs`, `stream`): `bulkhead events`, `bulkhead logs --follow`, and long polls such as `GET /v1/failover?after=...&wait_ms=...`.
+- **The admin API** (`node::server`) serves JSON over HTTP on the admin socket, and on `[admin]` through the admin driver `bulkhead-admin`, which terminates TLS with pinned keys and carries each connection to a stream the node serves (`daemon/remote.rs`, `handle_signed`: each request's operator signature checked against the node's reading of the operators file, `bulkhead_keys::signature`). Long answers stream (`server.rs`, `stream`): `bulkhead events`, `bulkhead logs --follow`, and long polls such as `GET /v1/failover?after=...&wait_ms=...`.
 - **The event hub** (`node/events.rs`) merges audit records as they are written, instance exits and restarts (`Runtime::instance_events`), members heard and lost, and failover changes into one stream of JSON lines (`bulkhead events`).
 - **The shell** (`cli/shell.rs`, `cli/contacts.rs`) runs `bulkhead` commands against one node at a time, moving between nodes named in a contacts file.
 
@@ -437,7 +440,8 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Remote call | 1 per incoming `Frame::Call` (capped per peer) | `transport` | reply sent |
 | Admin server accept, connection; streams | 1; 1 per connection | `node::server` | stop |
 | Event hub | 1 | daemon | stop |
-| Metrics endpoint | 1 if configured | daemon | stop |
+| The metrics driver (an OS process, `bulkhead-metrics`): one worker thread, a task per scrape | 1 with `[metrics]` | daemon (`metrics.rs`), as a native instance | the node's stop |
+| The admin driver (an OS process, `bulkhead-admin`): one worker thread, a task per operator connection; the node's task serving each admin stream | 1 with `[admin]`; 1 per connection | daemon (`remote.rs`), as a native instance | the node's stop; the connection's end |
 | Seed join, identity reload, SIGHUP reload | 1 each if configured | daemon | stop |
 | The HTTP ingress driver (an OS process, `bulkhead-ingress`): worker threads, each a tokio runtime with a task per connection and a certificate timer per HTTPS listener | 1 per node with `[http]`; the largest `acceptors` threads | daemon (`ingress.rs`), as a native instance | the node's stop, before the apps |
 | The resolver driver (an OS process, `bulkhead-resolve`): its callback thread, and a worker thread with a tokio runtime, one stream per nameserver | 1 per member node | daemon (`resolve.rs`), as a native instance, after a first instance started on its own | the node's stop; a restart when `resolv.conf` or hosts changed |
