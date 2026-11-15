@@ -91,24 +91,34 @@ pub fn resolve_built() -> PathBuf {
         .clone()
 }
 
-/// `bulkhead-metrics`, built on first use beside the runner of
-/// [`native_fixtures`]: a node with `[metrics]` starts it (ROADMAP DA7).
+/// One of the node's own driver programs, built on first use beside the
+/// runner of [`native_fixtures`].
+fn driver_built(package: &str, once: &'static OnceLock<PathBuf>) -> PathBuf {
+    once.get_or_init(|| {
+        let target = workspace_root().join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .args(["build", "-p", package, "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap();
+        assert!(status.success(), "building {package} failed");
+        target.join("debug").join(package)
+    })
+    .clone()
+}
+
+/// `bulkhead-metrics`: a node with `[metrics]` starts it (ROADMAP DA7).
 pub fn metrics_built() -> PathBuf {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT
-        .get_or_init(|| {
-            let target = workspace_root().join("target/fixtures/native");
-            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let status = Command::new(cargo)
-                .current_dir(workspace_root())
-                .args(["build", "-p", "bulkhead-metrics", "--target-dir"])
-                .arg(&target)
-                .status()
-                .unwrap();
-            assert!(status.success(), "building bulkhead-metrics failed");
-            target.join("debug/bulkhead-metrics")
-        })
-        .clone()
+    driver_built("bulkhead-metrics", &BUILT)
+}
+
+/// `bulkhead-admin`: a node with `[admin]` starts it (ROADMAP DA7).
+pub fn admin_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    driver_built("bulkhead-admin", &BUILT)
 }
 
 /// Node config from `toml`, with the fixtures' runner and resolver where
@@ -124,6 +134,9 @@ pub fn node_config(toml: &str) -> NodeConfig {
     }
     if config.metrics.is_some() && config.native.metrics.is_none() {
         config.native.metrics = Some(metrics_built());
+    }
+    if config.admin.is_some() && config.native.admin.is_none() {
+        config.native.admin = Some(admin_built());
     }
     config
 }

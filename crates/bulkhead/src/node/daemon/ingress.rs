@@ -46,8 +46,6 @@ pub(super) struct Ingress {
     serving: bool,
     #[cfg(feature = "http")]
     apps: Option<Apps>,
-    #[cfg(feature = "http")]
-    rt: Option<Runtime>,
 }
 
 /// Whether two versions of an app have the same HTTP routes, as both run
@@ -196,7 +194,6 @@ impl Ingress {
             routes: Some(Arc::new(RouteTable::new(rt.clone()))),
             serving: false,
             apps: Some(apps.clone()),
-            rt: Some(rt.clone()),
         };
         let Some(args) = args else {
             return Ok(ingress);
@@ -336,13 +333,6 @@ impl Ingress {
         if self.serving
             && let Some(apps) = &self.apps
         {
-            // A certificate replaced by rename is a new file, not yet the
-            // driver's under the helper.
-            if let Some(rt) = &self.rt {
-                for e in rt.share_driver_files().await {
-                    tracing::warn!(error = %e, "a driver's file not shared with it");
-                }
-            }
             return reload_driver(apps).await;
         }
         (0, Vec::new())

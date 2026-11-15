@@ -295,6 +295,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bulkhead-admin"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-keys",
+ "bulkhead-native",
+ "bulkhead-sdk",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "bulkhead-bundle"
 version = "0.3.0"
 dependencies = [

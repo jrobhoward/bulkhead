@@ -52,7 +52,7 @@
 //! [admin]
 //! address = "10.0.0.1:7443"
 //! operators = "/etc/bulkhead/operators.toml"  # [operators] alice = ["ed25519:..."]
-//! # key = "/etc/bulkhead/node.key"           # default: [cluster] key
+//! key = "/etc/bulkhead/admin.key"            # its own, not [cluster] key: the admin driver holds it
 //!
 //! # Host names: resolved by the bulkhead-resolve driver (ROADMAP DA9),
 //! # never in the node. Every key optional.
@@ -659,6 +659,10 @@ pub const MAX_DRIVER_LISTENERS: usize = 6;
 /// which no bundle and no `[drivers.<app>]` may take.
 pub const INGRESS_APP: &str = "bulkhead-ingress";
 
+/// The app name of the node's own remote admin API (ROADMAP DA7), which
+/// no bundle and no `[drivers.<app>]` may take.
+pub const ADMIN_APP: &str = "bulkhead-admin";
+
 /// The app name of the node's own metrics endpoint (ROADMAP DA7), which
 /// no bundle and no `[drivers.<app>]` may take.
 pub const METRICS_APP: &str = "bulkhead-metrics";
@@ -760,7 +764,8 @@ pub struct AdminBinding {
     /// (`[operators]`, `name = ["ed25519:..."]`). Read again on SIGHUP and
     /// `bulkhead reload-tls`.
     pub operators: PathBuf,
-    /// The node's private key; `[cluster] key` if unset.
+    /// The admin API's private key, which operators pin: required, and
+    /// not `[cluster] key`, since the admin driver holds it (ROADMAP DA7).
     #[serde(default)]
     pub key: Option<PathBuf>,
 }
@@ -908,6 +913,10 @@ pub struct NativeBinding {
     /// starts for `[metrics]` (ROADMAP DA7); unset for the one beside the
     /// runner.
     pub metrics: Option<PathBuf>,
+    /// The `bulkhead-admin` executable, the remote admin API the node
+    /// starts for `[admin]` (ROADMAP DA7); unset for the one beside the
+    /// runner.
+    pub admin: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -939,6 +948,7 @@ impl Default for NativeBinding {
             ingress: None,
             resolve: None,
             metrics: None,
+            admin: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1212,6 +1222,11 @@ impl NodeConfig {
             if app == INGRESS_APP {
                 return invalid(format!(
                     "{INGRESS_APP} is the node's own HTTP ingress, configured by [http]"
+                ));
+            }
+            if app == ADMIN_APP {
+                return invalid(format!(
+                    "{ADMIN_APP} is the node's own remote admin API, configured by [admin]"
                 ));
             }
             if app == METRICS_APP {

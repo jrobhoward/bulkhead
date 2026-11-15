@@ -1,0 +1,27 @@
+[package]
+name = "bulkhead-admin"
+version.workspace = true
+description = "The Bulkhead node's remote admin API as a driver app: TLS with pinned keys terminated outside the node, each connection carried to the node, which checks every request's operator signature"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "bulkhead-admin"
+path = "src/main.rs"
+
+[dependencies]
+bulkhead-keys = { workspace = true }
+bulkhead-native = { workspace = true, features = ["app", "tokio"] }
+bulkhead-sdk = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "net", "time", "sync", "io-util"] }
+tokio-rustls = { workspace = true }
+
+[lints]
+workspace = true

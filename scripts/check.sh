@@ -154,7 +154,7 @@ absent() {
 check_deps() {
     local status=0
     # The HTTP ingress driver is a program the node starts, never a library.
-    absent "bulkhead (every feature)" 'bulkhead-ingress|bulkhead-metrics' -p bulkhead --all-features || status=1
+    absent "bulkhead (every feature)" 'bulkhead-ingress|bulkhead-metrics|bulkhead-admin' -p bulkhead --all-features || status=1
     # The node with its HTTP ingress and nothing else: the ingress's TLS
     # (tokio-rustls) is the driver's.
     absent "bulkhead (node, http)" 'tokio-rustls|bulkhead-ingress' \
@@ -288,6 +288,17 @@ check_conventions() {
     if [ -n "$out" ]; then
         found=1
         echo "the node resolving host names itself (ROADMAP DA9: through bulkhead_host::Names):"
+        echo "$out" | sed 's/^/  /'
+    fi
+
+    # ROADMAP DA7: the node terminates no TLS for operators; the admin
+    # driver does, and the node checks each request's signature.
+    out=$(git ls-files -- 'crates/bulkhead/src/node/*.rs' ':!*_tests.rs' |
+        xargs grep -n -E '\b(TlsAcceptor|admin_server_tls|ServerConfig)\b' |
+        grep -v -E '^[^:]+:[0-9]+:[[:space:]]*//')
+    if [ -n "$out" ]; then
+        found=1
+        echo "the node terminating TLS for operators (ROADMAP DA7: the admin driver does):"
         echo "$out" | sed 's/^/  /'
     fi
 

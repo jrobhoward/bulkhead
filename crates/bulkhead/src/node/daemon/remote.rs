@@ -1,33 +1,42 @@
-//! The admin API for operators on other machines: the same
-//! routes as the admin socket, over TCP with TLS 1.3 and pinned keys.
+//! The admin API for operators on other machines: the same routes as the
+//! admin socket, over TCP with TLS 1.3 and pinned keys.
 //!
-//! The node presents its key (`[admin] key`, or `[cluster] key`); an
-//! operator connects only with a key the operators file lists, and has
-//! every right the admin socket gives. Each request must also carry the
-//! operator's signature (`Bulkhead-Auth`, `bulkhead_keys::signature`),
-//! which the node checks itself, with its own reading of the operators
-//! file: whatever terminates TLS (since ROADMAP DA7 a driver) can then not
-//! act for an operator. Each connection is logged with the operator's
-//! name, each request that changes something (anything but `GET`) is
-//! written to the audit log with the name its signature proves, and each
-//! refused one too. The operators file is read again on SIGHUP and
-//! `bulkhead reload-tls`; connections already open keep going.
+//! Since ROADMAP DA7 the node terminates no TLS for it: the driver
+//! `bulkhead-admin`, a native app of the node's own (`ADMIN_APP`), holds
+//! the admin key (`[admin] key`, a key of its own, never the cluster key)
+//! and the operators file, accepts only an operator's key, and carries each
+//! connection to the node through a stream into its admin API
+//! (`Request::AdminStream`). Each request on it must carry the operator's
+//! signature (`Bulkhead-Auth`, `bulkhead_keys::signature`), which the node
+//! checks itself, with its own reading of the operators file, so the
+//! driver cannot act for an operator. Each request that changes something
+//! (anything but `GET`) is written to the audit log with the name its
+//! signature proves, and each refused one too. The operators file is read
+//! again, by the node and the driver, on SIGHUP and `bulkhead reload-tls`;
+//! connections already open keep going.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use bulkhead_host::transport::quic::{PublicKey, admin_server_tls, parse_operators, presented_key};
+use bulkhead_bundle::manifest::NativeProgram;
+use bulkhead_host::transport::quic::{PublicKey, parse_operators};
+use bulkhead_host::{AppDeployment, DriverListener, DriverProfile, NativeCode};
 use bulkhead_keys::signature::{self, Nonces, Signed};
 use http_body_util::{BodyExt, Full, Limited};
 use serde_json::json;
 
-use super::Node;
+use super::{Node, builtin};
+use crate::node::config::{ADMIN_APP, NodeConfig};
 use crate::node::error::NodeError;
 
-/// How long a client may take to finish the TLS handshake.
-const HANDSHAKE: Duration = Duration::from_secs(10);
+/// The schema of the node's call asking the driver to read the operators
+/// file again (`bulkhead_admin::RELOAD_SCHEMA`).
+const RELOAD_SCHEMA: &str = "bulkhead/admin-reload";
+
+/// How long the node waits for the driver's answer to a reload.
+const RELOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Operators by name, as last read.
 pub(crate) type Operators = Arc<RwLock<BTreeMap<String, Vec<PublicKey>>>>;
@@ -40,19 +49,121 @@ pub(crate) fn read_operators(path: &Path) -> Result<BTreeMap<String, Vec<PublicK
         .map_err(|e| NodeError::Invalid(format!("admin operators {}: {e}", path.display())))
 }
 
-/// The name of the operator whose key `key` is.
-fn operator_of(operators: &Operators, key: &PublicKey) -> Option<String> {
-    operators
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .find(|(_, keys)| keys.contains(key))
-        .map(|(name, _)| name.clone())
+/// The guest path of `file` under `/driver/`, by its name.
+fn under_driver(file: &Path) -> String {
+    format!(
+        "/driver/{}",
+        file.file_name().unwrap_or_default().to_string_lossy()
+    )
+}
+
+/// `[admin] key`: required, and not the cluster key, since the driver
+/// holds it.
+fn admin_key(config: &NodeConfig) -> Result<&PathBuf, NodeError> {
+    let admin = config
+        .admin
+        .as_ref()
+        .ok_or_else(|| NodeError::Internal("no [admin]".into()))?;
+    admin.key.as_ref().ok_or_else(|| {
+        NodeError::Invalid(
+            "[admin] needs a key of its own (key = \"...\", made with `bulkhead cluster \
+             keygen`): the admin driver holds it, and the cluster key stays in the node"
+                .into(),
+        )
+    })
+}
+
+/// The public key of the private key in `path`, read without the file
+/// mode's check: under the helper the admin key is the driver's group's
+/// to read.
+fn public_of(path: &Path) -> Result<PublicKey, NodeError> {
+    let pem = std::fs::read(path)
+        .map_err(|e| NodeError::Invalid(format!("[admin] key {}: {e}", path.display())))?;
+    bulkhead_keys::load_key_pem(&pem)
+        .map(|(_, public)| public)
+        .map_err(|e| NodeError::Invalid(format!("[admin] key {}: {e}", path.display())))
+}
+
+/// `[admin]` bound for the driver: its listener, the key and operators
+/// files, and the right to open admin streams; `None` without `[admin]`.
+///
+/// # Errors
+///
+/// No `[admin] key`, the key the cluster's, the two files of one name, or
+/// the address not bound.
+pub(super) fn bind(config: &NodeConfig) -> Result<Option<DriverProfile>, NodeError> {
+    let Some(admin) = &config.admin else {
+        return Ok(None);
+    };
+    let key = admin_key(config)?;
+    if let Some(cluster) = &config.cluster.key
+        && (cluster == key || public_of(cluster).ok() == Some(public_of(key)?))
+    {
+        return Err(NodeError::Invalid(
+            "[admin] key is the cluster key: the admin driver holds it, so it must be a key of \
+             its own"
+                .into(),
+        ));
+    }
+    if key.file_name() == admin.operators.file_name() {
+        return Err(NodeError::Invalid(
+            "[admin] key and operators have the same file name; the driver reads each by its \
+             file name"
+                .into(),
+        ));
+    }
+    let socket = std::net::TcpListener::bind(admin.address)
+        .map_err(|e| NodeError::Invalid(format!("admin: {}: {e}", admin.address)))?;
+    Ok(Some(DriverProfile {
+        listeners: vec![DriverListener {
+            name: "admin".into(),
+            socket: Arc::new(socket),
+        }],
+        files: vec![key.clone(), admin.operators.clone()],
+        admin: true,
+        ..DriverProfile::default()
+    }))
+}
+
+/// The driver's manifest: one instance, its files by guest path, restarts
+/// that never give up.
+fn manifest(config: &NodeConfig) -> Result<bulkhead_bundle::manifest::AppManifest, NodeError> {
+    let admin = config
+        .admin
+        .as_ref()
+        .ok_or_else(|| NodeError::Internal("no [admin]".into()))?;
+    let spec = json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "instances": { "count": 1 },
+        "lifecycle": { "start_args": {
+            "key": under_driver(admin_key(config)?),
+            "operators": under_driver(&admin.operators),
+        } },
+        "supervision": builtin::supervision(),
+        "limits": { "memory_max": "64MiB" },
+        "messaging_acl": { "accept_from": [ADMIN_APP], "may_call": [ADMIN_APP] },
+    });
+    builtin::manifest(ADMIN_APP, "The node's remote admin API", &spec)
+}
+
+/// The node's server for the driver's streams, kept for the node's life
+/// while the runtime holds it weakly.
+pub(super) struct KeptAdminStreams(
+    #[allow(dead_code, reason = "held, never read: it keeps the closure alive")]
+    bulkhead_host::AdminStreams,
+);
+
+impl std::fmt::Debug for KeptAdminStreams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeptAdminStreams")
+    }
 }
 
 impl Node {
-    /// Read the operators file again, if there is a remote admin API.
-    pub(super) fn reload_operators(&self) -> Result<(), NodeError> {
+    /// Read the operators file again, if there is a remote admin API: the
+    /// node's own reading, and the driver's.
+    pub(super) async fn reload_operators(&self) -> Result<(), NodeError> {
         let Some(admin) = &self.config.admin else {
             return Ok(());
         };
@@ -61,42 +172,102 @@ impl Node {
             .operators
             .write()
             .unwrap_or_else(PoisonError::into_inner) = fresh;
-        Ok(())
+        let Some(driver) = self.apps.app(ADMIN_APP) else {
+            return Ok(());
+        };
+        let msg = bulkhead_host::Envelope {
+            content_type: "application/json".into(),
+            schema: Some(RELOAD_SCHEMA.into()),
+            body: b"{}".to_vec(),
+        };
+        let reply = driver
+            .call(msg, RELOAD_TIMEOUT)
+            .await
+            .map_err(|e| NodeError::Invalid(format!("admin: the driver did not answer: {e}")))?;
+        let answer: serde_json::Value = serde_json::from_slice(&reply.body)
+            .map_err(|e| NodeError::Invalid(format!("admin: the driver's answer: {e}")))?;
+        match answer.get("failed").and_then(serde_json::Value::as_str) {
+            Some(why) => Err(NodeError::Invalid(format!("admin: the driver: {why}"))),
+            None => Ok(()),
+        }
     }
 
-    /// Start the remote admin API on `[admin] address`, if configured; it
-    /// stops with the node.
+    /// Start the remote admin API on `[admin] address`, if configured: the
+    /// node serves the streams the driver opens into it, then starts the
+    /// driver. It stops with the node.
     ///
     /// # Errors
     ///
     /// [`NodeError::Invalid`] if the key or operators file cannot be read,
-    /// or the address cannot be bound.
+    /// or the driver did not start.
     pub async fn start_remote_admin(self: &Arc<Self>) -> Result<(), NodeError> {
-        let Some(admin) = &self.config.admin else {
+        if self.config.admin.is_none() {
             return Ok(());
-        };
-        let key = admin
-            .key
-            .as_ref()
-            .or(self.config.cluster.key.as_ref())
-            .ok_or_else(|| NodeError::Invalid("[admin] needs a key, or [cluster] key".into()))?;
-        self.reload_operators()?;
-        let operators = self.operators.clone();
-        let accepts = Arc::new(move |k: &PublicKey| operator_of(&operators, k).is_some());
-        let (certified, public) = bulkhead_keys::load_key(key)
-            .map_err(|e| NodeError::Invalid(format!("[admin] key: {e}")))?;
-        let tls =
-            admin_server_tls(certified, accepts).map_err(|e| NodeError::Invalid(e.to_string()))?;
+        }
+        let fresh = read_operators(
+            &self
+                .config
+                .admin
+                .as_ref()
+                .ok_or_else(|| NodeError::Internal("no [admin]".into()))?
+                .operators,
+        )?;
+        *self
+            .operators
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = fresh;
         let auth = Arc::new(Auth {
-            node_key: public,
+            node_key: public_of(admin_key(&self.config)?)?,
             nonces: Nonces::default(),
         });
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
-        let listener = tokio::net::TcpListener::bind(admin.address)
-            .await
-            .map_err(|e| NodeError::Invalid(format!("admin: {}: {e}", admin.address)))?;
-        tracing::info!(address = %admin.address, "remote admin API listening");
-        tokio::spawn(serve(self.clone(), listener, acceptor, auth));
+        // Weak: the node keeps this closure, which must not keep the node.
+        let node = Arc::downgrade(self);
+        let serve: bulkhead_host::AdminStreams = Arc::new(move |stream| {
+            let (Some(node), auth) = (node.upgrade(), auth.clone()) else {
+                return;
+            };
+            tokio::spawn(async move {
+                let stream = match stream
+                    .set_nonblocking(true)
+                    .and_then(|()| tokio::net::UnixStream::from_std(stream))
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "an admin stream not served");
+                        return;
+                    }
+                };
+                let service = hyper::service::service_fn(move |req| {
+                    let (node, auth) = (node.clone(), auth.clone());
+                    async move {
+                        Ok::<_, std::convert::Infallible>(handle_signed(&node, &auth, req).await)
+                    }
+                });
+                if let Err(e) = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+                    .await
+                {
+                    tracing::debug!(error = %e, "remote admin connection ended");
+                }
+            });
+        });
+        self.rt.set_admin_streams(&serve);
+        let _ = self.admin_streams.set(KeptAdminStreams(serve));
+        let program = builtin::program(&self.config, self.config.native.admin.as_ref(), ADMIN_APP);
+        if !program.is_file() {
+            return Err(NodeError::Invalid(format!(
+                "[admin] needs {ADMIN_APP}, and {} is not it (install it beside \
+                 bulkhead-runner, or set [native] admin)",
+                program.display()
+            )));
+        }
+        let code = self.rt.load_native(NativeCode {
+            path: program,
+            kind: NativeProgram::Executable,
+        });
+        let deployment = AppDeployment::new(manifest(&self.config)?, code);
+        builtin::start(&self.rt, &self.apps, deployment).await?;
+        tracing::info!("remote admin API driver started");
         Ok(())
     }
 }
@@ -177,57 +348,5 @@ pub(crate) async fn handle_signed(
             crate::node::server::handle(node, hyper::Request::from_parts(parts, Full::new(bytes)))
                 .await
         }
-    }
-}
-
-async fn serve(
-    node: Arc<Node>,
-    listener: tokio::net::TcpListener,
-    acceptor: tokio_rustls::TlsAcceptor,
-    auth: Arc<Auth>,
-) {
-    let mut stop = node.stop.subscribe();
-    loop {
-        let (stream, peer) = tokio::select! {
-            _ = stop.wait_for(|s| *s) => return,
-            accepted = listener.accept() => match accepted {
-                Ok(a) => a,
-                Err(e) => {
-                    tracing::warn!(error = %e, "remote admin accept failed");
-                    continue;
-                }
-            },
-        };
-        let (node, acceptor, auth) = (node.clone(), acceptor.clone(), auth.clone());
-        tokio::spawn(async move {
-            let tls = match tokio::time::timeout(HANDSHAKE, acceptor.accept(stream)).await {
-                Ok(Ok(tls)) => tls,
-                Ok(Err(e)) => {
-                    tracing::info!(%peer, error = %e, "remote admin handshake refused");
-                    return;
-                }
-                Err(_) => {
-                    tracing::info!(%peer, "remote admin handshake timed out");
-                    return;
-                }
-            };
-            let key = presented_key(tls.get_ref().1.peer_certificates());
-            let Some(operator) = key.and_then(|k| operator_of(&node.operators, &k)) else {
-                // The verifier accepted the key, but a reload removed it since.
-                return;
-            };
-            tracing::info!(%peer, operator, "remote admin connection");
-            let service = hyper::service::service_fn(move |req: hyper::Request<_>| {
-                let (node, auth) = (node.clone(), auth.clone());
-                async move { Ok::<_, std::convert::Infallible>(handle_signed(&node, &auth, req).await) }
-            });
-            let io = hyper_util::rt::TokioIo::new(tls);
-            if let Err(e) = hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, service)
-                .await
-            {
-                tracing::debug!(error = %e, "remote admin connection ended");
-            }
-        });
     }
 }

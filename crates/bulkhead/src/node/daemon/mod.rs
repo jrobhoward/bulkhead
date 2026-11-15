@@ -90,6 +90,10 @@ pub struct Node {
     /// How the metrics driver's text is rendered, given to the runtime
     /// (which holds it weakly).
     metrics_text: std::sync::OnceLock<KeptMetricsText>,
+    /// The server for the admin driver's streams, given to the runtime
+    /// (which holds it weakly).
+    #[cfg(feature = "tls")]
+    admin_streams: std::sync::OnceLock<remote::KeptAdminStreams>,
 }
 
 #[derive(Debug, Default)]
@@ -181,6 +185,10 @@ impl Node {
         let mut drivers = bind_drivers(&config)?;
         if let Some(profile) = metrics::bind(&config)? {
             drivers.insert(crate::node::config::METRICS_APP.to_string(), profile);
+        }
+        #[cfg(feature = "tls")]
+        if let Some(profile) = remote::bind(&config)? {
+            drivers.insert(crate::node::config::ADMIN_APP.to_string(), profile);
         }
         let ingress_args = ingress::bind(&config)?.map(|(profile, args)| {
             drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
@@ -323,6 +331,8 @@ impl Node {
             elsewhere: std::sync::OnceLock::new(),
             leadership: tokio::sync::watch::channel(0).0,
             metrics_text: std::sync::OnceLock::new(),
+            #[cfg(feature = "tls")]
+            admin_streams: std::sync::OnceLock::new(),
             config,
         };
         node.resolver.watch(node.stop.subscribe());
@@ -408,6 +418,11 @@ impl Node {
     ///
     /// [`NodeError::Invalid`] naming each ingress that failed.
     pub async fn reload_tls(&self) -> Result<Done, NodeError> {
+        // A file replaced by rename is not yet its driver's under the
+        // helper.
+        for e in self.rt.share_driver_files().await {
+            tracing::warn!(error = %e, "a driver's file not shared with it");
+        }
         let (ingresses, mut failed) = self.ingress.reload_tls().await;
         match self.resolver.reload().await {
             Ok(true) => tracing::info!("resolver restarted with changed resolv.conf or hosts"),
@@ -415,7 +430,7 @@ impl Node {
             Err(e) => failed.push(format!("resolver: {e}")),
         }
         #[cfg(feature = "tls")]
-        if let Err(e) = self.reload_operators() {
+        if let Err(e) = self.reload_operators().await {
             failed.push(e.to_string());
         }
         let quic = self

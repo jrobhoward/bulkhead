@@ -7,6 +7,7 @@
 #   install -m 0755 target/release/bulkhead-resolve /usr/local/bin/bulkhead-resolve  # host names
 #   install -m 0755 target/release/bulkhead-ingress /usr/local/bin/bulkhead-ingress  # with [http]
 #   install -m 0755 target/release/bulkhead-metrics /usr/local/bin/bulkhead-metrics  # with [metrics]
+#   install -m 0755 target/release/bulkhead-admin /usr/local/bin/bulkhead-admin  # with [admin]
 #   install -d -m 0750 -o root -g bulkhead /etc/bulkhead     # node.toml, policy, keys
 #   install -m 0644 examples/systemd/bulkhead.service /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now bulkhead

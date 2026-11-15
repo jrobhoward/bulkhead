@@ -8,6 +8,21 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The remote admin API's TLS runs outside the node (ROADMAP DA7, step 4):
+  for `[admin]` the node binds the address and starts `bulkhead-admin` as
+  an app of its own (beside the runner, or `[native] admin`), which holds
+  the admin key and the operators file, accepts only an operator's key,
+  and carries each connection to the node through a stream into its admin
+  API, where every request's signature is checked as before. The node
+  serves no TLS for operators. **`[admin] key` is now required and must
+  not be the cluster key** (by path or by key): a node using the default
+  refuses to start; make one with `bulkhead cluster keygen` and give
+  operators its public key to pin (`--node-key`). The driver and the node
+  each read the operators file again on SIGHUP and `bulkhead reload-tls`.
+  `bulkhead-admin` is a reserved app name. `scripts/check.sh` fails on a
+  TLS server for operators in the node's source and on the driver in its
+  tree.
+
 - The metrics endpoint runs outside the node (ROADMAP DA7, step 3): for
   `[metrics]` the node binds the address and starts `bulkhead-metrics` as
   an app of its own (beside the runner, or `[native] metrics`; a node

@@ -285,6 +285,11 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   with raw public keys, the operators file, and the remote admin request
   signature (`signature`: the CLI signs, the node verifies, ROADMAP DA7).
   Shared by the node, the CLI and drivers; no tokio.
+- `crates/bulkhead-admin`: the remote admin API's TLS as a driver app
+  (ROADMAP DA7): accepts only operators' keys, then copies bytes between
+  the TLS stream and a stream into the node's admin API
+  (`Request::AdminStream`), where the node checks each request's
+  signature (`daemon/remote.rs`, `handle_signed`).
 - `crates/bulkhead-metrics`: the metrics endpoint as a driver app (ROADMAP
   DA7): hyper serving `GET /metrics` on the listener the node passes, the
   text asked of the node (`Request::MetricsText`) on each scrape.

@@ -1,7 +1,8 @@
-//! The remote admin API: TLS 1.3 with pinned keys both ways, each request
-//! signed by the operator's key and checked by the node (ROADMAP DA7), the
-//! same routes as the admin socket, changes audited with the operator's
-//! name, and the operators file read again on reload.
+//! The remote admin API: TLS 1.3 with pinned keys both ways, terminated by
+//! the node's admin driver (`bulkhead-admin`, ROADMAP DA7), each request
+//! signed by the operator's key and checked by the node, the same routes as
+//! the admin socket, changes audited with the operator's name, and the
+//! operators file read again, by both, on reload.
 
 #![cfg(unix)]
 #![allow(non_snake_case)]
@@ -321,4 +322,56 @@ async fn remote_admin____deploy_a_bundle____its_body_signed_and_the_app_runs() {
     assert!(deployed.is_ok(), "{deployed:?}");
     assert!(apps.iter().any(|a| a.name == "echoer"), "{apps:?}");
     r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____driver_killed____restarted_and_operators_served_again() {
+    let mut r = Remote::start().await;
+    let alice = r.client(&r.alice, r.node_key.clone());
+    alice.list().await.unwrap();
+    let driver = r
+        .node
+        .client
+        .ps()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.app == "bulkhead-admin")
+        .unwrap()
+        .pid;
+
+    r.node.client.kill(&driver).await.unwrap();
+    let mut after = alice.list().await;
+    for _ in 0..100 {
+        if after.is_ok() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        after = alice.list().await;
+    }
+
+    assert!(after.is_ok(), "{after:?}");
+    r.node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_admin____the_cluster_key_as_admin_key____refused_at_start() {
+    let keys = tempfile::tempdir().unwrap();
+    let (node_key, _) = key(keys.path(), "node");
+    let (_, alice) = key(keys.path(), "alice");
+    let ops = keys.path().join("operators.toml");
+    operators(&ops, &[("alice", &alice)]);
+    let toml = format!(
+        "data_dir = {:?}\n[admin]\naddress = \"{}\"\noperators = {ops:?}\nkey = {node_key:?}\n\
+         [cluster]\nkey = {node_key:?}\n",
+        keys.path().join("data"),
+        free_tcp(),
+    );
+
+    let opened = bulkhead::node::Node::open(common::node_config(&toml), common::ring()).await;
+
+    let Err(e) = opened else {
+        panic!("a node opened with the cluster key as its admin key");
+    };
+    assert!(e.to_string().contains("cluster key"), "{e}");
 }
