@@ -149,8 +149,7 @@ absent() {
 
 # ROADMAP CR1: protocol stacks that parse outside input leave the node for
 # driver apps, and stay out. hyper stays in the node for the admin socket
-# and its client, TLS for the remote admin API (until DA7), SQL and egress
-# until DA6 decides them.
+# and its client; egress stays (DA6).
 check_deps() {
     local status=0
     # The drivers are programs the node starts, never libraries.
@@ -162,6 +161,10 @@ check_deps() {
     # The runtime alone has no HTTP server or client, no TLS stream.
     absent "bulkhead-host (no features)" 'hyper|hyper-util|http-body-util|tokio-rustls' \
         -p bulkhead-host --no-default-features || status=1
+    # Postgres's client is each datasource's driver's (DA3): none in the
+    # node, nor its TLS for databases.
+    absent "bulkhead (every feature)" 'tokio-postgres|postgres-protocol|deadpool-postgres|deadpool|tokio-postgres-rustls' \
+        -p bulkhead --all-features || status=1
     # DNS is the resolver driver's (DA9): no DNS library in the node.
     absent "bulkhead (every feature)" 'bulkhead-resolve|hickory-.*|resolv-conf' \
         -p bulkhead --all-features || status=1

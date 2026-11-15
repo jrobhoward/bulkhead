@@ -604,6 +604,10 @@ fn NodeConfig____bad_datasource____refused() {
             "ca_file is only for tls \"require\"",
         ),
         ("pool_size = 0\n", "must be more than 0"),
+        (
+            "tls = \"require\"\nca_file = \"ca.pem\"\n",
+            "ca_file must be an absolute path",
+        ),
     ];
 
     let errors: Vec<(String, &str)> = cases
@@ -621,6 +625,37 @@ fn NodeConfig____bad_datasource____refused() {
         assert!(err.contains("datasources.main"), "{err}");
         assert!(err.contains(want), "{err}");
     }
+}
+
+#[test]
+fn NodeConfig____datasource_secret_file_relative_or_name_not_an_app_name____refused() {
+    let relative = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[secrets.pg]\nfile = \"pg.txt\"\n\
+         [datasources.main]\nhost = \"db\"\ndbname = \"app\"\nuser = \"app\"\npassword_secret = \"pg\"\n",
+    )
+    .unwrap_err()
+    .to_string();
+    let named = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[datasources.Main]\nhost = \"db\"\ndbname = \"app\"\nuser = \"app\"\n",
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        relative.contains("its file must be an absolute path"),
+        "{relative}"
+    );
+    assert!(named.contains("its driver is an app"), "{named}");
+}
+
+#[test]
+fn NodeConfig____a_driver_named_as_a_datasources_driver____refused() {
+    let err =
+        NodeConfig::from_toml_str("data_dir = \"/d\"\n[drivers.bulkhead-sql-main]\nfiles = []\n")
+            .unwrap_err()
+            .to_string();
+
+    assert!(err.contains("a datasource's own driver"), "{err}");
 }
 
 #[test]

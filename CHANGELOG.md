@@ -8,6 +8,31 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- SQL runs outside the node (ROADMAP DA3, step 4): for each
+  `[datasources.<name>]` the node starts `bulkhead-sql` as the app
+  `bulkhead-sql-<name>` (beside the runner, or the new `[native] sql`),
+  with one instance, the supervisor that never gives up, and messages
+  from itself alone, so no app reaches it but through the node. The node
+  connects it to the datasource's one address on request (the host name
+  resolved on each new connection, no longer once per pool) and lets it
+  read the password and CA files under `/driver/`; a password from the
+  node's environment is passed as the value. `bulkhead:sql` keeps its
+  checks, its per-app connection caps and the instance's transactions in
+  the node, and forwards each statement to the driver: a transaction's
+  statements go to the driver instance that began it, so after the
+  driver restarts they answer `ended`; one open when its instance exits
+  is rolled back by a cast to the driver. The apps' interface is
+  unchanged. **Install `bulkhead-sql` with the node where datasources are
+  configured**; a node with datasources and no driver program refuses to
+  start. Names starting `bulkhead-sql-` are reserved: no bundle and no
+  `[drivers.<app>]` may take one, and a datasource's name must make a
+  valid app name. A datasource's `ca_file` and its password secret's
+  file must be absolute paths. `bulkhead-host` no longer depends on
+  tokio-postgres, deadpool-postgres or tokio-postgres-rustls (checked by
+  `scripts/check.sh deps`); `SqlDatasource` gained `driver_app`,
+  `endpoint`, `driver_profile`, `driver_args` and `call_timeout`, and a
+  runtime gives each datasource's driver its profile.
+
 - New crate `bulkhead-sql` (ROADMAP DA3, step 3): a datasource's Postgres
   client as a driver app, not yet started by the node. It takes the
   node's requests as calls (schema `bulkhead/sql`, the protocol's

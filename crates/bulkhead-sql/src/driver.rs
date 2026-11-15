@@ -58,10 +58,11 @@ struct Metrics {
 }
 
 impl Metrics {
-    fn register(sender: &mut Sender) -> Option<Self> {
+    fn register(sender: &mut Sender, datasource: &str) -> Option<Self> {
+        let labels = [("datasource", datasource)];
         let mut counter = |name: &str, help: &str| {
             sender
-                .register_metric(MetricKind::Counter, name, help, &[], &[])
+                .register_metric(MetricKind::Counter, name, help, &labels, &[])
                 .map_err(|e| bulkhead_sdk::warn!("no metric {name}: {e:?}"))
                 .ok()
         };
@@ -114,7 +115,7 @@ impl App for Sql {
         let mut sender = bulkhead_native::app::Ctx::current()
             .sender()
             .map_err(|e| format!("sender channel: {e:?}"))?;
-        let metrics = Metrics::register(&mut sender);
+        let metrics = Metrics::register(&mut sender, &config.datasource);
         let (jobs, jobs_rx) = mpsc::unbounded_channel();
         let start = Start {
             sender,

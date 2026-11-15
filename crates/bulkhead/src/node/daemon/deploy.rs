@@ -183,6 +183,12 @@ impl Node {
                 "{name} is the node's own resolver of host names; no bundle may take its name"
             )));
         }
+        if name.starts_with(bulkhead_host::SQL_DRIVER_PREFIX) {
+            return Err(NodeError::Refused(format!(
+                "{name}: names starting {} are the datasources' own drivers; no bundle may take one",
+                bulkhead_host::SQL_DRIVER_PREFIX
+            )));
+        }
         let rt = self.rt.clone();
         let program = bundle.program.clone();
         // A program is written where only the node can change it.

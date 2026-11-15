@@ -68,7 +68,8 @@ pub use bulkhead_bundle::manifest::{RestartType, Strategy};
 pub use bulkhead_bundle::manifest::{cidr_contains, parse_cidr};
 pub use config::{
     DriverEndpoint, DriverListener, DriverProfile, Egress, HostObjectRequest, HostObjects,
-    NativeConfig, RuntimeConfig, SecretSource, SharedBucket, SqlDatasource, SqlTls,
+    NativeConfig, RuntimeConfig, SQL_DRIVER_PREFIX, SecretSource, SharedBucket, SqlDatasource,
+    SqlTls,
 };
 pub use error::HostError;
 pub use formats::{FIRST_FORMATS, FinalizeRefused, Finalized};

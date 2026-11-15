@@ -7,7 +7,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::apps::{self, AppDeployment, Apps};
-use crate::config::{HostObjects, NativeConfig, RuntimeConfig};
+use crate::config::{HostObjects, NativeConfig, RuntimeConfig, SqlDatasource};
 use crate::delivery::{self, Origin};
 use crate::error::HostError;
 use crate::instance::{self, InstanceEvent, InstanceHandle};
@@ -308,9 +308,17 @@ impl Runtime {
     /// As for [`Runtime::new`], and [`HostError::Engine`] for an extension
     /// whose package is not a valid extension key or is served twice.
     pub fn with_extensions(
-        config: RuntimeConfig,
+        mut config: RuntimeConfig,
         extensions: Vec<Arc<dyn Extension>>,
     ) -> Result<Self, HostError> {
+        // Each datasource's driver gets its connection and files (ROADMAP
+        // DA3), unless the configuration gives it a profile itself.
+        for (name, ds) in &config.datasources {
+            config
+                .drivers
+                .entry(SqlDatasource::driver_app(name))
+                .or_insert_with(|| ds.driver_profile());
+        }
         if !(1..=crate::pid::MAX_CREATION).contains(&config.creation) {
             return Err(HostError::Engine(format!(
                 "creation {} is outside 1..={}",
@@ -379,6 +387,7 @@ impl Runtime {
         });
         inner.services.groups().attach(&inner);
         inner.services.names().attach(&inner);
+        inner.services.sql().attach(&inner);
         Ok(Self { inner })
     }
 

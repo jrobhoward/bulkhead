@@ -121,6 +121,13 @@ pub fn admin_built() -> PathBuf {
     driver_built("bulkhead-admin", &BUILT)
 }
 
+/// `bulkhead-sql`: a node with `[datasources]` starts it for each
+/// (ROADMAP DA3).
+pub fn sql_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    driver_built("bulkhead-sql", &BUILT)
+}
+
 /// Node config from `toml`, with the fixtures' runner and resolver where
 /// it names none: a member node runs its resolver of host names as a
 /// native instance, so every test node needs both.
@@ -137,6 +144,9 @@ pub fn node_config(toml: &str) -> NodeConfig {
     }
     if config.admin.is_some() && config.native.admin.is_none() {
         config.native.admin = Some(admin_built());
+    }
+    if !config.datasources.is_empty() && config.native.sql.is_none() {
+        config.native.sql = Some(sql_built());
     }
     config
 }
@@ -157,7 +167,10 @@ pub async fn ps(client: &Client) -> Vec<bulkhead::api::InstanceInfo> {
         .await
         .unwrap()
         .into_iter()
-        .filter(|i| !NODE_DRIVERS.contains(&i.app.as_str()))
+        .filter(|i| {
+            !NODE_DRIVERS.contains(&i.app.as_str())
+                && !i.app.starts_with(bulkhead_host::SQL_DRIVER_PREFIX)
+        })
         .collect()
 }
 

@@ -26,6 +26,8 @@ cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \
   -p bulkhead-native --bin bulkhead-runner
 # And its resolver of host names (bulkhead-resolve), also beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-resolve
+# And each datasource's driver (bulkhead-sql), for chapter 4.
+cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-sql
 BOARD_DIR="$ROOT/examples/board"
 BOARD_PROGRAM="$ROOT/target/release/example-board"
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \

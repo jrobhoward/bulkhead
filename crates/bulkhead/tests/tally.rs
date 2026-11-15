@@ -202,3 +202,24 @@ async fn tally____on_postgres____counts_in_transactions_and_outlives_the_app() {
     );
     node.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn node____datasources_without_the_driver_program____refuses_to_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = format!(
+        "data_dir = {:?}\n\
+         [datasources.main]\nhost = \"/run/postgresql\"\ndbname = \"postgres\"\nuser = \"bulkhead\"\n\
+         {}sql = \"/nonexistent/bulkhead-sql\"\n",
+        dir.path().join("data"),
+        node_extra(),
+    );
+
+    let got = Node::open(common::node_config(&toml), LogRing::new(100)).await;
+
+    let Err(err) = got else {
+        panic!("the node started");
+    };
+    let err = err.to_string();
+    assert!(err.contains("bulkhead-sql"), "{err}");
+    assert!(err.contains("[native] sql"), "{err}");
+}

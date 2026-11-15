@@ -9,6 +9,9 @@
 #   dbname = "tally"
 #   user = "tally"
 #
+# The node runs the datasource's driver, bulkhead-sql, installed beside
+# bulkhead-runner (or [native] sql).
+#
 # and in policy:
 #
 #   [apps.tally]

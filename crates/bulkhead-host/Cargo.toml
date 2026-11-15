@@ -11,12 +11,13 @@ publish = false
 
 [features]
 default = ["sql", "egress"]
-# SQL datasources (`bulkhead:sql`): a Postgres pool per datasource
-# in node config. Idle without one.
 # HTTP egress (`bulkhead:http-egress`): a filtering
 # sender with a connection pool. Without it, the interface is deny-stubbed.
 egress = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:hyper-rustls", "dep:rustls-native-certs", "dep:tower-service", "hyper-util/client-legacy", "hyper-util/http1"]
-sql = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:tokio-postgres-rustls", "dep:futures-util"]
+# SQL datasources (`bulkhead:sql`): each app's statements forwarded to its
+# datasource's driver (`bulkhead-sql`, ROADMAP DA3), which runs Postgres's
+# client outside the node.
+sql = []
 # USDT probes on the message path (`src/probe.rs`): SystemTap SDT on Linux,
 # DTrace on macOS and FreeBSD, ETW on Windows. Without it the probe calls
 # compile to nothing.
@@ -43,10 +44,6 @@ rustls-webpki = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 rustls-pki-types = { workspace = true }
-tokio-postgres = { workspace = true, optional = true }
-deadpool-postgres = { workspace = true, optional = true }
-tokio-postgres-rustls = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
 bulkhead-bundle = { workspace = true }
 bulkhead-keys = { workspace = true }
 bulkhead-native = { workspace = true, features = ["channel"] }

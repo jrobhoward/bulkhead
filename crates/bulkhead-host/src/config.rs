@@ -133,6 +133,14 @@ pub enum SecretSource {
 /// A SQL datasource the node binds (`[datasources.<name>]`):
 /// a Postgres database, pooled. Apps name it; they never see its address
 /// or credentials.
+///
+/// Since ROADMAP DA3 its client is the driver `bulkhead-sql`, an app of
+/// its own ([`SqlDatasource::driver_app`]) that the node starts: the
+/// runtime gives that app the profile [`SqlDatasource::driver_profile`]
+/// (the connection to this address, the password and CA files) and
+/// forwards each app's statements to it, keeping the app's connection cap
+/// and its transactions itself. [`SqlDatasource::driver_args`] are the
+/// driver's init arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SqlDatasource {
     /// Host name or address; a path (starting `/`) is a Unix socket
@@ -149,7 +157,7 @@ pub struct SqlDatasource {
     pub password: Option<SecretSource>,
     /// TLS to the server.
     pub tls: SqlTls,
-    /// Most connections the node opens to it, for every app together.
+    /// Most connections its driver opens to it, for every app together.
     pub pool_size: usize,
     /// Time allowed to open a connection.
     pub connect_timeout: Duration,
@@ -186,7 +194,122 @@ impl SqlDatasource {
             max_result_bytes: 16 << 20,
         }
     }
+
+    /// The driver app serving datasource `name`.
+    #[must_use]
+    pub fn driver_app(name: &str) -> String {
+        format!("{SQL_DRIVER_PREFIX}{name}")
+    }
+
+    /// Where the node connects the driver: the Unix socket
+    /// `<host>/.s.PGSQL.<port>` for a directory, else TCP to the host
+    /// (its name resolved on each connect) and port.
+    #[must_use]
+    pub fn endpoint(&self) -> DriverEndpoint {
+        if self.host.starts_with('/') {
+            DriverEndpoint::Unix(PathBuf::from(&self.host).join(format!(".s.PGSQL.{}", self.port)))
+        } else {
+            DriverEndpoint::Tcp {
+                host: self.host.clone(),
+                port: self.port,
+                timeout: self.connect_timeout,
+            }
+        }
+    }
+
+    /// The files the driver reads: the password file and the CA file.
+    fn driver_files(&self) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        if let Some(SecretSource::File(path)) = &self.password {
+            files.push(path.clone());
+        }
+        if let SqlTls::Require { ca_file } = &self.tls {
+            files.push(ca_file.clone());
+        }
+        files
+    }
+
+    /// The driver's profile: the connection to [`SqlDatasource::endpoint`]
+    /// and its files, nothing else.
+    #[must_use]
+    pub fn driver_profile(&self) -> DriverProfile {
+        DriverProfile {
+            files: self.driver_files(),
+            connect: Some(self.endpoint()),
+            ..DriverProfile::default()
+        }
+    }
+
+    /// How long the node waits for the driver's answer: longer than the
+    /// driver itself may take (a free connection, a new one opened and
+    /// reset, the statement), so a transaction it began is never left
+    /// unknown to the node.
+    #[must_use]
+    pub fn call_timeout(&self) -> Duration {
+        self.acquire_timeout + self.connect_timeout * 2 + self.statement_timeout + CALL_MARGIN
+    }
+
+    /// The driver's init arguments for datasource `name`
+    /// (`bulkhead_sql::config::Config`): files by their path under
+    /// `/driver/`; a password from the node's environment as its value.
+    ///
+    /// # Errors
+    ///
+    /// The password's variable is not set or not UTF-8, or the password
+    /// and CA files have the same file name.
+    pub fn driver_args(&self, name: &str) -> Result<serde_json::Value, String> {
+        let under_driver = |path: &std::path::Path| {
+            path.file_name()
+                .map(|f| format!("/driver/{}", f.to_string_lossy()))
+                .ok_or_else(|| format!("datasource {name}: {} names no file", path.display()))
+        };
+        let files = self.driver_files();
+        let names: std::collections::BTreeSet<_> =
+            files.iter().filter_map(|f| f.file_name()).collect();
+        if names.len() != files.len() {
+            return Err(format!(
+                "datasource {name}: its password and CA files have the same file name"
+            ));
+        }
+        let password = match &self.password {
+            None => serde_json::Value::Null,
+            Some(SecretSource::File(path)) => serde_json::json!({ "file": under_driver(path)? }),
+            Some(SecretSource::Env(var)) => {
+                let value = std::env::var(var)
+                    .map_err(|e| format!("datasource {name}: password variable {var}: {e}"))?;
+                serde_json::json!({ "value": value })
+            }
+        };
+        let tls = match &self.tls {
+            SqlTls::Disable => serde_json::json!("disable"),
+            SqlTls::Require { ca_file } => {
+                serde_json::json!({ "require": { "ca_file": under_driver(ca_file)? } })
+            }
+        };
+        let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+        Ok(serde_json::json!({
+            "datasource": name,
+            "host": self.host,
+            "transport": if self.host.starts_with('/') { "unix" } else { "tcp" },
+            "dbname": self.dbname,
+            "user": self.user,
+            "password": password,
+            "tls": tls,
+            "pool_size": self.pool_size.max(1),
+            "connect_timeout_ms": ms(self.connect_timeout),
+            "acquire_timeout_ms": ms(self.acquire_timeout),
+            "statement_timeout_ms": ms(self.statement_timeout),
+            "max_result_bytes": self.max_result_bytes,
+        }))
+    }
 }
+
+/// The prefix of a datasource's driver app (`bulkhead-sql-<datasource>`),
+/// reserved for those apps.
+pub const SQL_DRIVER_PREFIX: &str = "bulkhead-sql-";
+
+/// What [`SqlDatasource::call_timeout`] adds to the driver's own bound.
+const CALL_MARGIN: Duration = Duration::from_secs(5);
 
 /// TLS to a SQL datasource.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -481,3 +604,7 @@ impl Default for RuntimeConfig {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;

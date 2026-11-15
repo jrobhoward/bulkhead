@@ -43,21 +43,26 @@ fn spec(app: &str, ds: &str, cap: u32, granted: bool) -> InstanceSpec {
     s
 }
 
-fn runtime(datasources: BTreeMap<String, SqlDatasource>) -> (Runtime, LoadedApp) {
+/// A runtime with `datasources`, each one's driver started, and the
+/// fixture loaded.
+async fn runtime(
+    datasources: BTreeMap<String, SqlDatasource>,
+) -> (Runtime, LoadedApp, bulkhead_host::Apps) {
     let rt = Runtime::new(RuntimeConfig {
         max_instances: 16,
-        datasources,
+        datasources: datasources.clone(),
         native: common::native_config(),
         ..RuntimeConfig::default()
     })
     .unwrap();
     let app = common::sdk_app(&rt);
-    (rt, app)
+    let apps = common::sql_drivers(&rt, &datasources).await;
+    (rt, app, apps)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sql____not_granted_unlisted_or_unbound____access_denied_or_not_found() {
-    let (rt, app) = runtime(BTreeMap::new());
+    let (rt, app, _apps) = runtime(BTreeMap::new()).await;
     let not_granted = rt.spawn(&app, spec("a", "main", 1, false)).unwrap();
     let listed = rt.spawn(&app, spec("b", "main", 1, true)).unwrap();
 
@@ -89,10 +94,13 @@ fn datasource(pg: &Scratch) -> SqlDatasource {
 
 /// A runtime with datasource `main` on `pg` (adjusted by `tune`), the
 /// fixture loaded.
-fn with(pg: &Scratch, tune: impl FnOnce(&mut SqlDatasource)) -> (Runtime, LoadedApp) {
+async fn with(
+    pg: &Scratch,
+    tune: impl FnOnce(&mut SqlDatasource),
+) -> (Runtime, LoadedApp, bulkhead_host::Apps) {
     let mut ds = datasource(pg);
     tune(&mut ds);
-    runtime(BTreeMap::from([("main".to_string(), ds)]))
+    runtime(BTreeMap::from([("main".to_string(), ds)])).await
 }
 
 fn up(rt: &Runtime, app: &LoadedApp, name: &str, cap: u32) -> InstanceHandle {
@@ -102,10 +110,11 @@ fn up(rt: &Runtime, app: &LoadedApp, name: &str, cap: u32) -> InstanceHandle {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____statements_against_postgres____values_errors_and_limits() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg, |ds| {
+    let (rt, app, _apps) = with(&pg, |ds| {
         ds.statement_timeout = Duration::from_millis(300);
         ds.max_result_bytes = 4_096;
-    });
+    })
+    .await;
     let a = up(&rt, &app, "a", 2);
     let created = ask(
         &a,
@@ -184,7 +193,7 @@ async fn sql____statements_against_postgres____values_errors_and_limits() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____transactions____commit_seen_rollback_and_drop_not() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg, |_| {});
+    let (rt, app, _apps) = with(&pg, |_| {}).await;
     let a = up(&rt, &app, "a", 2);
     ask(&a, &sql(&["exec", "main", "CREATE TABLE n (v int)"])).await;
     let count = || sql(&["query", "main", "SELECT count(*)::int AS c FROM n"]);
@@ -214,7 +223,7 @@ async fn sql____transactions____commit_seen_rollback_and_drop_not() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____app_cap_reached____limit_reached_until_the_holder_exits() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg, |_| {});
+    let (rt, app, _apps) = with(&pg, |_| {}).await;
     let holder = up(&rt, &app, "capped", 1);
     let other = up(&rt, &app, "capped", 1);
     let another_app = up(&rt, &app, "free", 1);
@@ -247,7 +256,7 @@ async fn sql____app_cap_reached____limit_reached_until_the_holder_exits() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____session_state_set_by_one_call____not_seen_by_the_next() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg, |ds| ds.pool_size = 1);
+    let (rt, app, _apps) = with(&pg, |ds| ds.pool_size = 1).await;
     let a = up(&rt, &app, "a", 1);
     let b = up(&rt, &app, "b", 1);
 
@@ -272,9 +281,10 @@ async fn sql____datasource_by_host_name____resolved_through_the_runtime_and_conn
     };
     let mut ds = SqlDatasource::new("db.test", "postgres", "bulkhead");
     ds.port = pg.port();
+    let datasources = BTreeMap::from([("main".to_string(), ds)]);
     let rt = Runtime::new(RuntimeConfig {
         max_instances: 16,
-        datasources: BTreeMap::from([("main".to_string(), ds)]),
+        datasources: datasources.clone(),
         native: common::native_config(),
         // As a node's resolver driver would answer (ROADMAP DA9).
         resolver: bulkhead_host::Resolver::Table(BTreeMap::from([(
@@ -285,6 +295,7 @@ async fn sql____datasource_by_host_name____resolved_through_the_runtime_and_conn
     })
     .unwrap();
     let app = common::sdk_app(&rt);
+    let _apps = common::sql_drivers(&rt, &datasources).await;
     let a = up(&rt, &app, "a", 1);
 
     let answered = ask(&a, &sql(&["query", "main", "SELECT 41 + 1"])).await;
@@ -297,20 +308,91 @@ async fn sql____datasource_by_host_name____resolved_through_the_runtime_and_conn
 async fn sql____datasource_host_name_unknown____unavailable_naming_it() {
     let mut ds = SqlDatasource::new("nowhere.test", "postgres", "bulkhead");
     ds.connect_timeout = Duration::from_millis(500);
+    let datasources = BTreeMap::from([("main".to_string(), ds)]);
     let rt = Runtime::new(RuntimeConfig {
         max_instances: 16,
-        datasources: BTreeMap::from([("main".to_string(), ds)]),
+        datasources: datasources.clone(),
         native: common::native_config(),
         resolver: bulkhead_host::Resolver::Table(BTreeMap::new()),
         ..RuntimeConfig::default()
     })
     .unwrap();
     let app = common::sdk_app(&rt);
+    let _apps = common::sql_drivers(&rt, &datasources).await;
     let a = up(&rt, &app, "a", 1);
 
     let answered = ask(&a, &sql(&["query", "main", "SELECT 1"])).await;
 
     assert!(answered.starts_with("err:Unavailable"), "{answered}");
     assert!(answered.contains("nowhere.test"), "{answered}");
+    a.kill();
+}
+
+/// A spec for app `app` using datasources `main` and `other`.
+fn spec_both(app: &str) -> InstanceSpec {
+    let mut s = spec(app, "main", 1, true);
+    s.services.sql.datasources.insert("other".into(), 1);
+    s
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sql____two_datasources____each_its_own_driver_and_database() {
+    let Some(pg) = Scratch::start() else { return };
+    let (rt, app, apps) = runtime(BTreeMap::from([
+        ("main".to_string(), datasource(&pg)),
+        ("other".to_string(), {
+            let mut ds = datasource(&pg);
+            ds.dbname = "template1".into();
+            ds
+        }),
+    ]))
+    .await;
+    let a = rt.spawn(&app, spec_both("a")).unwrap();
+
+    let main = ask(
+        &a,
+        &sql(&["query", "main", "SELECT current_database()::text AS d"]),
+    )
+    .await;
+    let other = ask(
+        &a,
+        &sql(&["query", "other", "SELECT current_database()::text AS d"]),
+    )
+    .await;
+
+    assert_eq!(main, "[\"d\"]|[[Text(\"postgres\")]]");
+    assert_eq!(other, "[\"d\"]|[[Text(\"template1\")]]");
+    let drivers: Vec<String> = apps
+        .names()
+        .into_iter()
+        .filter(|n| n.starts_with(bulkhead_host::SQL_DRIVER_PREFIX))
+        .collect();
+    assert_eq!(drivers, vec!["bulkhead-sql-main", "bulkhead-sql-other"]);
+    a.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sql____driver_killed_inside_a_transaction____ended_and_the_permit_back() {
+    let Some(pg) = Scratch::start() else { return };
+    let (rt, app, apps) = with(&pg, |_| {}).await;
+    let a = up(&rt, &app, "a", 1);
+    ask(&a, &sql(&["begin", "main"])).await;
+    let driver = apps.app("bulkhead-sql-main").unwrap();
+    for member in driver.instances() {
+        member.kill();
+        member.wait().await;
+    }
+
+    let in_tx = ask(&a, &sql(&["tx-query", "SELECT 1"])).await;
+    let after = common::ask_until(
+        &a,
+        &sql(&["query", "main", "SELECT 1::int AS one"]),
+        |got| got == "[\"one\"]|[[Int(1)]]",
+    )
+    .await;
+
+    assert!(in_tx.starts_with("err:Unavailable"), "{in_tx}");
+    assert!(in_tx.contains("ended"), "{in_tx}");
+    assert_eq!(after, "[\"one\"]|[[Int(1)]]", "the cap of 1 is free again");
     a.kill();
 }

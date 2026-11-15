@@ -39,13 +39,17 @@ fn spec(app: &str, ds: &str, cap: u32, granted: bool) -> InstanceSpec {
     s
 }
 
-fn runtime(datasources: BTreeMap<String, SqlDatasource>) -> (Runtime, LoadedApp) {
+/// A runtime with `datasources`, each one's driver started, and the
+/// fixture loaded.
+async fn runtime(
+    datasources: BTreeMap<String, SqlDatasource>,
+) -> (Runtime, LoadedApp, bulkhead_host::Apps) {
     let mut native = NativeConfig::default();
     native.runner = Some(native_fixtures().0.clone());
     let rt = Runtime::new(RuntimeConfig {
         max_instances: 16,
         native,
-        datasources,
+        datasources: datasources.clone(),
         ..RuntimeConfig::default()
     })
     .unwrap();
@@ -53,12 +57,13 @@ fn runtime(datasources: BTreeMap<String, SqlDatasource>) -> (Runtime, LoadedApp)
         path: native_fixtures().1.clone(),
         kind: NativeProgram::Executable,
     });
-    (rt, app)
+    let apps = common::sql_drivers(&rt, &datasources).await;
+    (rt, app, apps)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sql____not_granted_unlisted_or_unbound____access_denied_or_not_found() {
-    let (rt, app) = runtime(BTreeMap::new());
+    let (rt, app, _apps) = runtime(BTreeMap::new()).await;
     let not_granted = rt.spawn(&app, spec("a", "main", 1, false)).unwrap();
     let listed = rt.spawn(&app, spec("b", "main", 1, true)).unwrap();
 
@@ -78,7 +83,7 @@ async fn sql____not_granted_unlisted_or_unbound____access_denied_or_not_found() 
 // ------------------------------------------------------------- with Postgres
 
 /// A runtime with datasource `main` on `pg`, the fixture loaded.
-fn with(pg: &Scratch) -> (Runtime, LoadedApp) {
+async fn with(pg: &Scratch) -> (Runtime, LoadedApp, bulkhead_host::Apps) {
     let mut ds = SqlDatasource::new(
         pg.socket_dir().display().to_string(),
         "postgres",
@@ -88,7 +93,7 @@ fn with(pg: &Scratch) -> (Runtime, LoadedApp) {
     ds.pool_size = 4;
     ds.acquire_timeout = Duration::from_millis(500);
     ds.statement_timeout = Duration::from_millis(300);
-    runtime(BTreeMap::from([("main".to_string(), ds)]))
+    runtime(BTreeMap::from([("main".to_string(), ds)])).await
 }
 
 fn up(rt: &Runtime, app: &LoadedApp, name: &str, cap: u32) -> InstanceHandle {
@@ -98,7 +103,7 @@ fn up(rt: &Runtime, app: &LoadedApp, name: &str, cap: u32) -> InstanceHandle {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____statements_against_postgres____rows_counts_and_errors() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg);
+    let (rt, app, _apps) = with(&pg).await;
     let a = up(&rt, &app, "a", 2);
 
     let created = ask(
@@ -132,7 +137,7 @@ async fn sql____statements_against_postgres____rows_counts_and_errors() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____transactions____commit_seen_rollback_and_drop_not() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg);
+    let (rt, app, _apps) = with(&pg).await;
     let a = up(&rt, &app, "a", 2);
     ask(&a, "sql-x main CREATE TABLE n (v int)").await;
     let count = "sql-q main SELECT count(*)::int AS c FROM n";
@@ -164,7 +169,7 @@ async fn sql____transactions____commit_seen_rollback_and_drop_not() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____transaction_open_at_exit____rolled_back_and_connection_freed() {
     let Some(pg) = Scratch::start() else { return };
-    let (rt, app) = with(&pg);
+    let (rt, app, _apps) = with(&pg).await;
     let holder = up(&rt, &app, "capped", 1);
     let other = up(&rt, &app, "capped", 1);
     ask(&holder, "sql-x main CREATE TABLE c (v int)").await;
@@ -182,4 +187,24 @@ async fn sql____transaction_open_at_exit____rolled_back_and_connection_freed() {
         "the exited instance's transaction rolled back"
     );
     other.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sql____an_app_calling_the_driver_itself____refused() {
+    let Some(pg) = Scratch::start() else { return };
+    let (rt, app, _apps) = with(&pg).await;
+    let mut s = spec("a", "main", 1, true);
+    s.acl = bulkhead_host::acl::Acl {
+        accept_from: vec![],
+        may_call: vec!["bulkhead-sql-main".into()],
+    };
+    let a = rt.spawn(&app, s).unwrap();
+
+    let direct = ask(&a, "call-app bulkhead-sql-main k SELECT 1").await;
+    let through_the_node = ask(&a, "sql-q main SELECT 1::int AS one").await;
+
+    assert!(direct.starts_with("err:"), "{direct}");
+    assert!(direct.to_lowercase().contains("denied"), "{direct}");
+    assert_eq!(through_the_node, "one=1");
+    a.kill();
 }

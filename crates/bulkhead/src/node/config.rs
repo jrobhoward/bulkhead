@@ -351,8 +351,9 @@ pub struct SecretBinding {
     pub env: Option<String>,
 }
 
-/// A SQL datasource: `[datasources.<name>]`, a Postgres database the node
-/// pools connections to.
+/// A SQL datasource: `[datasources.<name>]`, a Postgres database whose
+/// driver (`bulkhead-sql-<name>`, ROADMAP DA3) pools connections the node
+/// opens to it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasourceBinding {
@@ -376,7 +377,7 @@ pub struct DatasourceBinding {
     /// PEM file of the CA certificates the server must chain to.
     #[serde(default)]
     pub ca_file: Option<PathBuf>,
-    /// Most connections the node opens, for every app together.
+    /// Most connections its driver opens, for every app together.
     #[serde(default = "default_pool_size")]
     pub pool_size: usize,
     /// Time allowed to open a connection.
@@ -671,6 +672,12 @@ pub const METRICS_APP: &str = "bulkhead-metrics";
 /// which no bundle and no `[drivers.<app>]` may take.
 pub const RESOLVE_APP: &str = "bulkhead-resolve";
 
+/// The program of each datasource's driver (ROADMAP DA3), which runs as
+/// the app `bulkhead-sql-<datasource>`
+/// ([`bulkhead_host::SQL_DRIVER_PREFIX`]); no bundle and no
+/// `[drivers.<app>]` may take a name with that prefix.
+pub const SQL_PROGRAM: &str = "bulkhead-sql";
+
 /// The most nameservers the resolver driver is given
 /// (`bulkhead_resolve::config::MAX_NAMESERVERS`).
 pub const MAX_NAMESERVERS: usize = 8;
@@ -917,6 +924,9 @@ pub struct NativeBinding {
     /// starts for `[admin]` (ROADMAP DA7); unset for the one beside the
     /// runner.
     pub admin: Option<PathBuf>,
+    /// The `bulkhead-sql` executable, each datasource's driver (ROADMAP
+    /// DA3); unset for the one beside the runner.
+    pub sql: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -949,6 +959,7 @@ impl Default for NativeBinding {
             resolve: None,
             metrics: None,
             admin: None,
+            sql: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,
@@ -1239,6 +1250,12 @@ impl NodeConfig {
                     "{RESOLVE_APP} is the node's own resolver, configured by [resolver]"
                 ));
             }
+            if app.starts_with(bulkhead_host::SQL_DRIVER_PREFIX) {
+                return invalid(format!(
+                    "{}<name> is a datasource's own driver, configured by [datasources.<name>]",
+                    bulkhead_host::SQL_DRIVER_PREFIX
+                ));
+            }
             if d.listeners.len() > MAX_DRIVER_LISTENERS {
                 return invalid(format!("at most {MAX_DRIVER_LISTENERS} listeners"));
             }
@@ -1509,10 +1526,24 @@ impl NodeConfig {
                     "node config: datasources.{name}: {m}"
                 )))
             };
-            if let Some(secret) = &ds.password_secret
-                && !self.secrets.contains_key(secret)
-            {
-                return invalid(&format!("password_secret '{secret}' is not in [secrets]"));
+            if !bulkhead_bundle::manifest::is_valid_name(&bulkhead_host::SqlDatasource::driver_app(
+                name,
+            )) {
+                return invalid("not a name (as app names are): its driver is an app");
+            }
+            if let Some(secret) = &ds.password_secret {
+                let Some(s) = self.secrets.get(secret) else {
+                    return invalid(&format!("password_secret '{secret}' is not in [secrets]"));
+                };
+                // Its driver reads it under /driver/, bound by path.
+                if s.file.as_ref().is_some_and(|f| !f.is_absolute()) {
+                    return invalid(&format!(
+                        "password_secret '{secret}': its file must be an absolute path"
+                    ));
+                }
+            }
+            if ds.ca_file.as_ref().is_some_and(|f| !f.is_absolute()) {
+                return invalid("ca_file must be an absolute path");
             }
             match (ds.tls, &ds.ca_file) {
                 (DatasourceTls::Require, None) => {

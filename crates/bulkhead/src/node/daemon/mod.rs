@@ -12,6 +12,7 @@ mod queries;
 #[cfg(feature = "tls")]
 mod remote;
 mod resolve;
+mod sql;
 mod upgrade;
 
 pub use blue_green::Traffic;
@@ -200,6 +201,11 @@ impl Node {
                 "datasources.{name}: this build of bulkhead has no SQL (cargo feature `sql`)"
             )));
         }
+        let datasources: std::collections::BTreeMap<String, bulkhead_host::SqlDatasource> = config
+            .datasources
+            .iter()
+            .map(|(name, d)| (name.clone(), runtime_datasource(&config, d)))
+            .collect();
         let rt = Runtime::with_extensions(
             RuntimeConfig {
                 node: config.node,
@@ -255,11 +261,7 @@ impl Node {
                     })
                     .collect(),
                 egress: config.egress.runtime(),
-                datasources: config
-                    .datasources
-                    .iter()
-                    .map(|(name, d)| (name.clone(), runtime_datasource(&config, d)))
-                    .collect(),
+                datasources: datasources.clone(),
                 buckets: config
                     .buckets
                     .iter()
@@ -351,6 +353,8 @@ impl Node {
         node.rt.set_metrics_text(&render);
         let _ = node.metrics_text.set(KeptMetricsText(render));
         metrics::start(&node.config, &node.rt, &node.apps).await?;
+        // Before the apps, which may use a datasource as they start.
+        sql::start(&node.config, &datasources, &node.rt, &node.apps).await?;
         node.restore().await;
         let desired = node.st().desired.clone();
         node.store.prune_compiled(&desired);

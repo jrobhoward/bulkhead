@@ -239,7 +239,7 @@ impl Shared {
             logging: Arc::new(logging::Logging::shared(config)?),
             secrets: Arc::new(secrets::Secrets::shared(config)?),
             metrics: Arc::new(metrics::MetricsService::shared(config)?),
-            sql: Arc::new(sql::Shared::new(config, &names)),
+            sql: Arc::new(sql::Shared::new(config)),
             sockets: Arc::new(sockets::Shared::new(&names)),
             names,
         })
@@ -248,6 +248,11 @@ impl Shared {
     /// Host names to addresses.
     pub(crate) fn names(&self) -> &crate::names::Names {
         &self.names
+    }
+
+    /// SQL datasources, whose drivers it calls (ROADMAP DA3).
+    pub(crate) fn sql(&self) -> &Arc<sql::Shared> {
+        &self.sql
     }
 
     /// Process groups, which other nodes' frames update.

@@ -210,3 +210,57 @@ pub fn sdk_app(rt: &Runtime) -> LoadedApp {
         kind: bulkhead_bundle::manifest::NativeProgram::Executable,
     })
 }
+
+/// `bulkhead-sql`, the datasources' driver (ROADMAP DA3), built on first
+/// use where the native fixtures are.
+pub fn sql_program() -> &'static PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let root = workspace_root();
+        let target = root.join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let ok = Command::new(cargo)
+            .current_dir(&root)
+            .args(["build", "-p", "bulkhead-sql", "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "building bulkhead-sql failed");
+        target.join("debug/bulkhead-sql")
+    })
+}
+
+/// Start the apps on `rt` with a driver for each of its `datasources`, as
+/// a node starts them (`node/daemon/sql.rs`): one instance, messages from
+/// itself alone. `rt` needs [`native_config`].
+pub async fn sql_drivers(
+    rt: &Runtime,
+    datasources: &std::collections::BTreeMap<String, bulkhead_host::SqlDatasource>,
+) -> bulkhead_host::Apps {
+    let apps = rt.start_apps(Vec::new()).await.unwrap();
+    for (name, ds) in datasources {
+        let app = bulkhead_host::SqlDatasource::driver_app(name);
+        let code = rt.load_native(bulkhead_host::NativeCode {
+            path: sql_program().clone(),
+            kind: bulkhead_bundle::manifest::NativeProgram::Executable,
+        });
+        let manifest = app_manifest(
+            &app,
+            serde_json::json!({
+                "kind": "native-process",
+                "native": { "program": "executable" },
+                "instances": { "count": 1 },
+                "lifecycle": { "start_args": ds.driver_args(name).unwrap() },
+                "supervision": { "intensity": 100, "backoff": { "initial_ms": 1, "max_ms": 50 } },
+                "limits": { "memory_max": "256MiB" },
+                "messaging_acl": { "accept_from": [app], "may_call": [app] },
+                "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_sql" } },
+            }),
+        );
+        apps.add(bulkhead_host::AppDeployment::new(manifest, code))
+            .await
+            .unwrap();
+    }
+    apps
+}
