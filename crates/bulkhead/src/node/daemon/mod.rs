@@ -9,6 +9,7 @@ mod deploy;
 mod egress;
 mod ingress;
 mod metrics;
+mod modbus;
 mod queries;
 #[cfg(feature = "tls")]
 mod remote;
@@ -184,18 +185,7 @@ impl Node {
         }
         let creation = store.next_creation()?;
         let native = native_config(&config)?;
-        let mut drivers = bind_drivers(&config)?;
-        if let Some(profile) = metrics::bind(&config)? {
-            drivers.insert(crate::node::config::METRICS_APP.to_string(), profile);
-        }
-        #[cfg(feature = "tls")]
-        if let Some(profile) = remote::bind(&config)? {
-            drivers.insert(crate::node::config::ADMIN_APP.to_string(), profile);
-        }
-        let ingress_args = ingress::bind(&config)?.map(|(profile, args)| {
-            drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
-            args
-        });
+        let (drivers, ingress_args, modbus) = builtin_drivers(&config)?;
         #[cfg(not(feature = "sql"))]
         if let Some(name) = config.datasources.keys().next() {
             return Err(NodeError::Invalid(format!(
@@ -263,7 +253,7 @@ impl Node {
                     .collect(),
                 egress: config.egress.runtime(),
                 blobs: config.blobs.runtime(),
-                modbus: None,
+                modbus: modbus::drivers(modbus.as_ref()),
                 datasources: datasources.clone(),
                 buckets: config
                     .buckets
@@ -358,12 +348,13 @@ impl Node {
         metrics::start(&node.config, &node.rt, &node.apps).await?;
         // Before the apps, which may use a datasource as they start.
         sql::start(&node.config, &datasources, &node.rt, &node.apps).await?;
+        modbus::start(&node.config, modbus.as_ref(), &node.rt, &node.apps).await?;
         node.restore().await;
         let desired = node.st().desired.clone();
         node.store.prune_compiled(&desired);
         let started = match node
             .rt
-            .start_extensions(&node.apps, &node.config.extensions)
+            .start_extensions(&node.apps, &extension_configs(&node.config))
         {
             Ok(started) => started,
             Err(e) => {
@@ -682,10 +673,49 @@ fn bind_drivers(
                     connect: None,
                     egress: None,
                     endpoints: Vec::new(),
+                    delivers: false,
                 },
             ))
         })
         .collect()
+}
+
+/// Every driver's profile: node config's `[drivers.<app>]` and the node's
+/// own drivers' (their sockets bound now), with the ingress's start
+/// arguments and the Modbus drivers' plan.
+#[allow(clippy::type_complexity)] // Three results, each used once.
+fn builtin_drivers(
+    config: &NodeConfig,
+) -> Result<
+    (
+        std::collections::BTreeMap<String, bulkhead_host::DriverProfile>,
+        Option<serde_json::Value>,
+        Option<modbus::Bound>,
+    ),
+    NodeError,
+> {
+    let mut drivers = bind_drivers(config)?;
+    if let Some(profile) = metrics::bind(config)? {
+        drivers.insert(crate::node::config::METRICS_APP.to_string(), profile);
+    }
+    #[cfg(feature = "tls")]
+    if let Some(profile) = remote::bind(config)? {
+        drivers.insert(crate::node::config::ADMIN_APP.to_string(), profile);
+    }
+    let ingress_args = ingress::bind(config)?.map(|(profile, args)| {
+        drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
+        args
+    });
+    let modbus = modbus::bind(config, &mut drivers)?;
+    Ok((drivers, ingress_args, modbus))
+}
+
+/// The extensions' configurations, less the Modbus drivers' section,
+/// which the node reads itself (ROADMAP DA5).
+fn extension_configs(config: &NodeConfig) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let mut configs = config.extensions.clone();
+    configs.remove(bulkhead_host::services::modbus::MODBUS_PACKAGE);
+    configs
 }
 
 fn native_config(config: &NodeConfig) -> Result<bulkhead_host::NativeConfig, NodeError> {

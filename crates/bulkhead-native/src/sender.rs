@@ -203,6 +203,24 @@ impl Sender {
         let _ = self.try_cast(to, msg);
     }
 
+    /// Cast to the app called `app` on this node, the node picking the
+    /// instance by its routing (ROADMAP DA5), saying whether the message
+    /// was queued (`noproc` when the app does not run here).
+    ///
+    /// # Errors
+    ///
+    /// The [`CastError`] saying why the message was dropped.
+    pub fn try_cast_app(&mut self, app: &str, msg: Envelope) -> Result<(), CastError> {
+        match self.request(Request::CastApp {
+            app: app.to_string(),
+            msg,
+        }) {
+            Answer::Unit => Ok(()),
+            Answer::CastFailed(e) => Err(e),
+            other => unexpected(&other),
+        }
+    }
+
     /// [`Sender::cast`], saying whether the message was queued.
     ///
     /// # Errors

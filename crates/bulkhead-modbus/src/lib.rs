@@ -1,11 +1,6 @@
-//! Modbus TCP for Bulkhead: the `bulkhead-modbus:modbus` extension.
-//!
-//! The node polls Modbus TCP devices and casts point updates to apps, and
-//! can serve registers to Modbus masters. Protocol work stays native and
-//! multi-core in the host; apps get one message per device and scan
-//! (DESIGN.md, "Scaling and where code runs").
-//!
-//! Devices and the server are named in node configuration:
+//! Modbus TCP for Bulkhead, outside the node (ROADMAP DA5): the drivers
+//! `bulkhead-modbus` (polling devices) and `bulkhead-modbus-server`
+//! (serving masters), which the node starts from its configuration:
 //!
 //! ```toml
 //! [extensions."bulkhead-modbus:modbus".devices.pump-1]
@@ -26,12 +21,17 @@
 //! coils = 64
 //! ```
 //!
+//! Every Modbus byte is parsed here, never in the node. The node opens
+//! each device's connection (to its configured address alone) and binds
+//! the server's port, and passes them; it runs `primary_only` devices in a
+//! second devices driver, `bulkhead-modbus-primary`, placed as a singleton
+//! so it polls only while its node holds the failover lease.
+//!
 //! Updates are CBOR casts described in [`points`]; give the receiving app
 //! `instances.routing = "hash:device"` so each device stays on one
 //! instance, in order. Apps read and write devices, and set the served
-//! registers, through the `client` and `server` interfaces
-//! (`bulkhead-modbus-client`), declared in the manifest and granted by the
-//! operator like any extension:
+//! registers, through `bulkhead-modbus-client`'s `client` and `server`
+//! functions, declared in the manifest and granted by the operator:
 //!
 //! ```toml
 //! [appserver.capabilities.extensions."bulkhead-modbus:modbus"]
@@ -40,12 +40,14 @@
 //! serve = true
 //! ```
 //!
-//! Apps call the functions through the node (`Extension::call`), named by
-//! interface and function (`client#read-holding`, `server#set-coils`),
-//! with the parameters as a CBOR array and the result back in CBOR.
+//! The node checks each call against the grant and these lists and
+//! forwards it to the driver (`bulkhead_host::services::modbus`).
 
+mod calls;
+mod cidr;
 mod config;
 mod device;
+mod driver;
 pub mod points;
 mod server;
 
@@ -54,360 +56,8 @@ mod server;
 #[doc(hidden)]
 pub use server::fuzz_request;
 
-use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
-use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
-
-use bulkhead_host::services::{
-    Extension, ExtensionApp, ExtensionNode, NativeCall, NativeReply, StoreData, extension_ctx,
-    reply,
-};
-use serde::Deserialize;
-
 pub use config::{Config, DeviceConfig, Range, ServerConfig};
-
-use config::{MAX_READ_BITS, MAX_READ_REGISTERS, MAX_WRITE_BITS, MAX_WRITE_REGISTERS};
-use device::{DeviceError, DeviceHandle, Reply, Request};
-use points::Table;
-use server::{Served, Tables};
-
-/// The `client` functions' errors, in CBOR to apps.
-mod client {
-    /// Why a device request failed.
-    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-    pub(crate) enum Error {
-        AccessDenied,
-        NoSuchDevice,
-        Offline(String),
-        Exception(u8),
-        Invalid(String),
-    }
-}
-
-/// The `server` functions' errors, in CBOR to apps.
-mod served {
-    /// Why a served register request failed.
-    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-    pub(crate) enum Error {
-        AccessDenied,
-        NotServing,
-        OutOfRange,
-    }
-}
+pub use driver::{Devices, LISTENER, MODBUS_SCHEMA, Server};
 
 /// The package apps declare and operators grant.
 pub const PACKAGE: &str = "bulkhead-modbus:modbus";
-
-/// The Modbus extension. One per node.
-#[derive(Debug, Default, Clone)]
-pub struct Modbus {
-    shared: Arc<Shared>,
-}
-
-/// What the node-level tasks and every instance share.
-#[derive(Debug, Default)]
-struct Shared {
-    devices: OnceLock<BTreeMap<String, DeviceHandle>>,
-    served: OnceLock<Arc<Served>>,
-    server_address: OnceLock<SocketAddr>,
-}
-
-impl Modbus {
-    /// The address the server listens on, once started (useful with
-    /// `listen` port 0).
-    #[must_use]
-    pub fn server_address(&self) -> Option<SocketAddr> {
-        self.shared.server_address.get().copied()
-    }
-}
-
-/// The manifest scope.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct Scope {
-    read: BTreeSet<String>,
-    write: BTreeSet<String>,
-    serve: bool,
-}
-
-/// One instance's state.
-#[derive(Debug)]
-struct State {
-    shared: Arc<Shared>,
-    scope: Scope,
-    granted: bool,
-}
-
-impl Extension for Modbus {
-    fn package(&self) -> &str {
-        PACKAGE
-    }
-
-    fn instance(&self, app: &ExtensionApp<'_>) -> Result<Box<dyn Any + Send>, String> {
-        let scope = if app.scope.is_null() {
-            Scope::default()
-        } else {
-            serde_json::from_value(app.scope.clone()).map_err(|e| e.to_string())?
-        };
-        Ok(Box::new(State {
-            shared: self.shared.clone(),
-            scope,
-            granted: app.granted,
-        }))
-    }
-
-    fn start(&self, node: ExtensionNode) -> Result<(), String> {
-        let config = Config::from_json(node.config())?;
-        let devices = config
-            .devices
-            .into_iter()
-            .map(|(name, cfg)| {
-                let handle = device::spawn(name.clone(), cfg, node.clone());
-                (name, handle)
-            })
-            .collect();
-        self.shared
-            .devices
-            .set(devices)
-            .map_err(|_| "started twice".to_string())?;
-        if let Some(server) = config.server {
-            let tables = Arc::new(Served::new(&server));
-            let bound = server::start(server, tables.clone(), node)?;
-            let _ = self.shared.served.set(tables);
-            let _ = self.shared.server_address.set(bound);
-        }
-        Ok(())
-    }
-
-    /// The `client` and `server` functions.
-    fn call<'a>(&'a self, data: &'a mut StoreData, call: NativeCall) -> NativeReply<'a> {
-        Box::pin(async move {
-            let mut ctx = extension_ctx::<State>(data);
-            let state = ctx.state();
-            match call.function() {
-                "client#read-holding" => {
-                    let (device, address, count): (String, u16, u16) = call.args()?;
-                    reply(
-                        &state
-                            .read_words(&device, Table::Holding, address, count)
-                            .await,
-                    )
-                }
-                "client#read-input" => {
-                    let (device, address, count): (String, u16, u16) = call.args()?;
-                    reply(
-                        &state
-                            .read_words(&device, Table::Input, address, count)
-                            .await,
-                    )
-                }
-                "client#read-coils" => {
-                    let (device, address, count): (String, u16, u16) = call.args()?;
-                    reply(&state.read_bits(&device, Table::Coil, address, count).await)
-                }
-                "client#read-discrete" => {
-                    let (device, address, count): (String, u16, u16) = call.args()?;
-                    reply(
-                        &state
-                            .read_bits(&device, Table::Discrete, address, count)
-                            .await,
-                    )
-                }
-                "client#write-holding" => {
-                    let (device, address, values): (String, u16, Vec<u16>) = call.args()?;
-                    reply(&state.write_words(&device, address, values).await)
-                }
-                "client#write-coils" => {
-                    let (device, address, values): (String, u16, Vec<bool>) = call.args()?;
-                    reply(&state.write_bits(&device, address, values).await)
-                }
-                "server#set-holding" => {
-                    let (address, values): (u16, Vec<u16>) = call.args()?;
-                    reply(&state.set(|t| &mut t.holding, address, &values))
-                }
-                "server#set-input" => {
-                    let (address, values): (u16, Vec<u16>) = call.args()?;
-                    reply(&state.set(|t| &mut t.input, address, &values))
-                }
-                "server#set-coils" => {
-                    let (address, values): (u16, Vec<bool>) = call.args()?;
-                    reply(&state.set(|t| &mut t.coils, address, &values))
-                }
-                "server#set-discrete" => {
-                    let (address, values): (u16, Vec<bool>) = call.args()?;
-                    reply(&state.set(|t| &mut t.discrete, address, &values))
-                }
-                "server#get-holding" => {
-                    let (address, count): (u16, u16) = call.args()?;
-                    reply(&state.get(|t| &t.holding, address, count))
-                }
-                "server#get-coils" => {
-                    let (address, count): (u16, u16) = call.args()?;
-                    reply(&state.get(|t| &t.coils, address, count))
-                }
-                _ => Err(call.no_such_function()),
-            }
-        })
-    }
-}
-
-impl State {
-    /// The device `name`, if this app may use it (`write` for writes).
-    fn device(&self, name: &str, write: bool) -> Result<DeviceHandle, client::Error> {
-        let listed = if write {
-            self.scope.write.contains(name)
-        } else {
-            self.scope.read.contains(name) || self.scope.write.contains(name)
-        };
-        if !self.granted || !listed {
-            return Err(client::Error::AccessDenied);
-        }
-        let devices = self
-            .shared
-            .devices
-            .get()
-            .ok_or_else(|| client::Error::Offline("the extension has not started".into()))?;
-        devices
-            .get(name)
-            .cloned()
-            .ok_or(client::Error::NoSuchDevice)
-    }
-
-    fn served(&self) -> Result<Arc<Served>, served::Error> {
-        if !self.granted || !self.scope.serve {
-            return Err(served::Error::AccessDenied);
-        }
-        self.shared
-            .served
-            .get()
-            .cloned()
-            .ok_or(served::Error::NotServing)
-    }
-
-    /// Run `request` on `device`, after the access checks.
-    async fn run(&self, device: &str, request: Request) -> Result<Reply, client::Error> {
-        let write = matches!(request, Request::WriteWords(..) | Request::WriteBits(..));
-        let handle = self.device(device, write)?;
-        handle.request(request).await.map_err(|e| match e {
-            DeviceError::Offline(why) => client::Error::Offline(why),
-            DeviceError::Exception(code) => client::Error::Exception(code),
-        })
-    }
-
-    async fn read_words(
-        &self,
-        device: &str,
-        table: Table,
-        address: u16,
-        count: u16,
-    ) -> Result<Vec<u16>, client::Error> {
-        check_count(count, MAX_READ_REGISTERS)?;
-        match self
-            .run(device, Request::ReadWords(table, address, count))
-            .await?
-        {
-            Reply::Words(w) => Ok(w),
-            other => Err(client::Error::Offline(format!(
-                "unexpected reply {other:?}"
-            ))),
-        }
-    }
-
-    async fn read_bits(
-        &self,
-        device: &str,
-        table: Table,
-        address: u16,
-        count: u16,
-    ) -> Result<Vec<bool>, client::Error> {
-        check_count(count, MAX_READ_BITS)?;
-        match self
-            .run(device, Request::ReadBits(table, address, count))
-            .await?
-        {
-            // Coils come in whole bytes; drop the padding.
-            Reply::Bits(mut b) => {
-                b.truncate(usize::from(count));
-                Ok(b)
-            }
-            other => Err(client::Error::Offline(format!(
-                "unexpected reply {other:?}"
-            ))),
-        }
-    }
-
-    async fn write_words(
-        &self,
-        device: &str,
-        address: u16,
-        values: Vec<u16>,
-    ) -> Result<(), client::Error> {
-        check_len(values.len(), MAX_WRITE_REGISTERS)?;
-        self.run(device, Request::WriteWords(address, values))
-            .await
-            .map(|_| ())
-    }
-
-    async fn write_bits(
-        &self,
-        device: &str,
-        address: u16,
-        values: Vec<bool>,
-    ) -> Result<(), client::Error> {
-        check_len(values.len(), MAX_WRITE_BITS)?;
-        self.run(device, Request::WriteBits(address, values))
-            .await
-            .map(|_| ())
-    }
-
-    /// Write `values` into the served table `pick` chooses.
-    fn set<T: Copy>(
-        &self,
-        pick: impl FnOnce(&mut Tables) -> &mut Vec<T>,
-        address: u16,
-        values: &[T],
-    ) -> Result<(), served::Error> {
-        let served = self.served()?;
-        let mut tables = served.tables();
-        server::set(pick(&mut tables), address, values).map_err(range)
-    }
-
-    /// `count` values from the served table `pick` chooses.
-    fn get<T: Copy>(
-        &self,
-        pick: impl FnOnce(&Tables) -> &Vec<T>,
-        address: u16,
-        count: u16,
-    ) -> Result<Vec<T>, served::Error> {
-        let served = self.served()?;
-        let tables = served.tables();
-        server::get(pick(&tables), address, count).map_err(range)
-    }
-}
-
-fn check_count(count: u16, max: u16) -> Result<(), client::Error> {
-    if count == 0 || count > max {
-        return Err(client::Error::Invalid(format!(
-            "count {count} must be 1 to {max}"
-        )));
-    }
-    Ok(())
-}
-
-fn check_len(len: usize, max: usize) -> Result<(), client::Error> {
-    if len == 0 || len > max {
-        return Err(client::Error::Invalid(format!(
-            "{len} values; must be 1 to {max}"
-        )));
-    }
-    Ok(())
-}
-
-fn range(_: server::OutOfRange) -> served::Error {
-    served::Error::OutOfRange
-}
-
-#[cfg(test)]
-#[path = "lib_tests.rs"]
-mod lib_tests;

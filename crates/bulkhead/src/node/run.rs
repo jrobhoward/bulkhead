@@ -20,18 +20,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use super::{LogFormat, LogRing, Node, NodeConfig, RingLayer};
 
-/// The extensions `bulkhead node` runs with: the Modbus TCP extension with
-/// the `modbus` feature (on by default), none otherwise.
+/// The extensions `bulkhead node` runs with: none since Modbus moved to
+/// drivers (ROADMAP DA5); the `Extension` trait goes with DA8.
 #[must_use]
 pub fn builtin_extensions() -> Vec<Arc<dyn Extension>> {
-    #[cfg(feature = "modbus")]
-    {
-        vec![Arc::new(bulkhead_modbus::Modbus::default())]
-    }
-    #[cfg(not(feature = "modbus"))]
-    {
-        Vec::new()
-    }
+    Vec::new()
 }
 
 /// Run a node from its configuration file, with `extensions` (none for a

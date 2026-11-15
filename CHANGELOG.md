@@ -8,6 +8,26 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Modbus runs outside the node (ROADMAP DA5, steps 2 and 3):
+  `bulkhead-modbus` is now two driver programs the node starts from the
+  unchanged `[extensions."bulkhead-modbus:modbus"]`: `bulkhead-modbus`
+  polls the devices over connections the node opens to their configured
+  addresses alone, `bulkhead-modbus-primary` (the same program, placed
+  as a singleton, tried first with no devices) polls `primary_only`
+  ones only while the node holds the failover lease, and
+  `bulkhead-modbus-server` serves masters on the port the node binds and
+  passes. Updates are cast to `deliver_to` apps with the new
+  `Request::CastApp` (routed as before), and pass those apps'
+  `accept_from` (`DriverProfile.delivers`); apps' calls are checked by
+  the node and forwarded. Apps, manifests and `bulkhead-modbus-client`
+  are unchanged. **Install `bulkhead-modbus` and
+  `bulkhead-modbus-server` with the node where Modbus is configured**
+  (beside the runner, or `[native] modbus` and `modbus_server`). The
+  node's `modbus` cargo feature is removed: no Modbus crate is linked
+  into the node (`scripts/check.sh deps`). The node no longer logs
+  "modbus polling paused/resumed": the singleton driver runs or does
+  not.
+
 - Modbus out of the node, the node's side (ROADMAP DA5, step 1):
   `DriverProfile.endpoints`, where the node connects a driver by host
   and port (`Request::ConnectTo`) and nowhere else; `services::modbus`,

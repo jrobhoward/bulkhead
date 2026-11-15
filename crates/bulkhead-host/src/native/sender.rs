@@ -327,6 +327,14 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
     let ctx = &hub.ctx;
     match request {
         Request::SelfPid => Handled::Now(Answer::Pid(convert::pid(ctx.tags.pid))),
+        Request::CastApp { app, msg } => {
+            let msg = convert::host_envelope(msg);
+            let sent = match ctx.rt.route_app(&app, &msg) {
+                Some(target) => delivery::cast(&ctx.rt, Origin::Local(&ctx.me), target.pid(), msg),
+                None => Err(CallError::Noproc),
+            };
+            Handled::Now(cast_answer(sent))
+        }
         Request::Cast { to, msg } => {
             let sent = delivery::cast(
                 &ctx.rt,

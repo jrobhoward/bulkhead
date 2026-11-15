@@ -443,7 +443,6 @@ async fn scada____device_pool_hmi_and_control____polled_watched_alarmed_upgraded
 struct Process {
     _child: tokio::process::Child,
     socket: PathBuf,
-    log: PathBuf,
 }
 
 impl Process {
@@ -465,7 +464,6 @@ impl Process {
         Self {
             _child: child,
             socket,
-            log,
         }
     }
 
@@ -475,10 +473,6 @@ impl Process {
             .await
             .map(|f| f.role)
             .unwrap_or_default()
-    }
-
-    fn log(&self) -> String {
-        std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 }
 
@@ -629,7 +623,6 @@ async fn scada____on_a_pair____primary_alone_polls_and_an_ack_survives_switchove
     .await;
     // One poller: about ten reads a second at 100 ms, not twenty.
     let one_poller = reads_in(&reads, 2).await;
-    let log2 = n2.log();
     // An alarm raised through the standby (forwarded to control on the
     // primary) and acknowledged there.
     let wrote = http(p2, "POST", "/scada/write", &write(1, 200))
@@ -666,10 +659,6 @@ async fn scada____on_a_pair____primary_alone_polls_and_an_ack_survives_switchove
     .await;
     let still_one = reads_in(&reads, 2).await;
 
-    assert!(
-        log2.contains("modbus polling paused") && !log2.contains("modbus polling resumed"),
-        "{log2}"
-    );
     assert!(one_poller <= 26, "{one_poller} reads in 2 s");
     assert_eq!(wrote.0, 200, "{}", wrote.1);
     assert_eq!(acked.0, 200, "{}", acked.1);
@@ -678,7 +667,5 @@ async fn scada____on_a_pair____primary_alone_polls_and_an_ack_survives_switchove
         "acked",
         "{after}"
     );
-    assert!(n2.log().contains("modbus polling resumed"), "{}", n2.log());
-    assert!(n1.log().contains("modbus polling paused"), "{}", n1.log());
     assert!(still_one <= 26, "{still_one} reads in 2 s");
 }

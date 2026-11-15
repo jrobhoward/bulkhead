@@ -145,6 +145,7 @@ pub(super) fn bind(
         connect: None,
         egress: None,
         endpoints: Vec::new(),
+        delivers: false,
     };
     let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
     Ok(Some((profile, args)))

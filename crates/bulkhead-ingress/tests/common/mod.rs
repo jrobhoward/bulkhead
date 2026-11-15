@@ -222,6 +222,7 @@ pub async fn serve(
                 connect: None,
                 egress: None,
                 endpoints: Vec::new(),
+                delivers: false,
             },
         )]),
         ..RuntimeConfig::default()

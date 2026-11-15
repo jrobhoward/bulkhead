@@ -461,6 +461,24 @@ impl Ctx {
         self.request(Request::Cast { to, msg });
     }
 
+    /// Cast to the app called `app` on this node, the node picking the
+    /// instance by its routing (ROADMAP DA5), saying whether the message
+    /// was queued (`noproc` when the app does not run here).
+    ///
+    /// # Errors
+    ///
+    /// The [`CastError`] saying why the message was dropped.
+    pub fn try_cast_app(&mut self, app: &str, msg: Envelope) -> Result<(), CastError> {
+        match self.request(Request::CastApp {
+            app: app.to_string(),
+            msg,
+        }) {
+            Answer::Unit => Ok(()),
+            Answer::CastFailed(e) => Err(e),
+            other => unexpected(&other),
+        }
+    }
+
     /// [`Ctx::cast`], saying whether the message was queued: in the
     /// target's mailbox, or for an instance on another node, on the link
     /// to that node. It costs what a cast does.

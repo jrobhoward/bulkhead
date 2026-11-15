@@ -186,8 +186,9 @@ impl InstanceHandle {
             .clone()
     }
 
-    /// Whether it is a driver serving the node's HTTP routes, whose calls
-    /// pass a target's `accept_from` (ROADMAP DA2).
+    /// Whether it is a driver whose calls pass a target's `accept_from`:
+    /// the HTTP ingress (ROADMAP DA2), or one delivering to apps node
+    /// config names (the Modbus drivers, DA5).
     pub(crate) fn routes_driver(&self) -> bool {
         self.shared.routes_driver
     }
@@ -748,7 +749,10 @@ pub(crate) fn prepare(
             exit: exit_rx,
             message_max_bytes: AtomicU64::new(spec.message_max_bytes),
             acl: std::sync::RwLock::new(Arc::new(spec.acl.clone())),
-            routes_driver: spec.driver.as_ref().is_some_and(|d| d.calls_routed),
+            routes_driver: spec
+                .driver
+                .as_ref()
+                .is_some_and(|d| d.calls_routed || d.delivers),
             dropped: dropped.clone(),
             ops: ops_tx,
             signals: signals_tx,

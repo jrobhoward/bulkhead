@@ -9,14 +9,16 @@
 //! full) also makes the next poll send every point, so an app that starts
 //! late or drops an update catches up.
 //!
-//! With `primary_only`, a poll is skipped while the node does not run
-//! singletons (an HA pair's standby): the connection is closed, and the
-//! first poll after the node becomes primary sends every point.
+//! The connection is the node's to open (`Request::ConnectTo`, to the
+//! device's configured address alone), passed to the driver, and Modbus
+//! runs over it here. `primary_only` devices are polled by the driver the
+//! node runs as a singleton (`bulkhead-modbus-primary`), so only while it
+//! holds the failover lease; this module polls whatever it is given.
 
 use std::time::{Duration, Instant};
 
-use bulkhead_host::Envelope;
-use bulkhead_host::services::ExtensionNode;
+use bulkhead_native::protocol::Envelope;
+use bulkhead_native::sender_async::AsyncSender;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{MissedTickBehavior, timeout};
 use tokio_modbus::client::{Context, Reader, Writer};
@@ -89,28 +91,28 @@ pub(crate) fn answering(
     DeviceHandle { jobs }
 }
 
-/// Start the task for device `name`.
-pub(crate) fn spawn(name: String, config: DeviceConfig, node: ExtensionNode) -> DeviceHandle {
+/// Start the task for device `name` on the current `LocalSet`, asking the
+/// node through `sender`.
+pub(crate) fn spawn(name: String, config: DeviceConfig, sender: AsyncSender) -> DeviceHandle {
     let (jobs, queue) = mpsc::channel(64);
     let device = Device {
         name,
         config,
-        node,
+        sender,
         ctx: None,
         last: Scan::new(),
         online: None,
         resend: false,
         last_full: Instant::now(),
-        paused: false,
     };
-    tokio::spawn(device.run(queue));
+    tokio::task::spawn_local(device.run(queue));
     DeviceHandle { jobs }
 }
 
 struct Device {
     name: String,
     config: DeviceConfig,
-    node: ExtensionNode,
+    sender: AsyncSender,
     ctx: Option<Context>,
     /// The last scan delivered.
     last: Scan,
@@ -119,8 +121,6 @@ struct Device {
     /// The next poll sends every point (a delivery failed).
     resend: bool,
     last_full: Instant,
-    /// Polls are skipped: `primary_only` on a node not running singletons.
-    paused: bool,
 }
 
 impl Device {
@@ -136,12 +136,11 @@ impl Device {
             .any(|r| !r.is_empty());
         let mut tick = tokio::time::interval(self.config.poll());
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let node = self.node.clone();
         loop {
             tokio::select! {
                 biased;
-                () = node.stopped() => break,
-                Some((request, reply)) = queue.recv() => {
+                job = queue.recv() => {
+                    let Some((request, reply)) = job else { break };
                     let result = self.request(request).await;
                     let _ = reply.send(result);
                 }
@@ -152,15 +151,23 @@ impl Device {
 
     async fn connected(&mut self) -> Result<&mut Context, DeviceError> {
         if self.ctx.is_none() {
-            let connect = tokio_modbus::client::tcp::connect_slave(
-                self.config.address,
-                Slave(self.config.unit),
-            );
-            let ctx = timeout(self.config.timeout(), connect)
+            let address = self.config.address;
+            let host = address.ip().to_string();
+            let connect = self.sender.connect_to(&host, address.port());
+            let fd = timeout(self.config.timeout(), connect)
                 .await
                 .map_err(|_| DeviceError::Offline("connect timed out".into()))?
+                .map_err(|e| DeviceError::Offline(format!("connect: {e:?}")))?;
+            let stream = std::net::TcpStream::from(fd);
+            stream
+                .set_nonblocking(true)
                 .map_err(|e| DeviceError::Offline(format!("connect: {e}")))?;
-            self.ctx = Some(ctx);
+            let stream = tokio::net::TcpStream::from_std(stream)
+                .map_err(|e| DeviceError::Offline(format!("connect: {e}")))?;
+            self.ctx = Some(tokio_modbus::client::tcp::attach_slave(
+                stream,
+                Slave(self.config.unit),
+            ));
         }
         self.ctx
             .as_mut()
@@ -245,9 +252,6 @@ impl Device {
         let Some(app) = self.config.deliver_to.clone() else {
             return;
         };
-        if !self.may_poll() {
-            return;
-        }
         let scan = match self.scan().await {
             Ok(scan) => scan,
             Err(e) => {
@@ -256,7 +260,7 @@ impl Device {
                         DeviceError::Offline(why) => why,
                         DeviceError::Exception(code) => format!("exception {code}"),
                     };
-                    tracing::warn!(device = %self.name, %error, "modbus device offline");
+                    bulkhead_sdk::warn!("modbus device {} offline: {error}", self.name);
                     let update = Update {
                         device: self.name.clone(),
                         kind: Kind::Offline,
@@ -266,7 +270,7 @@ impl Device {
                     };
                     // An offline notice that cannot be delivered is
                     // retried on the next failed poll.
-                    if self.deliver(&app, &update) {
+                    if self.deliver(&app, &update).await {
                         self.online = Some(false);
                     }
                 }
@@ -274,10 +278,6 @@ impl Device {
                 return;
             }
         };
-        // The lease may have ended during the scan.
-        if !self.may_poll() {
-            return;
-        }
         let integrity = self
             .config
             .full_every_ms
@@ -285,7 +285,7 @@ impl Device {
         let full = self.online != Some(true) || self.resend || integrity;
         let points = changes(&self.last, &scan, full);
         if self.online == Some(false) {
-            tracing::info!(device = %self.name, "modbus device online");
+            bulkhead_sdk::info!("modbus device {} online", self.name);
         }
         self.online = Some(true);
         self.last = scan;
@@ -302,36 +302,13 @@ impl Device {
             points,
             error: None,
         };
-        self.resend = !self.deliver(&app, &update);
-    }
-
-    /// Whether to poll now: not with `primary_only` on a node that does not
-    /// run singletons. Pausing closes the connection and forgets the last
-    /// scan, so the poll that resumes sends every point.
-    fn may_poll(&mut self) -> bool {
-        let may = !self.config.primary_only || self.node.runs_singletons();
-        if may && self.paused {
-            tracing::info!(device = %self.name, "modbus polling resumed: this node is primary");
-        } else if !may && !self.paused {
-            tracing::info!(device = %self.name, "modbus polling paused: this node is not primary");
-            self.ctx = None;
-            self.last.clear();
-            self.online = None;
-        }
-        self.paused = !may;
-        may
+        self.resend = !self.deliver(&app, &update).await;
     }
 
     /// Cast `update` to `app`; whether it was taken.
-    fn deliver(&self, app: &str, update: &Update) -> bool {
+    async fn deliver(&self, app: &str, update: &Update) -> bool {
         let msg = Envelope::new("application/cbor", update.to_cbor());
-        match self.node.cast(app, msg) {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::debug!(device = %self.name, app, error = %e, "modbus update not delivered");
-                false
-            }
-        }
+        self.sender.cast_app(app, msg).await.is_ok()
     }
 }
 

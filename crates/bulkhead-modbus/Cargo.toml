@@ -1,7 +1,7 @@
 [package]
 name = "bulkhead-modbus"
 version.workspace = true
-description = "Bulkhead extension: Modbus TCP polling and serving, delivering point updates to apps"
+description = "Modbus TCP outside the Bulkhead node: the drivers polling devices and serving masters, delivering point updates to apps"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,17 +9,29 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
+[[bin]]
+name = "bulkhead-modbus"
+path = "src/bin/devices.rs"
+
+[[bin]]
+name = "bulkhead-modbus-server"
+path = "src/bin/server.rs"
+
 [dependencies]
+bulkhead-sdk = { workspace = true }
+bulkhead-native = { workspace = true, features = ["app", "tokio"] }
 ciborium = { workspace = true }
-bulkhead-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "macros"] }
 tokio-modbus = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
+# Its integration tests run the drivers as the node does, on a runtime of
+# their own.
 bulkhead-bundle = { workspace = true }
+bulkhead-host = { workspace = true }
+rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [lints]

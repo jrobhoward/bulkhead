@@ -295,6 +295,13 @@ async fn answer(
         Request::Cast { to, msg } => {
             cast_answer(state.try_cast(convert::host_pid(to), convert::host_envelope(msg)))
         }
+        Request::CastApp { app, msg } => {
+            let msg = convert::host_envelope(msg);
+            match state.ctx.rt.route_app(&app, &msg) {
+                Some(target) => cast_answer(state.try_cast(target.pid(), msg)),
+                None => cast_answer(Err(CallError::Noproc)),
+            }
+        }
         Request::CastWait {
             to,
             msg,

@@ -38,8 +38,8 @@
 //! [`Request::Elsewhere`] and `CallApp`'s `partner` (DA2), and
 //! [`Request::AdminStream`] and [`Request::MetricsText`] (DA7),
 //! [`Request::Connect`] (DA3) and [`Request::ConnectTo`] (DA4), for the
-//! node's own drivers, and [`Request::Blob`], data passed between apps
-//! as sealed memory (ROADMAP BL1).
+//! node's own drivers, [`Request::Blob`], data passed between apps
+//! as sealed memory (ROADMAP BL1), and [`Request::CastApp`] (DA5).
 //!
 //! A sender channel carries the same frames as the app's own channel, from
 //! one thread at any time, not only during a callback: `Request`s (only
@@ -649,6 +649,18 @@ pub enum Request {
     /// (`bulkhead:blobs`, ROADMAP BL1): [`Answer::Blob`]. Allowed on a
     /// sender channel too.
     Blob(BlobRequest),
+    /// Cast to the app called `app` on this node, the node picking the
+    /// instance by the app's `instances.routing` as for
+    /// [`Request::CallApp`] (the Modbus drivers' updates, ROADMAP DA5):
+    /// [`Answer::Unit`] once queued, [`Answer::CastFailed`] if not
+    /// (`noproc` when the app does not run here). The messaging ACLs
+    /// apply. Allowed on a sender channel too.
+    CastApp {
+        /// The app's name.
+        app: String,
+        /// The message.
+        msg: Envelope,
+    },
 }
 
 /// A blob's id: node-wide, never reused while the node runs. It grants

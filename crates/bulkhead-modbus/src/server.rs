@@ -1,7 +1,8 @@
-//! The node's Modbus TCP server: tables of registers and bits, set by
-//! guests through the `server` interface and read and written by masters.
-//! A master's write changes the table and is cast to the server's
-//! `deliver_to` app as a `written` update.
+//! The Modbus TCP server in `bulkhead-modbus-server`: tables of registers
+//! and bits, set by apps through the `server` functions (forwarded by the
+//! node) and read and written by masters on the listening socket the node
+//! bound and passed. A master's write changes the table and goes to the
+//! server's `deliver_to` app as a `written` update.
 
 use std::future::{Ready, ready};
 use std::io;
@@ -11,11 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
-use bulkhead_host::services::ExtensionNode;
-use bulkhead_host::{Envelope, cidr_contains};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_modbus::server::tcp::{Server, accept_tcp_connection};
 use tokio_modbus::{ExceptionCode, Request, Response};
 
@@ -201,7 +200,8 @@ impl Served {
 struct Service {
     served: Arc<Served>,
     config: Arc<ServerConfig>,
-    node: ExtensionNode,
+    /// Masters' writes, for the driver to deliver.
+    updates: mpsc::UnboundedSender<(String, Update)>,
 }
 
 impl tokio_modbus::server::Service for Service {
@@ -221,10 +221,7 @@ impl tokio_modbus::server::Service for Service {
                     points: written,
                     error: None,
                 };
-                let msg = Envelope::new("application/cbor", update.to_cbor());
-                if let Err(e) = self.node.cast(app, msg) {
-                    tracing::debug!(app, error = %e, "modbus server write not delivered");
-                }
+                let _ = self.updates.send((app.clone(), update));
             }
             response
         });
@@ -267,80 +264,78 @@ impl AsyncWrite for Counted {
     }
 }
 
-/// Bind the server now (so a bad address fails the node's start) and serve
-/// until the node stops. Returns the bound address (for `listen` port 0).
-pub(crate) fn start(
+/// Serve masters on `listener` (bound by the node) until the process
+/// ends, masters' writes sent on `updates`.
+///
+/// # Errors
+///
+/// The listener cannot be used.
+pub(crate) async fn serve(
+    listener: std::net::TcpListener,
     config: ServerConfig,
     served: Arc<Served>,
-    node: ExtensionNode,
-) -> Result<SocketAddr, String> {
-    let cannot = |e: std::io::Error| format!("server: cannot listen on {}: {e}", config.listen);
-    let std_listener = std::net::TcpListener::bind(config.listen).map_err(cannot)?;
-    std_listener.set_nonblocking(true).map_err(cannot)?;
-    let listener = TcpListener::from_std(std_listener).map_err(cannot)?;
-    let bound = listener.local_addr().map_err(|e| e.to_string())?;
+    updates: mpsc::UnboundedSender<(String, Update)>,
+) -> Result<(), String> {
+    let cannot = |e: std::io::Error| format!("server: the listener: {e}");
+    listener.set_nonblocking(true).map_err(cannot)?;
+    let listener = TcpListener::from_std(listener).map_err(cannot)?;
     let allowed = config.allowed();
     let slots = Arc::new(Semaphore::new(config.max_connections));
     // Warn once each time the server fills, not for every refusal.
     let full = Arc::new(AtomicBool::new(false));
     let config = Arc::new(config);
-    let stop = node.clone();
-    tokio::spawn(async move {
-        let on_connected = |stream, addr: SocketAddr| {
-            let service = Service {
-                served: served.clone(),
-                config: config.clone(),
-                node: node.clone(),
-            };
-            let mut admitted = allowed.iter().any(|net| cidr_contains(*net, addr.ip()));
-            if !admitted {
-                tracing::warn!(master = %addr, "modbus master not in server.allow; refused");
-            }
-            let slot = if admitted {
-                slots.clone().try_acquire_owned().ok()
-            } else {
-                None
-            };
-            match &slot {
-                Some(_) => full.store(false, Ordering::Relaxed),
-                None if admitted => {
-                    admitted = false;
-                    if !full.swap(true, Ordering::Relaxed) {
-                        tracing::warn!(
-                            master = %addr,
-                            max = config.max_connections,
-                            "modbus server at server.max_connections; refusing masters"
-                        );
-                    }
-                }
-                None => {}
-            }
-            let accepted =
-                accept_tcp_connection(stream, addr, |_| Ok(admitted.then(|| service.clone())));
-            async move {
-                Ok(accepted?.and_then(|(service, stream)| {
-                    slot.map(|slot| {
-                        (
-                            service,
-                            Counted {
-                                stream,
-                                _slot: slot,
-                            },
-                        )
-                    })
-                }))
-            }
+    let on_connected = |stream, addr: SocketAddr| {
+        let service = Service {
+            served: served.clone(),
+            config: config.clone(),
+            updates: updates.clone(),
         };
-        let on_error = |e| tracing::debug!(error = %e, "modbus server connection failed");
-        let stopped = async move { stop.stopped().await };
-        if let Err(e) = Server::new(listener)
-            .serve_until(&on_connected, on_error, stopped)
-            .await
-        {
-            tracing::warn!(error = %e, "modbus server stopped");
+        let mut admitted = allowed
+            .iter()
+            .any(|net| crate::cidr::contains(*net, addr.ip()));
+        if !admitted {
+            bulkhead_sdk::warn!("modbus master {addr} not in server.allow; refused");
         }
-    });
-    Ok(bound)
+        let slot = if admitted {
+            slots.clone().try_acquire_owned().ok()
+        } else {
+            None
+        };
+        match &slot {
+            Some(_) => full.store(false, Ordering::Relaxed),
+            None if admitted => {
+                admitted = false;
+                if !full.swap(true, Ordering::Relaxed) {
+                    bulkhead_sdk::warn!(
+                        "modbus server at server.max_connections ({}); refusing masters",
+                        config.max_connections
+                    );
+                }
+            }
+            None => {}
+        }
+        let accepted =
+            accept_tcp_connection(stream, addr, |_| Ok(admitted.then(|| service.clone())));
+        async move {
+            Ok(accepted?.and_then(|(service, stream)| {
+                slot.map(|slot| {
+                    (
+                        service,
+                        Counted {
+                            stream,
+                            _slot: slot,
+                        },
+                    )
+                })
+            }))
+        }
+    };
+    let on_error = |_e| {};
+    Server::new(listener)
+        .serve_until(&on_connected, on_error, std::future::pending::<()>())
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("server: {e}"))
 }
 
 #[cfg(test)]

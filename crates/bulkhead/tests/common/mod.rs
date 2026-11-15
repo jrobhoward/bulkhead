@@ -135,6 +135,14 @@ pub fn egress_built() -> PathBuf {
     driver_built("bulkhead-egress", &BUILT)
 }
 
+/// `bulkhead-modbus` and `bulkhead-modbus-server`, beside the runner: a
+/// node with `[extensions."bulkhead-modbus:modbus"]` starts them (ROADMAP
+/// DA5). The devices' program.
+pub fn modbus_built() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    driver_built("bulkhead-modbus", &BUILT)
+}
+
 /// Node config from `toml`, with the fixtures' runner and resolver where
 /// it names none: a member node runs its resolver of host names as a
 /// native instance, so every test node needs both.
@@ -158,6 +166,14 @@ pub fn node_config(toml: &str) -> NodeConfig {
     // Any app may be granted egress; its driver starts with it.
     if config.native.egress.is_none() {
         config.native.egress = Some(egress_built());
+    }
+    if config.extensions.contains_key("bulkhead-modbus:modbus") {
+        let devices = modbus_built();
+        config.native.modbus.get_or_insert_with(|| devices.clone());
+        config
+            .native
+            .modbus_server
+            .get_or_insert_with(|| devices.with_file_name("bulkhead-modbus-server"));
     }
     config
 }
@@ -629,5 +645,7 @@ pub fn examples(packages: &[&str], features: &[&str], tag: &str) -> Built {
 /// Node config naming the runner, with the HTTP ingress driver beside it.
 pub fn runner_config() -> String {
     ingress_built();
+    // Beside the runner, for nodes started as processes with Modbus.
+    modbus_built();
     format!("[native]\nrunner = {:?}\n", native_fixtures().0)
 }

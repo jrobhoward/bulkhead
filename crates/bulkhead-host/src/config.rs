@@ -427,6 +427,10 @@ pub struct DriverProfile {
     /// routes change, in place of `calls` (the ingress driver, ROADMAP
     /// DA2).
     pub calls_routed: bool,
+    /// Its calls and casts to the apps in `calls` pass their `accept_from`:
+    /// the operator named those apps (the Modbus drivers' `deliver_to`,
+    /// ROADMAP DA5), as an app owning HTTP routes accepts the ingress.
+    pub delivers: bool,
     /// It may call an app on the failover partner where the app runs now
     /// (`Request::CallApp`'s `partner`), for a listener that forwards.
     pub forward: bool,

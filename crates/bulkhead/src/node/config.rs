@@ -689,6 +689,14 @@ pub const SQL_PROGRAM: &str = "bulkhead-sql";
 /// name with that prefix.
 pub const EGRESS_PROGRAM: &str = "bulkhead-egress";
 
+/// The program of the Modbus devices' drivers (ROADMAP DA5), run as
+/// `bulkhead-modbus` and, for `primary_only` devices, as the singleton
+/// `bulkhead-modbus-primary`.
+pub const MODBUS_PROGRAM: &str = "bulkhead-modbus";
+
+/// The program of the Modbus server's driver (ROADMAP DA5).
+pub const MODBUS_SERVER_PROGRAM: &str = "bulkhead-modbus-server";
+
 /// The most nameservers the resolver driver is given
 /// (`bulkhead_resolve::config::MAX_NAMESERVERS`).
 pub const MAX_NAMESERVERS: usize = 8;
@@ -1006,6 +1014,12 @@ pub struct NativeBinding {
     /// The `bulkhead-egress` executable, each app's egress driver (ROADMAP
     /// DA4); unset for the one beside the runner.
     pub egress: Option<PathBuf>,
+    /// The `bulkhead-modbus` executable, the Modbus devices' driver
+    /// (ROADMAP DA5); unset for the one beside the runner.
+    pub modbus: Option<PathBuf>,
+    /// The `bulkhead-modbus-server` executable, the Modbus server's driver
+    /// (ROADMAP DA5); unset for the one beside the runner.
+    pub modbus_server: Option<PathBuf>,
     /// A cgroup v2 directory delegated to the node (systemd
     /// `Delegate=yes`), with the node its only process: native instances
     /// then run in cgroups of their own under it, with `memory.max` and
@@ -1040,6 +1054,8 @@ impl Default for NativeBinding {
             admin: None,
             sql: None,
             egress: None,
+            modbus: None,
+            modbus_server: None,
             cgroup: None,
             pids_max: host.pids_max,
             ping_interval_ms: 10_000,

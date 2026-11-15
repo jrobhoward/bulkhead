@@ -43,6 +43,17 @@ pub(super) async fn start(
     apps: &Apps,
     deployment: AppDeployment,
 ) -> Result<(), NodeError> {
+    preflight(rt, &deployment).await?;
+    add(apps, deployment).await
+}
+
+/// Start one instance of `deployment` on its own, wait until it handles
+/// messages (at most [`PREFLIGHT`]), and stop it.
+///
+/// # Errors
+///
+/// The instance did not start: its exit reason, or the time ran out.
+pub(super) async fn preflight(rt: &Runtime, deployment: &AppDeployment) -> Result<(), NodeError> {
     let name = deployment.manifest.app.name.clone();
     let first = rt
         .spawn(&deployment.app, deployment.spec.clone())
@@ -81,6 +92,16 @@ pub(super) async fn start(
             )));
         }
     }
+    Ok(())
+}
+
+/// Add `deployment` to `apps` under its supervisor.
+///
+/// # Errors
+///
+/// The app did not start.
+pub(super) async fn add(apps: &Apps, deployment: AppDeployment) -> Result<(), NodeError> {
+    let name = deployment.manifest.app.name.clone();
     let app = apps
         .add(deployment)
         .await

@@ -124,7 +124,7 @@ check_features() {
     cargo clippy -p bulkhead --no-default-features --features http --all-targets --locked -- -Dwarnings || return 1
     local found
     found=$(cargo tree -p bulkhead --no-default-features --features node -e normal --prefix none --locked |
-        grep -E '^(bulkhead-modbus|tokio-modbus|anyprobe|tokio-rustls) ' | sort -u)
+        grep -E '^(anyprobe|tokio-rustls) ' | sort -u)
     if [ -n "$found" ]; then
         echo "bulkhead with only the node feature depends on:"
         echo "$found"
@@ -173,6 +173,12 @@ check_deps() {
     # DNS is the resolver driver's (DA9): no DNS library in the node.
     absent "bulkhead (every feature)" 'bulkhead-resolve|hickory-.*|resolv-conf' \
         -p bulkhead --all-features || status=1
+    # Modbus is its drivers' (DA5): no Modbus crate in the node or the
+    # runtime.
+    absent "bulkhead (every feature)" 'bulkhead-modbus|tokio-modbus' \
+        -p bulkhead --all-features || status=1
+    absent "bulkhead-host (every feature)" 'bulkhead-modbus|tokio-modbus' \
+        -p bulkhead-host --all-features || status=1
     return $status
 }
 

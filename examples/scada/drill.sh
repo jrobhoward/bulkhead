@@ -38,13 +38,15 @@ PROGRAMS="$ROOT/target/release"
 PROGRAMS_V2="$ROOT/target/fixtures/scada-drill-v2/release"
 
 echo "building (release; the first build takes a few minutes)..."
-cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead --features modbus
+cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead
 # The node runs apps through the bulkhead-runner beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-native --bin bulkhead-runner
 # And its resolver of host names (bulkhead-resolve), also beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-resolve
+# And the Modbus drivers (bulkhead-modbus, bulkhead-modbus-server), and fake
+# devices.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \
-  -p bulkhead-modbus --example fake_device
+  -p bulkhead-modbus --bins --example fake_device
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \
   -p example-scada-points -p example-scada-hmi -p example-scada-control
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \

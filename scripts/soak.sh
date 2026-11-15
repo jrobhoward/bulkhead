@@ -126,9 +126,9 @@ memory=$dir/memory.csv
 [ -f "$memory" ] || echo "run,at_s,node,pid,rss_kib" > "$memory"
 
 echo "soak: building (release)"
-# bulkhead with Modbus, for the scada runs.
-cargo build --release --locked -p bulkhead -p bulkhead-soak --features bulkhead/modbus || exit 1
-cargo build --release --locked -p bulkhead-modbus --example fake_device || exit 1
+cargo build --release --locked -p bulkhead -p bulkhead-soak || exit 1
+# The Modbus drivers beside the runner, and fake devices, for the scada runs.
+cargo build --release --locked -p bulkhead-modbus --bins --example fake_device || exit 1
 # The apps as native programs, and the runner and the HTTP ingress driver
 # beside bulkhead.
 cargo build --release --locked -p bulkhead-native --bin bulkhead-runner || exit 1

@@ -137,7 +137,7 @@ impl ServerConfig {
 fn network(entry: &str) -> Option<(std::net::IpAddr, u8)> {
     match entry.parse::<std::net::IpAddr>() {
         Ok(ip) => Some((ip, if ip.is_ipv4() { 32 } else { 128 })),
-        Err(_) => bulkhead_host::parse_cidr(entry),
+        Err(_) => crate::cidr::parse(entry),
     }
 }
 

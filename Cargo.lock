@@ -263,7 +263,6 @@ dependencies = [
  "bulkhead-bundle",
  "bulkhead-host",
  "bulkhead-keys",
- "bulkhead-modbus",
  "bulkhead-native",
  "bulkhead-priv-wire",
  "bytes",
@@ -532,12 +531,14 @@ version = "0.3.0"
 dependencies = [
  "bulkhead-bundle",
  "bulkhead-host",
+ "bulkhead-native",
+ "bulkhead-sdk",
  "ciborium",
+ "rstest",
  "serde",
  "serde_json",
  "tokio",
  "tokio-modbus",
- "tracing",
 ]
 
 [[package]]

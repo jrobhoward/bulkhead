@@ -131,6 +131,7 @@ fn request_name(r: &Request) -> &'static str {
         Request::Connect => "Connect",
         Request::ConnectTo { .. } => "ConnectTo",
         Request::Blob(_) => "Blob",
+        Request::CastApp { .. } => "CastApp",
     }
 }
 
@@ -226,6 +227,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "Connect",
             "ConnectTo",
             "Blob",
+            "CastApp",
         ],
     ),
     (
@@ -444,6 +446,10 @@ fn requests() -> Vec<Request> {
             id: BlobId(9),
             ttl_ms: 60_000,
         }),
+        Request::CastApp {
+            app: "scada".into(),
+            msg: env(),
+        },
     ]
 }
 

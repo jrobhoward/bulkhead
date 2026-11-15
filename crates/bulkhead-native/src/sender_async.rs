@@ -160,6 +160,15 @@ impl AsyncSender {
         Casted(self.ask(Request::Cast { to, msg }))
     }
 
+    /// Cast to the app called `app` on this node, as
+    /// [`Sender::try_cast_app`].
+    pub fn cast_app(&self, app: &str, msg: Envelope) -> Casted {
+        Casted(self.ask(Request::CastApp {
+            app: app.to_string(),
+            msg,
+        }))
+    }
+
     /// A stream into the node's admin API (ROADMAP DA7), as
     /// [`Sender::admin_stream`].
     ///

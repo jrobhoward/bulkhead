@@ -44,9 +44,6 @@ egress = ["node", "bulkhead-host/egress"]
 sql = ["node", "bulkhead-host/sql"]
 # USDT probes on the message path (docs/OBSERVABILITY.md).
 probes = ["node", "bulkhead-host/probes"]
-# The Modbus TCP extension (`bulkhead-modbus:modbus`) in `bulkhead node`. Off
-# by default: a network server with no authentication of its own.
-modbus = ["node", "dep:bulkhead-modbus"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -60,7 +57,6 @@ minisign = { workspace = true }
 bulkhead-bundle = { workspace = true }
 bulkhead-keys = { workspace = true }
 bulkhead-host = { workspace = true, optional = true }
-bulkhead-modbus = { workspace = true, optional = true }
 bulkhead-priv-wire = { workspace = true, optional = true }
 rustbridge-bundle = { workspace = true }
 rustyline = { workspace = true }
@@ -148,7 +144,7 @@ required-features = ["node"]
 
 [[test]]
 name = "scada"
-required-features = ["modbus"]
+required-features = ["node"]
 
 [lints]
 workspace = true
