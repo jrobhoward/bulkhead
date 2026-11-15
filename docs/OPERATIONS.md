@@ -183,6 +183,14 @@ Since ROADMAP DA4 (2026-11-15) the node sends no app's HTTP request itself: for 
 - **Metrics:** `bulkhead_egress_connections_total` from the driver, labelled `for` (OBSERVABILITY.md), beside the node's `bulkhead_egress_requests_total`.
 - **Cost.** A request through the driver takes 20 to 50 µs longer on 16 cores and 80 to 90 µs on a Raspberry Pi 5 than through the node's own pool did; 16 instances of one app at once get four fifths of the requests a second on 16 cores and two fifths on the Pi (about 15,000), since the driver runs every connection on one thread; a 1 MiB response takes 1.6 to 2.8 ms more (BASELINE.md, 2026-11-15; ROADMAP DA4b).
 
+## Blobs
+
+Since ROADMAP BL1 (2026-11-15) apps granted `bulkhead:blobs` pass data to each other as blobs: memory the node makes, one app fills and apps it shares it with read (DESIGN.md, "Blobs"; MANIFEST.md).
+
+- **Limits** (`[blobs]`, all optional): `max_bytes` (1 GiB) is the most an app's `max_bytes` may be, refused at deploy above it; `max_blob` (256 MiB) the largest single blob; `default_ttl_s` (60) and `max_ttl_s` (3600) how long a sealed blob lives when its app asks for no time, and at most. A node refuses to start with `max_blob` over `max_bytes` or the default over the maximum.
+- **Memory.** Blobs are memory, not disk, and a node restart loses them. On Linux they count in the writing instance's cgroup (`memory_max`), then its app's; on FreeBSD in each process that maps one. Size `max_bytes` and the apps' `memory_max` together.
+- **Watching:** `bulkhead status <app>` shows the blobs the node holds for an app and their bytes; `bulkhead_blobs_bytes` and `bulkhead_blobs_total` (OBSERVABILITY.md). A blob is freed once every app it concerns released it or it expired; an app that never releases its blobs holds its quota until they expire.
+
 ## The privileged helper
 
 With the privileged helper, `bulkhead-priv` (ROADMAP PS1), each app runs under a user of its own instead of the node's. The service manager starts the helper as root; the helper starts the node under the node's user and then does only what the node asks: start an instance, signal one, bind a low port (ROADMAP PS3b). Three kinds of processes:

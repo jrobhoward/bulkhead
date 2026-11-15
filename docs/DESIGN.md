@@ -452,6 +452,7 @@ The server provides OTP's runtime services and JBoss's managed resources as host
 | Files | `bulkhead:files`: read-only `/priv` from the bundle, and preopens of volumes the operator binds | `code:priv_dir` | — | 1 |
 | HTTP ingress | Node-level ingress delivering each request on an app's routes (`bulkhead:http-routes` scope) as a call; the node's ingress driver terminates HTTP and TLS and routes by host/path (see "HTTP ingress") | Cowboy, inets | Undertow web container | 2 |
 | HTTP egress | `bulkhead:http-egress`, checked by the node and sent by the app's egress driver over connections the node opens (see "HTTP egress") | `httpc` | — | 2 |
+| Large data between apps | `bulkhead:blobs`: sealed memory the node makes, filled by one app and read by apps it shares it with, by id (see "Blobs") | binaries off-heap, by reference | — | 7 (BL1) |
 | Sockets | `bulkhead:sockets` with allow-list; readiness as messages (`bulkhead:io`) | `gen_tcp`, `gen_udp` (`{active, once}`) | — | 3 |
 | Database pools | `bulkhead:sql` against named datasources (Postgres) | — | JDBC datasources | 2 |
 | Metrics and tracing | `bulkhead:metrics` (per-app counters, gauges, histograms) and host counters, exported as Prometheus text (`[metrics]`, `/v1/metrics`); OTLP push later | `telemetry` | Metrics subsystem | 2 |
@@ -572,6 +573,17 @@ Decided with the user 2026-11-15 (ROADMAP DA4): HTTP's client leaves the node. T
 - **Roots as text.** The node reads the system's root certificates and `ca_file` once, as it starts, and passes them to each driver as PEM in its start arguments: the driver reads no file, so a renamed certificate file is no problem (DA2b's is).
 - **Timeouts.** The node waits no longer than the driver may take (the connect, the first byte, and the between-bytes timeout for every 64 KiB of the body cap). While the driver is not running, a request is asked again until the connect timeout; one whose driver ends before answering fails, and its permit is freed.
 - **Cost** (BASELINE.md, 2026-11-15): a request costs 20 to 50 µs more on 16 cores and 80 to 90 µs on a Raspberry Pi 5 than through the node's own pool, small against a round trip to another machine; 16 instances of one app at once keep four fifths of the rate on 16 cores and two fifths on the Pi, as the driver's one worker thread is busy; a 1 MiB body takes 1.6 to 2.8 ms more, crossing the node's channel twice (ROADMAP DA4b). A driver uses about 5 to 6 MiB resident idle.
+
+### Blobs
+
+Decided with the user 2026-11-15 (ROADMAP BL1, after spike S42): data a message carries badly passes by reference. A message is at most 16 MiB, crosses the node twice, and is the node's memory while it passes; a blob is for more than that, for data written once and read later or by several apps without a copy each, and for data the node should not hold. Erlang passes large binaries by reference within a node for the same reason; blobs do it between processes.
+
+- **The memory is the node's to make, the bytes the app's to write.** A writer asks for a blob of N bytes (inside its app's `max_bytes` and the node's `max_blob`); the node makes a memfd (FreeBSD: an anonymous shared memory object), sizes it, seals it against growing and shrinking, and passes a writable descriptor. The writer fills it and asks the node to seal it against writes, which both systems refuse while a writable mapping remains (`mapped`): a blob the node hands out cannot change. The node never reads the bytes.
+- **Shared by app, inside the messaging ACLs.** The writing app shares a sealed blob with an app its `may_call` lets it call and whose `accept_from` takes it; any instance of a shared app may open it, read-only, and the id travels in an ordinary message. The id itself grants nothing.
+- **Freed when everyone is done, or at its time.** The node drops its descriptor, and the bytes leave the writer's `max_bytes`, once the writing app and every app it was shared with released it, or when its time to live (set at seal, capped by node config) runs out; an unsealed blob ends with the instance that made it. The writer may exit right after sending the id. A descriptor an app opened cannot be taken back: it reads on until the app closes it (S42), so expiry ends new opens, not reads.
+- **Memory.** Linux charges a blob's pages to the cgroup of the instance that wrote them, and to its app's cgroup after that instance ends; readers are not charged. FreeBSD counts a mapped blob in each holder's memory, so a reader there copies large blobs (`read_at`) or has the room.
+- **Cost** (S42, BASELINE.md 2026-11-15): about 100 µs before the first byte and a page fault every 4 KiB, so frames are faster up to about 1 MiB and blobs save CPU toward 20 MiB; large message bodies are PF1's to make cheaper, and BL2 moves only bodies over a frame into blobs.
+- **Local to a node.** Blobs to the pair's standby or another node, and blobs that outlive a node restart, are BL3.
 
 ## Security model
 

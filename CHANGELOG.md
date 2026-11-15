@@ -303,6 +303,11 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Blobs documented (ROADMAP BL1, step 5): MANIFEST.md (`bulkhead:blobs`,
+  `[blobs]`), DESIGN.md ("Blobs"), SECURITY.md (the blob boundary),
+  OPERATIONS.md ("Blobs"), OBSERVABILITY.md, ARCHITECTURE.md,
+  GLOSSARY.md, README.md and CLAUDE.md; ROADMAP: BL1 done, Next DA5.
+
 - Blobs on Linux and FreeBSD (ROADMAP BL1, step 4): `tests/blobs.rs`
   passes on both; a helper test writes a blob as one app's user and
   reads it as another's, neither able to change it once sealed, and on

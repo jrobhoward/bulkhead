@@ -231,7 +231,9 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   the reset), `statements`, `values`, `driver` (a worker thread answering
   on its sender channel). Their tests start a scratch Postgres as the
   current user (as `nobody` under root) and skip when none is installed.
-  App sockets are `src/services/sockets`.
+  App sockets are `src/services/sockets`; blobs between apps (ROADMAP
+  BL1) `src/services/blobs`, with `bulkhead_sdk::blob` and the native
+  fixture's `blob-*` commands (`tests/blobs.rs`).
 - The egress service (`crates/bulkhead-host/src/services/egress`, cargo
   feature `egress`) checks each request, holds each app's cap and allow
   sets, and forwards the request to the app's driver; it links no HTTP

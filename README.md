@@ -43,7 +43,8 @@ a restricted native process, with Erlang/OTP-style semantics:
 - **Host services** behind those capabilities: key-value buckets (memory,
   disk, or replicated across a pair), watches, process groups, config,
   secrets, logging, metrics, timers, HTTP ingress and allow-listed HTTP
-  egress, Postgres datasources, sockets, and a Modbus TCP extension. A
+  egress, Postgres datasources, sockets, blobs (large data passed between
+  apps as sealed memory), and a Modbus TCP extension. A
   shared bucket can be published: apps then read it from a snapshot mapped into their own memory, in 0.16 to
   0.39 µs a read, without asking the node.
 - **Connections**: a connection handler serves TCP connections on

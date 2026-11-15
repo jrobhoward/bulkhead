@@ -80,6 +80,8 @@ The host's metrics, every one with an `app` label. The names and labels are an i
 | `bulkhead_egress_requests_total` | counter | `outcome` (`sent`: a response came; `denied`; `limited`: over `max_concurrent`; `failed`: connection, TLS or timeout) | Outgoing HTTP requests (`bulkhead:http-egress`); listed once an app has made one. |
 | `bulkhead_sockets_open` | gauge | | Sockets the app's instances hold open (`bulkhead:sockets`), TCP and UDP, accepted ones included; listed once an app has opened or been refused one. |
 | `bulkhead_sockets_refused_total` | counter | | Socket addresses the app's policy refused (bind, listen, connect, send, receive) and sockets refused over `max_sockets`. |
+| `bulkhead_blobs_bytes` | gauge | | Bytes of the app's blobs the node holds (`bulkhead:blobs`, ROADMAP BL1), against its `max_bytes`; listed once the app has asked for a blob. |
+| `bulkhead_blobs_total` | counter | `outcome` (`created`; `sealed`; `refused`: a request refused; `freed`: released by every app, or unsealed when its instance ended; `expired`) | The app's blobs and blob requests. |
 
 With an HTTP ingress, also, counters from its driver app (label `app="bulkhead-ingress"`, added to once a second, so up to a second behind): `bulkhead_http_requests_total` (requests answered), `bulkhead_http_server_errors_total` (answered with a 5xx status), `bulkhead_http_not_found_total` (matched no route), `bulkhead_http_redirected_total` and `bulkhead_http_forwarded_total` (requests a standby redirected or forwarded to its failover partner), `bulkhead_http_refused_connections_total` (closed on accept, over `max_connections`). Before ROADMAP DA2 (2026-11-14) the node's own ingress kept them without a label.
 
