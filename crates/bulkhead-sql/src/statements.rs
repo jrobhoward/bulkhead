@@ -2,7 +2,7 @@
 //! app (`bulkhead:sql`'s `error`).
 //!
 //! Parameters go as text for the server to convert; columns come back in
-//! the binary format and are decoded by [`crate::values`], up to the
+//! the binary format and are decoded by the crate's `values` module, up to the
 //! datasource's result size.
 
 use bulkhead_native::protocol::{SqlError, SqlRows, SqlValue};

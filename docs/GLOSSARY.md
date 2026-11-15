@@ -76,7 +76,7 @@ Two words have more than one meaning:
 - **Listener, connection handler:** a TCP port the node owns, whose every accepted connection goes to an instance of the app's pool, each holding many (MANIFEST.md, `listeners`).
 - **Egress:** outgoing HTTP from an app, filtered by the manifest's `allow` and node config's ceiling, through the node's connection pool.
 - **Volume:** a host directory node config names (`[volumes]`), mapped to a guest path by a manifest preopen, read-only or read-write.
-- **Datasource:** a Postgres database node config binds (`[datasources.<name>]`), pooled, that granted apps query through `bulkhead:sql` by name.
+- **Datasource:** a Postgres database node config binds (`[datasources.<name>]`), that granted apps query through `bulkhead:sql` by name; pooled by a driver of its own, the app `bulkhead-sql-<name>`, which the node connects to that database alone (ROADMAP DA3). [OPERATIONS.md](OPERATIONS.md).
 
 ## Storage
 

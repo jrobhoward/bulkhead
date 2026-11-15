@@ -38,7 +38,8 @@ All notable changes are recorded here. The format follows
   checks, its per-app connection caps and the instance's transactions in
   the node, and forwards each statement to the driver: a transaction's
   statements go to the driver instance that began it, so after the
-  driver restarts they answer `ended`; one open when its instance exits
+  driver restarts they answer `unavailable` ("the transaction has
+  ended"); one open when its instance exits
   is rolled back by a cast to the driver. The apps' interface is
   unchanged. **Install `bulkhead-sql` with the node where datasources are
   configured**; a node with datasources and no driver program refuses to

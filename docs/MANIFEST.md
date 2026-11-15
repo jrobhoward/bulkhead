@@ -179,7 +179,7 @@ Always available, with no declaration: the process functions, readiness of a soc
 | `bulkhead:secrets` | `secrets = ["db-password"]`: names the app reads. Each name needs a `[secrets.<name>]` binding on the node (or the deploy is refused) and a grant in policy (`secrets = [...]`); reading an ungranted one returns `access-denied`. | enforced |
 | `bulkhead:metrics` | `prefix` (required; letters, digits, `_`): every metric is exported as `<prefix>_<name>` with an `app` label. `max_series` (default 1000): most name and label combinations the app may hold; past it, registering returns `limit-reached`. | enforced |
 | `bulkhead:http-egress` | `allow`: what the app may reach, each entry a scheme, host and port: `https://api.example.com` (port 443), `http://plc.internal:8080`, a bare `api.example.com` (HTTPS), `*.internal` (any host under `internal`, HTTPS, 443), or an address, `http://10.0.0.5:8080`, `https://[fd00::1]` (reached only as written, never through a name). No path, query or user. `methods` (upper case; empty for any). `max_concurrent`: requests in flight at once across the app's instances (default: the node's `[egress] max_concurrent`, 64); past it a request fails at once with `connection-limit-reached`. Anything else is refused with `HTTP-request-denied`, and a name that resolves only to loopback or link-local addresses with `destination-IP-prohibited`, unless node config sets `allow_loopback`. Node config's `[egress] allow` is a ceiling: a deploy asking for more is refused. Cargo feature `egress` (on by default); `bulkhead_sdk::http_client` is the SDK's client. | enforced |
-| `bulkhead:sql` | `datasources.<name>.max_connections` (default 4): the SQL datasources the app uses, and how many connections its instances hold on each at once, transactions included. Each name needs a `[datasources.<name>]` binding on the node (or the deploy is refused) and a grant in policy (`datasources = [...]`); using an ungranted one returns `access-denied`. A call that cannot get a connection within the datasource's `acquire_timeout_ms` returns `limit-reached`. Postgres only; `bulkhead_sdk::sql::Value` lists what values carry. | enforced |
+| `bulkhead:sql` | `datasources.<name>.max_connections` (default 4): the SQL datasources the app uses, and how many connections its instances hold on each at once, transactions included. Each name needs a `[datasources.<name>]` binding on the node (or the deploy is refused) and a grant in policy (`datasources = [...]`); using an ungranted one returns `access-denied`. A call that cannot get a connection within the datasource's `acquire_timeout_ms` returns `limit-reached`. The node keeps the grant, the cap and the instance's transactions; each statement is run by the datasource's driver (`bulkhead-sql-<name>`), and a transaction whose driver restarted answers `unavailable` ("the transaction has ended"). Postgres only; `bulkhead_sdk::sql::Value` lists what values carry. | enforced |
 | `bulkhead:sockets` | `connect = [{ cidr, ports }]`: where the app may connect TCP and send UDP (`ports` is `"1883"` or `"8000-8100"`; unset for any). `bind = [{ cidr, ports }]`: what it may bind; the unspecified address with port 0, the bind before every connect, needs no rule. `listen` (default `false`): whether it may listen on a bound TCP address, accept connections and take UDP datagrams from any peer (without it, datagrams only from `connect` addresses). `max_sockets` (default 16): sockets open at once across the app's instances, TCP and UDP, accepted ones included; past it, creating or accepting one fails with `new-socket-limit`. Loopback, link-local (`169.254.0.0/16`, cloud metadata) and unspecified destinations are reached only through a rule whose block lies inside that range (`127.0.0.1/32` reaches loopback; `0.0.0.0/0` does not). Name lookups are allowed only with `connect` rules, made by the node's resolver driver (`bulkhead-resolve`, ROADMAP DA9); the addresses they return are checked like any other. Anything else fails with `access-denied` (a refused name lookup as `permanent-resolver-failure`). Node config's `[sockets]` is a ceiling: a deploy asking for more is refused. Sockets close when the instance exits or is upgraded. `bulkhead_sdk::net` is the SDK's TCP client and listener; it waits for bytes with `bulkhead:io` instead of blocking the instance. | enforced |
 | `extensions."<package>"` | Free-form: the table the extension's host service reads. | enforced by the node's extension |
 
@@ -327,7 +327,7 @@ address = "0.0.0.0:7070"               # binds a manifest listener named "lines"
 acceptors = 4                          # default 4: tasks accepting connections at once
 
 [drivers.ingress]                      # the app named "ingress", deployed as any app, as a driver app (DA1)
-                                       # (not bulkhead-ingress, -resolve, -admin or -metrics: the node's own drivers have those names)
+                                       # (not bulkhead-ingress, -resolve, -admin, -metrics or bulkhead-sql-*: the node's own drivers have those names)
 listeners = { https = "0.0.0.0:8443" } # listening sockets the node binds and keeps; the driver accepts on them
                                        # itself (inherited at descriptors 8..13, named in BULKHEAD_LISTENERS),
                                        # accept4 allowed on them alone; at most 6
@@ -338,14 +338,16 @@ routes = true                          # send it the HTTP route table (host even
 [secrets.db-password]
 file = "/run/secrets/db-password"      # or env = "DB_PASSWORD"; read on every access
 
-[datasources.main]                     # a Postgres database for bulkhead:sql; pooled, opened on first use
-host = "db.internal"                   # or a Unix socket directory, such as "/run/postgresql"
+[datasources.main]                     # a Postgres database for bulkhead:sql, reached through its own driver, the app bulkhead-sql-main;
+                                       # pooled, connections opened on first use; the name must make a valid app name
+host = "db.internal"                   # or a Unix socket directory, such as "/run/postgresql"; a name is resolved for each new connection
 port = 5432
 dbname = "orders"
 user = "orders"
-password_secret = "db-password"        # a name in [secrets]; omit for trust or peer authentication  (secret-scan: allow)
+password_secret = "db-password"        # a name in [secrets], read by the driver alone; omit for trust or peer authentication  (secret-scan: allow)
+                                       # (its file an absolute path; an env secret's value is passed to the driver; peer sees the node's user)
 tls = "require"                        # or "disable" (the default); require needs ca_file
-ca_file = "/etc/bulkhead/db-ca.pem"     # the CAs the server must chain to (no system roots)
+ca_file = "/etc/bulkhead/db-ca.pem"     # the CAs the server must chain to (no system roots); an absolute path, given to the driver read-only
 pool_size = 10                         # most connections, every app together
 connect_timeout_ms = 5000
 acquire_timeout_ms = 5000              # a call waiting longer for a connection gets limit-reached
@@ -382,6 +384,7 @@ ingress = "/usr/local/bin/bulkhead-ingress"  # the HTTP ingress driver, needed w
 resolve = "/usr/local/bin/bulkhead-resolve"  # the resolver of host names every member starts; unset: bulkhead-resolve beside the runner
 admin = "/usr/local/bin/bulkhead-admin"      # the remote admin API's driver, with [admin]; unset: beside the runner
 metrics = "/usr/local/bin/bulkhead-metrics"  # the metrics endpoint's driver, with [metrics]; unset: beside the runner
+sql = "/usr/local/bin/bulkhead-sql"          # each datasource's driver, with [datasources]; unset: beside the runner
 
 [resolver]                             # host names (ROADMAP DA9), resolved by bulkhead-resolve; every key optional
 resolv_conf = "/etc/resolv.conf"       # search, domain, options ndots/timeout/attempts; and its nameservers, unless:
