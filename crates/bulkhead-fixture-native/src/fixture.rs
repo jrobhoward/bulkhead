@@ -503,7 +503,9 @@ impl Fixture {
             | "metrics-text"
             | "sender-metrics-text"
             | "driver-connect"
-            | "sender-connect" => driver_request(ctx, verb, rest),
+            | "sender-connect"
+            | "driver-connect-to"
+            | "sender-connect-to" => driver_request(ctx, verb, rest),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             "accept-fd" => {
                 let n: i32 = rest.parse().unwrap_or(-1);
@@ -952,7 +954,9 @@ fn forks(n: usize, mib: usize) -> String {
 /// `sender-metrics-text` (through a sender channel of a thread of its own)
 /// answer the node's metrics; `driver-connect` and `sender-connect`
 /// answer what a connection the node made to the profile's endpoint gave
-/// until its peer closed it (ROADMAP DA3).
+/// until its peer closed it (ROADMAP DA3); `driver-connect-to HOST PORT`
+/// and `sender-connect-to HOST PORT` the same for a connection an egress
+/// driver asked for (DA4).
 fn driver_request(ctx: &mut Ctx, verb: &str, rest: &str) -> String {
     match verb {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1000,8 +1004,36 @@ fn driver_request(ctx: &mut Ctx, verb: &str, rest: &str) -> String {
             .unwrap_or_else(|_| "err:thread".into()),
             Err(e) => format!("err:{e:?}"),
         },
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        "driver-connect-to" => match host_port(rest) {
+            Some((host, port)) => match ctx.connect_to(&host, port) {
+                Ok(fd) => read_all(fd),
+                Err(e) => format!("err:{e:?}"),
+            },
+            None => "err:usage: driver-connect-to HOST PORT".into(),
+        },
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        "sender-connect-to" => match (host_port(rest), ctx.sender()) {
+            (Some((host, port)), Ok(mut sender)) => {
+                std::thread::spawn(move || match sender.connect_to(&host, port) {
+                    Ok(fd) => read_all(fd),
+                    Err(e) => format!("err:{e:?}"),
+                })
+                .join()
+                .unwrap_or_else(|_| "err:thread".into())
+            }
+            (None, _) => "err:usage: sender-connect-to HOST PORT".into(),
+            (_, Err(e)) => format!("err:{e:?}"),
+        },
         other => format!("err:unknown {other}"),
     }
+}
+
+/// `HOST PORT`.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn host_port(rest: &str) -> Option<(String, u16)> {
+    let (host, port) = rest.trim().split_once(' ')?;
+    Some((host.to_string(), port.trim().parse().ok()?))
 }
 
 /// What a passed stream gave until its peer closed it.

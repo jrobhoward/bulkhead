@@ -8,6 +8,19 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Egress drivers ask the node for connections (ROADMAP DA4, step 1):
+  `Request::ConnectTo { host, port }` (protocol 14, golden frames added;
+  `Ctx`, `Sender` and `AsyncSender::connect_to`) answers a stream the node
+  connected, only for an app named `bulkhead-egress-<app>`, which the
+  runtime gives a profile serving `<app>` (`DriverProfile.egress`), and
+  only where one of `<app>`'s running, granted instances may send an HTTP
+  request (its manifest's `allow`, either scheme): a name resolved through
+  the resolver on each connect, its loopback and link-local addresses
+  refused unless `[egress] allow_loopback`, an address entry reached as
+  written, within `[egress] connect_timeout_ms`. Names starting
+  `bulkhead-egress-` are reserved: no bundle and no `[drivers.<app>]` may
+  take one. Nothing starts such a driver yet.
+
 - `examples/sql_cost` (crate `bulkhead-host`) measures a statement, a
   transaction and 16 instances at once through a native app and the
   datasource's driver (ROADMAP DA3, step 6; BASELINE.md, 2026-11-15).

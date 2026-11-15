@@ -1,8 +1,9 @@
 //! The node's own drivers' requests: a stream into the admin API and the
-//! metrics as text (ROADMAP DA7), and a connection to the driver's one
-//! endpoint (DA3), each for a driver whose profile allows it
-//! ([`crate::DriverProfile`]'s `admin`, `metrics`, `connect`), from a
-//! callback or a sender channel alike.
+//! metrics as text (ROADMAP DA7), a connection to the driver's one
+//! endpoint (DA3) and connections where an app's HTTP requests may go
+//! (DA4), each for a driver whose profile allows it
+//! ([`crate::DriverProfile`]'s `admin`, `metrics`, `connect`, `egress`),
+//! from a callback or a sender channel alike.
 
 use std::os::fd::{AsFd, BorrowedFd};
 use std::sync::Arc;
@@ -73,23 +74,7 @@ pub(crate) async fn connect(
                 .resolve(host, *port, *timeout)
                 .await
                 .map_err(|e| NetError::Other(e.to_string()))?;
-            let mut last = NetError::Other(format!("{host} has no address"));
-            for addr in addrs {
-                match tokio::time::timeout_at(deadline, tokio::net::TcpStream::connect(addr)).await
-                {
-                    Ok(Ok(stream)) => {
-                        let _ = stream.set_nodelay(true);
-                        let stream = stream
-                            .into_std()
-                            .and_then(|s| s.set_nonblocking(false).map(|()| s))
-                            .map_err(|e| NetError::Other(e.to_string()))?;
-                        return Ok(stream.into());
-                    }
-                    Ok(Err(e)) => last = NetError::Other(format!("{addr}: {e}")),
-                    Err(_) => return Err(NetError::Other(format!("{host}: connect timed out"))),
-                }
-            }
-            Err(last)
+            first_to_accept(host, addrs, deadline).await
         }
         Some(DriverEndpoint::Unix(path)) => tokio::net::UnixStream::connect(path)
             .await
@@ -97,5 +82,89 @@ pub(crate) async fn connect(
             .and_then(|s| s.set_nonblocking(false).map(|()| s))
             .map(Into::into)
             .map_err(|e| NetError::Other(format!("{}: {e}", path.display()))),
+    }
+}
+
+/// A stream to the first of `addrs` that accepts before `deadline`, in
+/// blocking mode with `TCP_NODELAY`, as a new socket is passed.
+async fn first_to_accept(
+    host: &str,
+    addrs: Vec<std::net::SocketAddr>,
+    deadline: tokio::time::Instant,
+) -> Result<std::os::fd::OwnedFd, NetError> {
+    let mut last = NetError::Other(format!("{host} has no address"));
+    for addr in addrs {
+        match tokio::time::timeout_at(deadline, tokio::net::TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => {
+                let _ = stream.set_nodelay(true);
+                let stream = stream
+                    .into_std()
+                    .and_then(|s| s.set_nonblocking(false).map(|()| s))
+                    .map_err(|e| NetError::Other(e.to_string()))?;
+                return Ok(stream.into());
+            }
+            Ok(Err(e)) => last = NetError::Other(format!("{addr}: {e}")),
+            Err(_) => return Err(NetError::Other(format!("{host}: connect timed out"))),
+        }
+    }
+    Err(last)
+}
+
+/// A connection to `host` and `port` for `served`, the app an egress
+/// driver sends HTTP requests for (ROADMAP DA4): only where one of that
+/// app's running instances may send a request
+/// (`services::egress::Shared::reach`), a name resolved through the
+/// runtime's resolver each time and its loopback and link-local addresses
+/// dropped unless node config allows them, within egress's connect
+/// timeout. The node keeps no copy.
+///
+/// # Errors
+///
+/// `denied` for a driver that serves no app, or a destination its app may
+/// not reach, or a name resolving only to refused addresses; otherwise why
+/// it could not connect.
+pub(crate) async fn connect_to(
+    rt: &Arc<RuntimeInner>,
+    served: Option<&str>,
+    host: &str,
+    port: u16,
+) -> Result<std::os::fd::OwnedFd, NetError> {
+    #[cfg(feature = "egress")]
+    {
+        use crate::services::egress::Reach;
+        let Some(app) = served else {
+            return Err(NetError::Denied);
+        };
+        let egress = rt.services.egress();
+        let Some(reach) = egress.reach(app, host, port) else {
+            tracing::debug!(%app, %host, port, "egress driver's connect denied");
+            return Err(NetError::Denied);
+        };
+        let timeout = egress.config().connect_timeout;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let addrs = match reach {
+            Reach::Address(ip) => vec![std::net::SocketAddr::new(ip, port)],
+            Reach::Name { allow_loopback } => {
+                let addrs: Vec<_> = rt
+                    .services
+                    .names()
+                    .resolve(host, port, timeout)
+                    .await
+                    .map_err(|e| NetError::Other(e.to_string()))?
+                    .into_iter()
+                    .filter(|a| allow_loopback || !crate::services::egress::guarded(a.ip()))
+                    .collect();
+                if addrs.is_empty() {
+                    return Err(NetError::Denied);
+                }
+                addrs
+            }
+        };
+        first_to_accept(host, addrs, deadline).await
+    }
+    #[cfg(not(feature = "egress"))]
+    {
+        let _ = (rt, served, host, port);
+        Err(NetError::Denied)
     }
 }

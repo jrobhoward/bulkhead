@@ -935,14 +935,18 @@ impl InstanceTask {
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 Some(Incoming::Frame(FromApp::Request {
                     id,
-                    request: Request::Connect,
+                    request: request @ (Request::Connect | Request::ConnectTo { .. }),
                 })) => {
                     let rt = state.ctx.rt.clone();
-                    let connected = super::killable(
-                        &self.kill,
-                        &self.control,
-                        crate::native::driver::connect(&rt, state.connect.as_ref()),
-                    )
+                    let (endpoint, served) = (state.connect.as_ref(), state.egress.as_deref());
+                    let connected = super::killable(&self.kill, &self.control, async {
+                        match &request {
+                            Request::ConnectTo { host, port } => {
+                                crate::native::driver::connect_to(&rt, served, host, *port).await
+                            }
+                            _ => crate::native::driver::connect(&rt, endpoint).await,
+                        }
+                    })
                     .await;
                     let answer = match connected {
                         Ok(Ok(fd)) => Answer::Connected(

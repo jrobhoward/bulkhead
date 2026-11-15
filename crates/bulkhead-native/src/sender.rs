@@ -133,6 +133,26 @@ impl Sender {
         }
     }
 
+    /// A connection to `host` and `port` for the app an egress driver
+    /// serves (ROADMAP DA4), which the node opened.
+    ///
+    /// # Errors
+    ///
+    /// `denied` for a destination that app may not reach or a driver that
+    /// serves none, or why the node could not connect.
+    pub fn connect_to(&mut self, host: &str, port: u16) -> Result<std::os::fd::OwnedFd, NetError> {
+        let request = Request::ConnectTo {
+            host: host.to_string(),
+            port,
+        };
+        match self.request(request) {
+            Answer::Connected(result) => {
+                take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => unexpected(&other),
+        }
+    }
+
     /// The node's metrics in the Prometheus text format (ROADMAP DA7), for
     /// a driver whose profile has `metrics`.
     ///

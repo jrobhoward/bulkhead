@@ -659,6 +659,17 @@ fn NodeConfig____a_driver_named_as_a_datasources_driver____refused() {
 }
 
 #[test]
+fn NodeConfig____a_driver_named_as_an_apps_egress_driver____refused() {
+    let err = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[drivers.bulkhead-egress-shop]\nfiles = []\n",
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("an app's own egress driver"), "{err}");
+}
+
+#[test]
 fn egress____unset____defaults_and_no_ceiling() {
     let config = NodeConfig::from_toml_str("data_dir = \"/d\"\n").unwrap();
 

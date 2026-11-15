@@ -129,6 +129,7 @@ fn request_name(r: &Request) -> &'static str {
         Request::AdminStream => "AdminStream",
         Request::MetricsText => "MetricsText",
         Request::Connect => "Connect",
+        Request::ConnectTo { .. } => "ConnectTo",
     }
 }
 
@@ -221,6 +222,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "AdminStream",
             "MetricsText",
             "Connect",
+            "ConnectTo",
         ],
     ),
     (
@@ -430,6 +432,10 @@ fn requests() -> Vec<Request> {
         Request::AdminStream,
         Request::MetricsText,
         Request::Connect,
+        Request::ConnectTo {
+            host: "api.example.com".into(),
+            port: 443,
+        },
     ]
 }
 

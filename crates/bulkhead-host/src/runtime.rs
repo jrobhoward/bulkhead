@@ -217,9 +217,22 @@ impl RuntimeInner {
 
     /// `spec` with the driver profile node config gives its app, if any
     /// (ROADMAP DA1): its listeners and files, and its messaging ACL's
-    /// `may_call` from the profile's `calls`.
+    /// `may_call` from the profile's `calls`. An app named
+    /// `bulkhead-egress-<app>` is `<app>`'s egress driver (DA4), with a
+    /// profile that serves that app and nothing else.
     pub(crate) fn with_driver(&self, mut spec: InstanceSpec) -> InstanceSpec {
-        if let Some(profile) = self.config.drivers.get(&spec.app) {
+        let egress = spec
+            .app
+            .strip_prefix(crate::config::EGRESS_DRIVER_PREFIX)
+            .filter(|_| !self.config.drivers.contains_key(&spec.app))
+            .map(|served| crate::config::DriverProfile {
+                egress: Some(served.to_string()),
+                ..crate::config::DriverProfile::default()
+            });
+        if let Some(profile) = egress
+            .as_ref()
+            .or_else(|| self.config.drivers.get(&spec.app))
+        {
             spec.acl.may_call = if profile.calls_routed {
                 crate::acl::only(
                     &self

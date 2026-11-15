@@ -308,6 +308,16 @@ impl SqlDatasource {
 /// reserved for those apps.
 pub const SQL_DRIVER_PREFIX: &str = "bulkhead-sql-";
 
+/// The prefix of an app's egress driver (`bulkhead-egress-<app>`, ROADMAP
+/// DA4), reserved for those apps.
+pub const EGRESS_DRIVER_PREFIX: &str = "bulkhead-egress-";
+
+/// The egress driver app serving `app`'s HTTP requests.
+#[must_use]
+pub fn egress_driver_app(app: &str) -> String {
+    format!("{EGRESS_DRIVER_PREFIX}{app}")
+}
+
 /// What [`SqlDatasource::call_timeout`] adds to the driver's own bound.
 const CALL_MARGIN: Duration = Duration::from_secs(5);
 
@@ -428,6 +438,11 @@ pub struct DriverProfile {
     /// The one endpoint the node connects it to on request
     /// (`Request::Connect`, a datasource's driver, ROADMAP DA3).
     pub connect: Option<DriverEndpoint>,
+    /// The app whose HTTP requests it sends (an egress driver, ROADMAP
+    /// DA4): the node connects it (`Request::ConnectTo`) where that app's
+    /// running instances may send requests, and nowhere else. Given by the
+    /// runtime to every app named [`EGRESS_DRIVER_PREFIX`]`<app>`.
+    pub egress: Option<String>,
 }
 
 /// Where the node connects a driver ([`DriverProfile::connect`]).

@@ -1256,6 +1256,12 @@ impl NodeConfig {
                     bulkhead_host::SQL_DRIVER_PREFIX
                 ));
             }
+            if app.starts_with(bulkhead_host::EGRESS_DRIVER_PREFIX) {
+                return invalid(format!(
+                    "{}<app> is an app's own egress driver, which the node configures",
+                    bulkhead_host::EGRESS_DRIVER_PREFIX
+                ));
+            }
             if d.listeners.len() > MAX_DRIVER_LISTENERS {
                 return invalid(format!("at most {MAX_DRIVER_LISTENERS} listeners"));
             }

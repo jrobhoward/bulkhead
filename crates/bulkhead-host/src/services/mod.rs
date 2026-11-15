@@ -250,6 +250,13 @@ impl Shared {
         &self.names
     }
 
+    /// HTTP egress: where each app's egress driver may connect (ROADMAP
+    /// DA4).
+    #[cfg(feature = "egress")]
+    pub(crate) fn egress(&self) -> &Arc<egress::Shared> {
+        &self.egress
+    }
+
     /// SQL datasources, whose drivers it calls (ROADMAP DA3).
     pub(crate) fn sql(&self) -> &Arc<sql::Shared> {
         &self.sql

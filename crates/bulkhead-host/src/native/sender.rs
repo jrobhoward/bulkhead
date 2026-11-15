@@ -455,6 +455,22 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 )
             }))
         }
+        Request::ConnectTo { host, port } => {
+            let hub = hub.clone();
+            Handled::Later(Box::pin(async move {
+                let ctx = &hub.ctx;
+                let served = ctx.spec.driver.as_ref().and_then(|d| d.egress.as_deref());
+                Answer::Connected(
+                    match crate::native::driver::connect_to(&ctx.rt, served, &host, port).await {
+                        Ok(fd) => hub
+                            .fds
+                            .send(std::os::fd::AsFd::as_fd(&fd), Passed::Stream)
+                            .map_err(p::NetError::Other),
+                        Err(e) => Err(e),
+                    },
+                )
+            }))
+        }
         request @ (Request::AdminStream | Request::MetricsText) => {
             let profile = ctx.spec.driver.as_ref();
             let allowed = crate::native::driver::Allowed {

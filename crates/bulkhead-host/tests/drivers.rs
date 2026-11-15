@@ -500,3 +500,207 @@ async fn driver____no_endpoint_or_an_unknown_name____denied_or_failed() {
     none.kill();
     unknown.kill();
 }
+
+/// A runtime for egress drivers (ROADMAP DA4): names from a table
+/// (`api.test` and `other.test` are loopback), loopback names allowed or
+/// not.
+#[cfg(feature = "egress")]
+fn node_egress(allow_loopback: bool) -> (Runtime, LoadedApp) {
+    let mut egress = bulkhead_host::Egress::default();
+    egress.allow_loopback = allow_loopback;
+    egress.connect_timeout = Duration::from_secs(2);
+    let loopback = vec!["127.0.0.1".parse().unwrap()];
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native: native_config(),
+        egress,
+        resolver: bulkhead_host::Resolver::Table(BTreeMap::from([
+            ("api.test".to_string(), loopback.clone()),
+            ("other.test".to_string(), loopback),
+        ])),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let code = rt.load_native(NativeCode {
+        path: native_fixtures().1.clone(),
+        kind: NativeProgram::Executable,
+    });
+    (rt, code)
+}
+
+/// An instance of `app` with `bulkhead:http-egress` (granted or not) and
+/// these `allow` entries.
+#[cfg(feature = "egress")]
+fn egress_app(
+    rt: &Runtime,
+    code: &LoadedApp,
+    app: &str,
+    allow: &[String],
+    granted: bool,
+) -> InstanceHandle {
+    let mut spec = InstanceSpec {
+        memory_max: 64 << 20,
+        callback_deadline: Duration::from_secs(5),
+        init_timeout: Duration::from_secs(5),
+        granted: if granted {
+            [bulkhead_bundle::manifest::Capability::HttpOutgoing]
+                .into_iter()
+                .collect()
+        } else {
+            Default::default()
+        },
+        ..InstanceSpec::new(app, "1.0.0")
+    };
+    spec.services.egress.allow = allow.to_vec();
+    rt.spawn(code, spec).unwrap()
+}
+
+/// A greeter on a port of its own.
+#[cfg(feature = "egress")]
+fn greeting_port(greeting: &'static str) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    greeter(listener, greeting);
+    port
+}
+
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress_driver____destinations_its_app_allows____the_node_connects_from_a_callback_or_a_sender()
+ {
+    let by_name = greeting_port("by name");
+    let by_address = greeting_port("by address");
+    let (rt, code) = node_egress(true);
+    let shop = egress_app(
+        &rt,
+        &code,
+        "shop",
+        &[
+            format!("http://api.test:{by_name}"),
+            format!("https://127.0.0.1:{by_address}"),
+        ],
+        true,
+    );
+    let d = spawn(&rt, &code, &bulkhead_host::egress_driver_app("shop"));
+
+    let from_callback = ask(&d, &format!("driver-connect-to api.test {by_name}")).await;
+    let from_sender = ask(&d, &format!("sender-connect-to 127.0.0.1 {by_address}")).await;
+
+    assert_eq!(from_callback, "by name");
+    assert_eq!(from_sender, "by address");
+    d.kill();
+    shop.kill();
+}
+
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress_driver____host_or_port_outside_its_apps_allow____denied() {
+    let port = greeting_port("nope");
+    let (rt, code) = node_egress(true);
+    let shop = egress_app(
+        &rt,
+        &code,
+        "shop",
+        &[format!("http://api.test:{port}")],
+        true,
+    );
+    let d = spawn(&rt, &code, &bulkhead_host::egress_driver_app("shop"));
+
+    let other_host = ask(&d, &format!("driver-connect-to other.test {port}")).await;
+    let other_port = ask(&d, &format!("driver-connect-to api.test {}", port + 1)).await;
+    let as_address = ask(&d, &format!("sender-connect-to 127.0.0.1 {port}")).await;
+
+    assert_eq!(other_host, "err:Denied");
+    assert_eq!(other_port, "err:Denied");
+    assert_eq!(
+        as_address, "err:Denied",
+        "an address is reached only through an address entry"
+    );
+    d.kill();
+    shop.kill();
+}
+
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress_driver____name_resolving_to_loopback____denied_unless_the_node_allows_it() {
+    let port = greeting_port("loopback");
+    let (rt, code) = node_egress(false);
+    let shop = egress_app(
+        &rt,
+        &code,
+        "shop",
+        &[
+            format!("http://api.test:{port}"),
+            format!("http://127.0.0.1:{port}"),
+        ],
+        true,
+    );
+    let d = spawn(&rt, &code, &bulkhead_host::egress_driver_app("shop"));
+
+    let by_name = ask(&d, &format!("driver-connect-to api.test {port}")).await;
+    let by_address = ask(&d, &format!("driver-connect-to 127.0.0.1 {port}")).await;
+
+    assert_eq!(by_name, "err:Denied");
+    assert_eq!(
+        by_address, "loopback",
+        "an address entry is reached as written"
+    );
+    d.kill();
+    shop.kill();
+}
+
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress_driver____another_driver_or_an_ungranted_app____denied() {
+    let port = greeting_port("nope");
+    let allow = [format!("http://api.test:{port}")];
+    let (rt, code) = node_egress(true);
+    let shop = egress_app(&rt, &code, "shop", &allow, true);
+    let mall = egress_app(&rt, &code, "mall", &allow, false);
+    let plain = spawn(&rt, &code, "drv");
+    let ungranted = spawn(&rt, &code, &bulkhead_host::egress_driver_app("mall"));
+
+    let from_plain = ask(&plain, &format!("driver-connect-to api.test {port}")).await;
+    let for_ungranted = ask(&ungranted, &format!("driver-connect-to api.test {port}")).await;
+    let shop_itself = ask(&shop, &format!("driver-connect-to api.test {port}")).await;
+
+    assert_eq!(from_plain, "err:Denied");
+    assert_eq!(for_ungranted, "err:Denied");
+    assert_eq!(
+        shop_itself, "err:Denied",
+        "the app itself is not its driver"
+    );
+    for i in [plain, ungranted, shop, mall] {
+        i.kill();
+    }
+}
+
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress_driver____its_apps_instances_exited____denied() {
+    let port = greeting_port("still here");
+    let (rt, code) = node_egress(true);
+    let shop = egress_app(
+        &rt,
+        &code,
+        "shop",
+        &[format!("http://api.test:{port}")],
+        true,
+    );
+    let d = spawn(&rt, &code, &bulkhead_host::egress_driver_app("shop"));
+    let before = ask(&d, &format!("driver-connect-to api.test {port}")).await;
+
+    shop.kill();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let after = loop {
+        let got = ask(&d, &format!("driver-connect-to api.test {port}")).await;
+        if got != "still here" || tokio::time::Instant::now() > deadline {
+            break got;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    assert_eq!(before, "still here");
+    assert_eq!(after, "err:Denied");
+    d.kill();
+}

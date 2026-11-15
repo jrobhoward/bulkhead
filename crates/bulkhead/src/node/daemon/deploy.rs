@@ -189,6 +189,12 @@ impl Node {
                 bulkhead_host::SQL_DRIVER_PREFIX
             )));
         }
+        if name.starts_with(bulkhead_host::EGRESS_DRIVER_PREFIX) {
+            return Err(NodeError::Refused(format!(
+                "{name}: names starting {} are apps' own egress drivers; no bundle may take one",
+                bulkhead_host::EGRESS_DRIVER_PREFIX
+            )));
+        }
         let rt = self.rt.clone();
         let program = bundle.program.clone();
         // A program is written where only the node can change it.

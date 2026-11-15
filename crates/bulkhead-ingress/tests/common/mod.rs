@@ -220,6 +220,7 @@ pub async fn serve(
                 admin: false,
                 metrics: false,
                 connect: None,
+                egress: None,
             },
         )]),
         ..RuntimeConfig::default()

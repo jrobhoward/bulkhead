@@ -15,6 +15,11 @@
 //! Node config's `[egress] allow` is a ceiling every app's `allow` must fit
 //! inside; the node checks it at deploy ([`within`]).
 //!
+//! The `allow` entries of each app's running instances are kept here by
+//! pid ([`Shared::reach`]): an app's egress driver (ROADMAP DA4) has the
+//! node connect it there and nowhere else, so an upgrade, or a blue-green
+//! pair with two lists, needs no driver restart.
+//!
 //! A native app asks over the protocol (`Instance::native`, ROADMAP Z8f):
 //! the same filter, cap, timeouts and pool, with the forbidden headers
 //! refused, and the whole response, up to a frame's size, in the answer.
@@ -28,6 +33,8 @@ mod policy;
 #[cfg(feature = "egress")]
 mod client;
 
+#[cfg(feature = "egress")]
+pub(crate) use policy::guarded;
 pub use policy::within;
 
 use std::sync::Arc;
@@ -37,6 +44,7 @@ use bulkhead_bundle::manifest::{AppSpec, Capability};
 use super::{InstanceInfo, Service};
 use crate::config::RuntimeConfig;
 use crate::error::HostError;
+use crate::pid::Pid;
 
 /// The egress service.
 pub(crate) struct Egress;
@@ -63,6 +71,26 @@ pub(crate) struct Shared {
     #[cfg(feature = "egress")]
     limits:
         std::sync::Mutex<std::collections::HashMap<String, (usize, Arc<tokio::sync::Semaphore>)>>,
+    /// The `allow` entries of each app's running, granted instances, by
+    /// pid: where the app's egress driver may connect.
+    #[cfg(feature = "egress")]
+    allows: std::sync::Mutex<
+        std::collections::HashMap<String, std::collections::BTreeMap<Pid, Vec<policy::Allow>>>,
+    >,
+}
+
+/// How an egress driver may reach a destination ([`Shared::reach`]).
+#[cfg(feature = "egress")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// An address an allow entry names: reached as written.
+    Address(std::net::IpAddr),
+    /// A host name, resolved on each connect; loopback and link-local
+    /// addresses are refused for it unless `allow_loopback`.
+    Name {
+        /// Node config's `[egress] allow_loopback`.
+        allow_loopback: bool,
+    },
 }
 
 impl Shared {
@@ -85,7 +113,77 @@ impl Shared {
             config: config.egress.clone(),
             #[cfg(feature = "egress")]
             limits: std::sync::Mutex::default(),
+            #[cfg(feature = "egress")]
+            allows: std::sync::Mutex::default(),
         })
+    }
+}
+
+#[cfg(feature = "egress")]
+impl Shared {
+    /// Record instance `pid` of `app` with its `allow` entries, or forget
+    /// it (`None`: not granted).
+    fn set_allow(&self, app: &str, pid: Pid, allow: Option<Vec<policy::Allow>>) {
+        let mut allows = self
+            .allows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match allow {
+            Some(allow) => {
+                allows
+                    .entry(app.to_string())
+                    .or_default()
+                    .insert(pid, allow);
+            }
+            None => {
+                if let Some(by_pid) = allows.get_mut(app) {
+                    by_pid.remove(&pid);
+                    if by_pid.is_empty() {
+                        allows.remove(app);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Forget instance `pid`, whichever app it ran.
+    fn forget(&self, pid: Pid) {
+        let mut allows = self
+            .allows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        allows.retain(|_, by_pid| {
+            by_pid.remove(&pid);
+            !by_pid.is_empty()
+        });
+    }
+
+    /// Whether `app`'s egress driver may connect to `host` (a name, or an
+    /// address without brackets) and `port`, and how: some running instance
+    /// of `app` has an allow entry for them, either scheme. `None` refuses.
+    pub(crate) fn reach(&self, app: &str, host: &str, port: u16) -> Option<Reach> {
+        let allows = self
+            .allows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let allowed = allows.get(app)?.values().flatten().any(|a| {
+            a.allows(policy::Scheme::Https, host, port)
+                || a.allows(policy::Scheme::Http, host, port)
+        });
+        if !allowed {
+            return None;
+        }
+        Some(match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => Reach::Address(ip),
+            Err(_) => Reach::Name {
+                allow_loopback: self.config.allow_loopback,
+            },
+        })
+    }
+
+    /// Node config's egress settings.
+    pub(crate) fn config(&self) -> &crate::config::Egress {
+        &self.config
     }
 }
 
@@ -124,6 +222,12 @@ impl Service for Egress {
             #[cfg(feature = "egress")]
             hooks: hooks::Hooks::new(shared, spec, info),
         }
+    }
+
+    #[cfg_attr(not(feature = "egress"), allow(unused_variables))]
+    fn exited(shared: &Shared, pid: Pid) {
+        #[cfg(feature = "egress")]
+        shared.forget(pid);
     }
 }
 
@@ -184,7 +288,7 @@ mod hooks {
         ) -> Self {
             let app = info.handle.app().to_string();
             // The node refused bad entries at deploy; keep the good ones.
-            let allow = spec
+            let allow: Vec<Allow> = spec
                 .allow
                 .iter()
                 .filter_map(|e| policy::parse(e).ok())
@@ -204,6 +308,11 @@ mod hooks {
                 }
                 entry.1.clone()
             };
+            shared.set_allow(
+                &app,
+                info.handle.pid(),
+                (info.granted && !allow.is_empty()).then(|| allow.clone()),
+            );
             Self {
                 granted: info.granted,
                 stats: info.metrics.stats(&app),

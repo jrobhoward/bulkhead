@@ -36,8 +36,9 @@
 //! [`Request::CallApp`]: a call to an app by name, the node picking its
 //! instance as its HTTP ingress does (ROADMAP DA1), later
 //! [`Request::Elsewhere`] and `CallApp`'s `partner` (DA2), and
-//! [`Request::AdminStream`] and [`Request::MetricsText`] (DA7) and
-//! [`Request::Connect`] (DA3), for the node's own drivers.
+//! [`Request::AdminStream`] and [`Request::MetricsText`] (DA7),
+//! [`Request::Connect`] (DA3) and [`Request::ConnectTo`] (DA4), for the
+//! node's own drivers.
 //!
 //! A sender channel carries the same frames as the app's own channel, from
 //! one thread at any time, not only during a callback: `Request`s (only
@@ -629,6 +630,20 @@ pub enum Request {
     /// name each time, and keeps no copy. Refused with [`NetError::Denied`]
     /// without an endpoint. Allowed on a sender channel too.
     Connect,
+    /// A connection to `host` and `port` for the app an egress driver
+    /// serves (ROADMAP DA4): [`Answer::Connected`], the stream's descriptor
+    /// passed before it. The node connects only where one of that app's
+    /// running instances may send a request (its manifest's `allow`),
+    /// resolving a name each time and refusing loopback and link-local
+    /// addresses for it as egress does; it keeps no copy. Refused with
+    /// [`NetError::Denied`] for any other driver or destination. Allowed on
+    /// a sender channel too.
+    ConnectTo {
+        /// A host name or an address (IPv6 without brackets).
+        host: String,
+        /// The port.
+        port: u16,
+    },
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if takes a reference.
@@ -1303,8 +1318,8 @@ pub enum Answer {
     AdminStream(Result<FdRef, NetError>),
     /// The node's metrics ([`Request::MetricsText`]).
     MetricsText(Result<String, NetError>),
-    /// A connection to the driver's endpoint ([`Request::Connect`]), its
-    /// descriptor passed before this answer.
+    /// A connection the node made for a driver ([`Request::Connect`],
+    /// [`Request::ConnectTo`]), its descriptor passed before this answer.
     Connected(Result<FdRef, NetError>),
 }
 

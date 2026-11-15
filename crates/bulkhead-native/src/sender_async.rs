@@ -192,6 +192,30 @@ impl AsyncSender {
         }
     }
 
+    /// A connection to `host` and `port` for the app an egress driver
+    /// serves (ROADMAP DA4), as [`Sender::connect_to`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Sender::connect_to`].
+    pub async fn connect_to(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<std::os::fd::OwnedFd, crate::protocol::NetError> {
+        use crate::protocol::NetError;
+        let request = Request::ConnectTo {
+            host: host.to_string(),
+            port,
+        };
+        match Answered(self.ask(request)).await {
+            Answer::Connected(result) => {
+                crate::app::take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
+            }
+            other => protocol_error(&format!("ConnectTo answered with {other:?}")),
+        }
+    }
+
     /// The node's metrics as text (ROADMAP DA7), as
     /// [`Sender::metrics_text`].
     ///
