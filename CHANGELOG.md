@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP egress measured (ROADMAP DA4, step 5): the new
+  `bulkhead-host` example `egress_cost` (the SDK fixture's `fetch`
+  against a local server, HTTP and HTTPS, one at a time and 16 instances
+  at once, and a 1 MiB body; the driver's resident memory) before and
+  after on the 16-core machine and the Pi (`docs/BASELINE.md`,
+  2026-11-15).
+
 - HTTP egress on Linux and FreeBSD (ROADMAP DA4, step 4): the egress
   tests run on FreeBSD too; a helper test runs an app's egress driver
   under a user of its own; `scripts/priv-e2e-systemd.sh` deploys an app

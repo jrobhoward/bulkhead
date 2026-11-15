@@ -1,0 +1,42 @@
+# egress_cost, Raspberry Pi 5, 2026-11-15; 5,000 requests a row (1 MiB: 500)
+# before: commit 8c6f9e2 (the node's own pool), the DA4 block removed
+# after: the app's egress driver (bulkhead-egress); the load figure is the 1-minute average at each round's start
+# (load 0.1 before the two trees were built, each in a build directory of its own; the load at the start is those builds')
+
+start 2026-11-15T10:51:34-06:00 load 3.33 2.86 1.44 1/197 427729
+== before run 1 (8c6f9e2, in-node pool) load 3.33 2.86 1.44 1/197 427730
+| request | p50 µs | p99 µs | CPU µs/req | req/s |
+| --- | --- | --- | --- | --- |
+| HTTP `GET`, 2 bytes | 74 | 87 | 130 | 13339 |
+| HTTPS `GET`, 2 bytes | 86 | 108 | 154 | 11234 |
+| HTTP `GET`, 1 MiB | 5530 | 6529 | 7100 | 176 |
+| 16 instances at once, HTTP | 267 | 3725 | 102 | 37438 |
+| 16 instances at once, HTTPS | 309 | 3621 | 119 | 31832 |
+no egress driver
+== after run 1 (driver) load 4.09 3.14 1.65 1/198 428619
+| request | p50 µs | p99 µs | CPU µs/req | req/s |
+| --- | --- | --- | --- | --- |
+| HTTP `GET`, 2 bytes | 157 | 202 | 290 | 6234 |
+| HTTPS `GET`, 2 bytes | 173 | 217 | 306 | 5673 |
+| HTTP `GET`, 1 MiB | 7713 | 8597 | 10260 | 129 |
+| 16 instances at once, HTTP | 900 | 3156 | 203 | 15143 |
+| 16 instances at once, HTTPS | 1030 | 3122 | 223 | 13738 |
+driver resident: 6344 KiB warm and idle, 9068 KiB after the rows
+== before run 2 (8c6f9e2, in-node pool) load 3.89 3.25 1.80 1/199 429137
+| request | p50 µs | p99 µs | CPU µs/req | req/s |
+| --- | --- | --- | --- | --- |
+| HTTP `GET`, 2 bytes | 75 | 88 | 136 | 13090 |
+| HTTPS `GET`, 2 bytes | 87 | 103 | 152 | 11170 |
+| HTTP `GET`, 1 MiB | 5914 | 6400 | 7720 | 169 |
+| 16 instances at once, HTTP | 261 | 3899 | 102 | 37354 |
+| 16 instances at once, HTTPS | 317 | 3636 | 119 | 31731 |
+no egress driver
+== after run 2 (driver) load 4.88 3.48 1.89 1/199 429174
+| request | p50 µs | p99 µs | CPU µs/req | req/s |
+| --- | --- | --- | --- | --- |
+| HTTP `GET`, 2 bytes | 165 | 205 | 298 | 5982 |
+| HTTPS `GET`, 2 bytes | 178 | 223 | 314 | 5527 |
+| HTTP `GET`, 1 MiB | 7346 | 8455 | 10120 | 134 |
+| 16 instances at once, HTTP | 890 | 3199 | 202 | 15326 |
+| 16 instances at once, HTTPS | 1051 | 2991 | 225 | 13559 |
+driver resident: 6216 KiB warm and idle, 7728 KiB after the rows

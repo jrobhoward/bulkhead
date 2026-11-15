@@ -3086,7 +3086,27 @@ One connection, p50 (the node's in the same run):
 
 - The reply from the worker takes a tenth to two fifths off a lookup's CPU on both machines, and up to a sixth off its time, except a hosts-file name on the 16-core machine, 3 to 18 µs slower at p50 (not looked into).
 
+## 2026-11-15: HTTP egress through an app's driver (DA4)
+
+`crates/bulkhead-host/examples/egress_cost.rs`: the SDK fixture's `fetch` command, a call into an app instance whose request goes to the node and, since DA4, on to the app's `bulkhead-egress`, against a hyper server in the harness on loopback (HTTPS with a test CA), connections kept alive; 5,000 requests a row: a 2-byte `GET` over HTTP, then HTTPS, one at a time; a 1 MiB `GET` over HTTP (500); and 16 instances of one app at once, over HTTP, then HTTPS. CPU is the harness's and its children's (the node's side, the app, the driver, and the server), per request. Before: the node's own pool (commit 8c6f9e2). Release builds, two rounds each, before and after in turn: the 16-core machine (no VM running; load 3 to 5 at each start, the rounds' own builds and runs, nothing else running) and the Raspberry Pi 5 (load 0.1 before its builds, 3 to 5 at each start after them). Results: `crates/bulkhead-host/examples/results/egress-{x86,pi5}-2026-11-15.txt`.
+
+| Request | 16-core p50, node → driver | 16-core CPU | Pi p50 | Pi CPU |
+| --- | --- | --- | --- | --- |
+| HTTP, 2 bytes | 117–123 → 141–171 µs | 196–210 → 258–296 µs | 74–75 → 157–165 µs | 130–136 → 290–298 µs |
+| HTTPS, 2 bytes | 137–140 → 159–183 µs | 222–228 → 284–306 µs | 86–87 → 173–178 µs | 152–154 → 306–314 µs |
+| HTTP, 1 MiB | 3.43–3.44 → 6.22–6.26 ms | 4.72 → 8.08–8.50 ms | 5.53–5.91 → 7.35–7.71 ms | 7.10–7.72 → 10.1–10.3 ms |
+| 16 at once, HTTP | 51,700–52,300 → 42,400–42,500 /s | 138–139 → 173–174 µs | 37,400 → 15,100–15,300 /s | 102 → 202–203 µs |
+| 16 at once, HTTPS | 46,300–47,400 → 38,100–39,500 /s | 148 → 178–180 µs | 31,700–31,800 → 13,600–13,700 /s | 119 → 223–225 µs |
+
+- **A request through the driver** costs 20 to 50 µs more at p50 on the 16-core machine and 80 to 90 µs on the Pi, and 60 to 90 µs, or 150 to 160 µs, more CPU: the call from the node to the driver, its worker woken, the answer from its sender channel, and the request and response in CBOR once more each way (a pooled connection asks the node for nothing). Against a request to another machine, a round trip of a millisecond or more, it is small.
+- **Sixteen at once:** the driver runs its pool and every connection on one worker thread, as `bulkhead-sql` does. The 16-core machine keeps four fifths of the rate; the Pi, with four cores, two fifths. An app that sends more than about 15,000 requests a second on the Pi, or 40,000 on the 16-core machine, needs its driver to use more than one thread (DA4b).
+- **A 1 MiB body** takes 2.8 ms more on the 16-core machine and 1.6 to 2.2 ms on the Pi: it crosses the node's channel twice now, driver to node and node to app. A profile shows the driver's own CPU small; the rest is not attributed.
+- **Memory:** a driver per app, 4.7 to 5.0 MiB resident warm and idle on the 16-core machine and 6.2 to 6.3 MiB on the Pi; 9.7 to 10.4 MiB, and 7.7 to 9.1 MiB, after the rows (the 1 MiB bodies).
+- **What it buys:** no HTTP response or server TLS is parsed in the node, and a driver, compromised, holds one app's requests and reaches that app's destinations only, through connections the node opens (DESIGN.md, SECURITY.md).
+
 ## Not measured yet
+
+- Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4), and the node's channel's rate for large messages.
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.
 
