@@ -8,7 +8,10 @@
 # datasource (ROADMAP DA3): a scratch cluster as `postgres`, reached first
 # over its Unix socket with peer authentication (the node connects, as
 # `bulkhead`), then, after a restart, over TCP by name with a password the
-# datasource's driver reads from its file. It installs a `bulkhead` user,
+# datasource's driver reads from its file. An app granted HTTP egress
+# (the SDK fixture, ROADMAP DA4) fetches the board's route through its
+# egress driver: the node must make the connection, not the driver. It
+# installs a `bulkhead` user,
 # binaries under /usr/local, /etc/bulkhead and the unit, and removes them
 # all at the end unless KEEP=1.
 #
@@ -16,6 +19,7 @@
 #   cargo build -p bulkhead-native --bin bulkhead-runner
 #   cargo build -p bulkhead-resolve -p bulkhead-ingress -p bulkhead-admin -p bulkhead-metrics
 #   cargo build -p bulkhead-sql -p example-tally
+#   cargo build -p bulkhead-egress -p bulkhead-fixture-sdk
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
@@ -31,6 +35,7 @@ install -m 0755 $T/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress
 install -m 0755 $T/bulkhead-admin /usr/local/libexec/bulkhead/bulkhead-admin
 install -m 0755 $T/bulkhead-metrics /usr/local/libexec/bulkhead/bulkhead-metrics
 install -m 0755 $T/bulkhead-sql /usr/local/libexec/bulkhead/bulkhead-sql
+install -m 0755 $T/bulkhead-egress /usr/local/libexec/bulkhead/bulkhead-egress
 install -d -m 0755 /etc/bulkhead
 systemctl stop bulkhead 2>/dev/null || true
 rm -rf /var/lib/bulkhead
@@ -51,10 +56,24 @@ SIGNER=$(tail -n 1 signer.pub)
 cp $SRC/examples/board/bulkhead.toml board.toml
 /usr/local/bin/bulkhead bundle board.toml $T/example-board --key signer.key --out board.rbp >/dev/null
 chmod 0644 board.rbp
+# The SDK fixture as an app allowed one server, the board's route.
+cat > fetcher.toml <<'TOML'
+[app]
+name = "fetcher"
+version = "1.0.0"
+
+[appserver.capabilities."bulkhead:http-egress"]
+allow = ["http://127.0.0.1:8080"]
+TOML
+/usr/local/bin/bulkhead bundle fetcher.toml $T/bulkhead-fixture-sdk --key signer.key --out fetcher.rbp >/dev/null
+chmod 0644 fetcher.rbp
 cat > /etc/bulkhead/policy.toml <<'TOML'
 [apps.board]
 grant = ["bulkhead:http-routes", "bulkhead:keyvalue", "bulkhead:logging"]
 buckets = ["board"]
+
+[apps.fetcher]
+grant = ["bulkhead:http-egress"]
 
 [apps.tally]
 grant = ["bulkhead:http-routes", "bulkhead:sql", "bulkhead:logging"]
@@ -111,7 +130,7 @@ durability = "disk"
 file = "$K/pg.password"
 
 $DATASOURCE
-# The node's own drivers (bulkhead-resolve, bulkhead-ingress) beside the
+# The node's own drivers (bulkhead-resolve, bulkhead-ingress, ...) beside the
 # helper's runner, in every instance's root.
 [native]
 runner = "/usr/local/libexec/bulkhead/bulkhead-runner"
@@ -148,6 +167,26 @@ curl -s http://127.0.0.1:8080/board; echo
 echo "== metrics (bulkhead-metrics)"; curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_instances{app="board"}'
 echo "== remote admin (bulkhead-admin, signed requests)"
 /usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
+echo "== HTTP egress through the app's driver (ROADMAP DA4)"
+cli deploy $W/fetcher.rbp
+for i in $(seq 100); do pgrep -f "bulkhead-egress" >/dev/null && break; sleep 0.1; done
+ps -eo user:12,uid,pid,args | grep "bulkhead-egress" | grep -v grep
+NODE=$(pgrep -x bulkhead | head -1); EGR=$(pgrep -f "bulkhead-egress" | head -1)
+echo "the driver's view: uid $(awk '/^Uid/ {print $2}' /proc/$EGR/status), root $(ls /proc/$EGR/root/ | tr '\n' ' ')"
+if command -v strace >/dev/null; then
+    strace -f -qq -e trace=connect -p $NODE -o $W/egress-node.strace & S1=$!
+    strace -f -qq -e trace=connect -p $EGR -o $W/egress-driver.strace & S2=$!
+    sleep 0.5
+fi
+echo "allowed: $(cli call fetcher 'fetch GET http://127.0.0.1:8080/board')"
+echo "outside allow: $(cli call fetcher 'fetch GET http://127.0.0.1:9101/metrics')"
+if command -v strace >/dev/null; then
+    sleep 0.3; kill $S1 $S2; wait $S1 $S2 2>/dev/null || true
+    echo "connects to :8080 by the node: $(grep -c 'htons(8080)' $W/egress-node.strace), to :9101: $(grep -c 'htons(9101)' $W/egress-node.strace), by the driver: $(grep -c connect $W/egress-driver.strace)"
+fi
+cli stop fetcher
+sleep 0.5
+echo "egress drivers after the app stopped: $(pgrep -f bulkhead-egress | wc -l)"
 if [ -n "$PGBIN" ]; then
     echo "== tally on the datasource, over its socket (peer authentication)"
     cli deploy $W/tally.rbp
@@ -182,9 +221,13 @@ if [ -n "$PGBIN" ]; then
         -c "SELECT 'session: ' || usename || ' ' || coalesce(client_addr::text, 'socket') FROM pg_stat_activity WHERE datname = 'tally'"
 fi
 echo "== status"; cli status board
+# The board's process, by its cgroup: the node's drivers start first, so
+# its user is not the first of the range.
+APP=$(cat /sys/fs/cgroup/system.slice/bulkhead.service/apps/board/i*/cgroup.procs | head -1)
+AUID=$(awk '/^Uid/ {print $2}' /proc/$APP/status)
 echo "== processes with the app"
-ps -eo user:12,uid,gid,pid,args | grep -E "bulkhead-priv|bulkhead node|^60000" | grep -v grep
-APP=$(pgrep -u 60000 | head -1)
+ps -eo user:12,uid,gid,pid,args | grep -E "bulkhead-priv|bulkhead node" | grep -v grep
+ps -o user:12,uid,gid,pid,args -p $APP | tail -1
 echo "== the app's view"
 echo "uid/gid: $(awk '/^Uid|^Gid/ {print $2}' /proc/$APP/status | tr '\n' ' ')"
 echo "cgroup:  $(cat /proc/$APP/cgroup)"
@@ -193,7 +236,7 @@ echo "root:    $(ls /proc/$APP/root/)"
 echo "== what the app's user reaches (ROADMAP PS2)"
 D=/var/lib/bulkhead
 stat -c '%a %U:%G %n' $D $D/state.json $D/kv $D/bundles $D/compiled $D/compiled/board $D/priv
-as_app() { setpriv --reuid=60000 --regid=60000 --clear-groups "$@"; }
+as_app() { setpriv --reuid=$AUID --regid=$AUID --clear-groups "$@"; }
 for p in $D/state.json $D/kv $D/bundles/board; do
     if as_app test -r "$p"; then echo "READABLE by the app: $p"; else echo "refused to the app: $p"; fi
 done

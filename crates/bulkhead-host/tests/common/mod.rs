@@ -231,6 +231,47 @@ pub fn sql_program() -> &'static PathBuf {
     })
 }
 
+/// `bulkhead-egress`, an app's egress driver (ROADMAP DA4), built on
+/// first use where the native fixtures are.
+pub fn egress_program() -> &'static PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let root = workspace_root();
+        let target = root.join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let ok = Command::new(cargo)
+            .current_dir(&root)
+            .args(["build", "-p", "bulkhead-egress", "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "building bulkhead-egress failed");
+        target.join("debug/bulkhead-egress")
+    })
+}
+
+/// `app`'s egress driver as a node deploys it (`node/daemon/egress.rs`):
+/// one instance, messages from itself alone, its arguments from `rt`, its
+/// program `code`. `rt` needs bulkhead-host's `egress` feature.
+pub fn egress_driver(rt: &Runtime, app: &str, code: LoadedApp) -> bulkhead_host::AppDeployment {
+    let driver = bulkhead_host::egress_driver_app(app);
+    let manifest = app_manifest(
+        &driver,
+        serde_json::json!({
+            "kind": "native-process",
+            "native": { "program": "executable" },
+            "instances": { "count": 1 },
+            "lifecycle": { "start_args": rt.egress_driver_args(app).unwrap() },
+            "supervision": { "intensity": 100, "backoff": { "initial_ms": 1, "max_ms": 50 } },
+            "limits": { "memory_max": "256MiB" },
+            "messaging_acl": { "accept_from": [driver], "may_call": [driver] },
+            "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_egress" } },
+        }),
+    );
+    bulkhead_host::AppDeployment::new(manifest, code)
+}
+
 /// Start the apps on `rt` with a driver for each of its `datasources`, as
 /// a node starts them (`node/daemon/sql.rs`): one instance, messages from
 /// itself alone. `rt` needs [`native_config`].

@@ -5,7 +5,8 @@
 # stop go through it. No app is deployed: bundles carry no FreeBSD program
 # yet (ROADMAP FB6). Two datasources (ROADMAP DA3) start a driver each,
 # jailed under a user of its own, one with a password file shared with it;
-# no statement runs without an app (tests/priv.rs logs one in). It
+# no statement runs without an app (tests/priv.rs logs one in), and no
+# egress driver starts without one (tests/priv.rs runs one). It
 # installs a `bulkhead` user, binaries under
 # /usr/local and the rc script, and removes them all at the end unless
 # KEEP=1.

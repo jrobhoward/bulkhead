@@ -5,8 +5,7 @@
 //! its app's egress driver (`bulkhead-egress`, ROADMAP DA4) sends it, over
 //! connections the node opens.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -15,19 +14,16 @@ mod common;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use bulkhead_bundle::manifest::{
-    AppInfo, AppManifest, AppSpec, Capability, NativeProgram, ProgramRef, Provenance,
-};
+use bulkhead_bundle::manifest::{Capability, NativeProgram};
 use bulkhead_host::{
-    AppDeployment, Apps, Egress, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, NativeConfig,
-    Runtime, RuntimeConfig,
+    Apps, Egress, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, NativeConfig, Runtime,
+    RuntimeConfig,
 };
 use bytes::Bytes;
 use common::ask;
@@ -115,46 +111,6 @@ async fn server(tls: Option<Arc<rustls::ServerConfig>>) -> (SocketAddr, Arc<Atom
     (address, accepted)
 }
 
-/// The SDK fixture built as a native program, once per test binary.
-fn native_sdk() -> &'static PathBuf {
-    static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let target = root.join("target/fixtures/native-sdk");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let ok = std::process::Command::new(cargo)
-            .current_dir(&root)
-            .args(["build", "-p", "bulkhead-fixture-sdk"])
-            .args(["--bin", "bulkhead-fixture-sdk", "--target-dir"])
-            .arg(&target)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "building the native SDK fixture failed");
-        target.join("debug/bulkhead-fixture-sdk")
-    })
-}
-
-/// A runtime with `egress` and the fixture loaded.
-/// `bulkhead-egress`, built on first use beside the runner.
-fn egress_driver() -> &'static PathBuf {
-    static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let target = root.join("target/fixtures/native");
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let ok = std::process::Command::new(cargo)
-            .current_dir(&root)
-            .args(["build", "-p", "bulkhead-egress", "--target-dir"])
-            .arg(&target)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "building bulkhead-egress failed");
-        target.join("debug/bulkhead-egress")
-    })
-}
-
 /// A runtime, the SDK fixture, the apps (where drivers run) and the
 /// egress driver's program.
 struct Node(Runtime, LoadedApp, Apps, LoadedApp);
@@ -174,49 +130,15 @@ async fn runtime(egress: Egress) -> Node {
     })
     .unwrap();
     let app = rt.load_native(NativeCode {
-        path: native_sdk().clone(),
+        path: common::native_sdk().clone(),
         kind: NativeProgram::Executable,
     });
     let driver = rt.load_native(NativeCode {
-        path: egress_driver().clone(),
+        path: common::egress_program().clone(),
         kind: NativeProgram::Executable,
     });
     let apps = rt.start_apps(Vec::new()).await.unwrap();
     Node(rt, app, apps, driver)
-}
-
-/// The node's manifest for `app`'s egress driver.
-fn driver_manifest(driver: &str, args: &serde_json::Value) -> AppManifest {
-    let spec = serde_json::json!({
-        "kind": "native-process",
-        "native": { "program": "executable" },
-        "instances": { "count": 1 },
-        "lifecycle": { "start_args": args },
-        "supervision": { "intensity": 100, "backoff": { "initial_ms": 1, "max_ms": 50 } },
-        "limits": { "memory_max": "128MiB" },
-        "messaging_acl": { "accept_from": [driver], "may_call": [driver] },
-        "capabilities": { "bulkhead:metrics": { "prefix": "bulkhead_egress" } },
-    });
-    AppManifest {
-        app: AppInfo {
-            name: driver.into(),
-            version: "1.0.0".parse().unwrap(),
-            description: None,
-            authors: vec![],
-            license: None,
-            repository: None,
-        },
-        program: ProgramRef {
-            path: String::new(),
-            checksum: String::new(),
-        },
-        provenance: Provenance {
-            signer_key: String::new(),
-            build_info: None,
-            sbom: None,
-        },
-        spec: AppSpec::from_json_value(&spec).unwrap(),
-    }
 }
 
 fn spec(app: &str, allow: &[String], granted: bool) -> InstanceSpec {
@@ -238,13 +160,9 @@ fn spec(app: &str, allow: &[String], granted: bool) -> InstanceSpec {
 async fn up(rt: &Node, spec: InstanceSpec) -> InstanceHandle {
     let driver = bulkhead_host::egress_driver_app(&spec.app);
     if rt.2.app(&driver).is_none() {
-        let args = rt.0.egress_driver_args(&spec.app).unwrap();
-        rt.2.add(AppDeployment::new(
-            driver_manifest(&driver, &args),
-            rt.3.clone(),
-        ))
-        .await
-        .unwrap();
+        rt.2.add(common::egress_driver(&rt.0, &spec.app, rt.3.clone()))
+            .await
+            .unwrap();
     }
     rt.0.spawn(&rt.1, spec).unwrap()
 }

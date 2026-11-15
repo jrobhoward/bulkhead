@@ -723,3 +723,99 @@ async fn helper____sql_driver____reads_its_password_and_logs_in_over_the_nodes_s
     a.kill();
     apps.stop().await;
 }
+
+/// The users of the processes running the program `name`: one of its
+/// arguments ends in it (on FreeBSD the runner executes the program
+/// through the run-time linker, which comes first).
+fn users_of(name: &str) -> Vec<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["axww", "-o", "uid=", "-o", "args="])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (uid, args) = line.trim().split_once(char::is_whitespace)?;
+            args.split_whitespace()
+                .any(|arg| arg.rsplit('/').next() == Some(name))
+                .then(|| uid.parse().ok())?
+        })
+        .collect()
+}
+
+/// An app's egress driver under the helper (ROADMAP DA4): a user of its
+/// own, neither the node's nor the app's, its connection to the app's
+/// allowed server opened by the node, and the app's request answered
+/// through it.
+#[cfg(feature = "egress")]
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____egress_driver____under_its_own_user_reaches_the_apps_server_through_the_node() {
+    use std::io::{Read, Write};
+    let Some(started) = helper("helper____egress_driver") else {
+        return;
+    };
+    // A server that answers each connection's first request and hangs up.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = server.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut stream in server.incoming().flatten() {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi");
+        }
+    });
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let dir = privhelper::dir_owned(&started.dir.path().join("prog"), started.node_uid, 0o755);
+    let driver = rt.load_native(NativeCode {
+        path: privhelper::copy_owned(common::egress_program(), &dir, started.node_uid),
+        kind: NativeProgram::Executable,
+    });
+    let app = rt.load_native(NativeCode {
+        path: privhelper::copy_owned(common::native_sdk(), &dir, started.node_uid),
+        kind: NativeProgram::Executable,
+    });
+    let apps = rt.start_apps(Vec::new()).await.unwrap();
+    apps.add(common::egress_driver(&rt, "a", driver))
+        .await
+        .unwrap();
+    let mut s = spec("a");
+    s.callback_deadline = LONG;
+    s.granted.insert(Capability::HttpOutgoing);
+    s.services.egress.allow = vec![format!("http://{address}")];
+    let a = rt.spawn(&app, s).unwrap();
+
+    let answered = ask(&a, &format!("fetch GET http://{address}/hello")).await;
+    let outside = ask(
+        &a,
+        &format!("fetch GET http://127.0.0.1:{}/", address.port() + 1),
+    )
+    .await;
+    let drivers = users_of("bulkhead-egress");
+    let apps_users = users_of("bulkhead-fixture-sdk");
+
+    assert_eq!(answered, "200 hi");
+    assert_eq!(outside, "err:denied");
+    assert_eq!(drivers.len(), 1, "{drivers:?}");
+    assert_eq!(apps_users.len(), 1, "{apps_users:?}");
+    let (driver_user, app_user) = (drivers[0], apps_users[0]);
+    assert!(driver_user >= started.first_uid, "{driver_user}");
+    assert!(app_user >= started.first_uid, "{app_user}");
+    assert_ne!(driver_user, app_user, "the driver has a user of its own");
+    a.kill();
+    apps.stop().await;
+}

@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP egress on Linux and FreeBSD (ROADMAP DA4, step 4): the egress
+  tests run on FreeBSD too; a helper test runs an app's egress driver
+  under a user of its own; `scripts/priv-e2e-systemd.sh` deploys an app
+  allowed one server and checks with `strace` that the node, not the
+  driver, connects, and finds the board's user by its cgroup (the node's
+  drivers now take the first users).
+
 - HTTP egress runs outside the node (ROADMAP DA4, step 3): for each app
   granted `bulkhead:http-egress` with an `allow` list, the node starts
   `bulkhead-egress` as the app `bulkhead-egress-<app>` (beside the runner,
