@@ -74,6 +74,11 @@ pub struct InstanceState {
     pub(crate) connect: Option<crate::config::DriverEndpoint>,
     /// The app an egress driver connects for (DA4).
     pub(crate) egress: Option<String>,
+    /// Where a driver may have the node connect it by host and port (DA5).
+    pub(crate) endpoints: Vec<crate::config::DriverEndpoint>,
+    /// The app's `bulkhead-modbus:modbus` scope and grant, for the node's
+    /// checks of its calls (DA5).
+    pub(crate) modbus: (Option<serde_json::Value>, bool),
     /// The node's failover lease, for an instance bound to it
     /// ([`InstanceSpec::bound_to_lease`]).
     pub(crate) lease: Option<watch::Receiver<RunUntil>>,
@@ -115,6 +120,16 @@ impl InstanceState {
             metrics: spec.driver.as_ref().is_some_and(|d| d.metrics),
             connect: spec.driver.as_ref().and_then(|d| d.connect.clone()),
             egress: spec.driver.as_ref().and_then(|d| d.egress.clone()),
+            endpoints: spec
+                .driver
+                .as_ref()
+                .map(|d| d.endpoints.clone())
+                .unwrap_or_default(),
+            modbus: spec
+                .services
+                .extensions
+                .get(crate::services::modbus::MODBUS_PACKAGE)
+                .map_or((None, false), |e| (Some(e.scope.clone()), e.granted)),
             lease,
             services,
         })

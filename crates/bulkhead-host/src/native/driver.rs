@@ -126,9 +126,18 @@ async fn first_to_accept(
 pub(crate) async fn connect_to(
     rt: &Arc<RuntimeInner>,
     served: Option<&str>,
+    endpoints: &[crate::config::DriverEndpoint],
     host: &str,
     port: u16,
 ) -> Result<std::os::fd::OwnedFd, NetError> {
+    // A driver given endpoints (the Modbus devices, ROADMAP DA5) reaches
+    // those alone.
+    let listed = endpoints.iter().find(|e| {
+        matches!(e, crate::config::DriverEndpoint::Tcp { host: h, port: p, .. } if h == host && *p == port)
+    });
+    if let Some(endpoint) = listed {
+        return connect(rt, Some(endpoint)).await;
+    }
     #[cfg(feature = "egress")]
     {
         use crate::services::egress::Reach;
@@ -164,7 +173,7 @@ pub(crate) async fn connect_to(
     }
     #[cfg(not(feature = "egress"))]
     {
-        let _ = (rt, served, host, port);
+        let _ = (rt, served, host, port, endpoints);
         Err(NetError::Denied)
     }
 }

@@ -375,6 +375,10 @@ pub struct RuntimeConfig {
     pub egress: Egress,
     /// Blobs between apps (`bulkhead:blobs`, ROADMAP BL1).
     pub blobs: Blobs,
+    /// The Modbus drivers (ROADMAP DA5): the node forwards apps'
+    /// `bulkhead-modbus:modbus` calls to them, after its checks; `None`
+    /// on a node without them.
+    pub modbus: Option<ModbusDrivers>,
     /// Most log records per second per app, `bulkhead:logging` records and
     /// captured stdout and stderr lines together; an app's own
     /// `rate_limit_per_sec` can only lower it. 0 for no ceiling.
@@ -445,6 +449,11 @@ pub struct DriverProfile {
     /// running instances may send requests, and nowhere else. Given by the
     /// runtime to every app named [`EGRESS_DRIVER_PREFIX`]`<app>`.
     pub egress: Option<String>,
+    /// Where the node connects it by host and port (`Request::ConnectTo`)
+    /// besides an egress driver's: the Modbus driver's devices (ROADMAP
+    /// DA5). A host and port listed here is connected, anything else
+    /// refused.
+    pub endpoints: Vec<DriverEndpoint>,
 }
 
 /// Where the node connects a driver ([`DriverProfile::connect`]).
@@ -540,6 +549,24 @@ impl Default for NativeConfig {
             helper: None,
         }
     }
+}
+
+/// The Modbus drivers a node runs (ROADMAP DA5), as the node's checks of
+/// apps' `bulkhead-modbus:modbus` calls need them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ModbusDrivers {
+    /// Devices `bulkhead-modbus` polls.
+    pub devices: std::collections::BTreeSet<String>,
+    /// Devices `bulkhead-modbus-primary`, a singleton, polls
+    /// (`primary_only`).
+    pub primary: std::collections::BTreeSet<String>,
+    /// Whether `bulkhead-modbus-server` serves masters.
+    pub server: bool,
+    /// How long a forwarded call may take, the device's own timeouts
+    /// within it; while its driver is not running, the call is tried
+    /// again until then.
+    pub timeout: Duration,
 }
 
 /// Blobs between apps (`bulkhead:blobs`, ROADMAP BL1): data one app
@@ -644,6 +671,7 @@ impl Default for RuntimeConfig {
             datasources: BTreeMap::new(),
             egress: Egress::default(),
             blobs: Blobs::default(),
+            modbus: None,
             log_records_per_sec: 1_000,
             incoming_calls_per_peer: 10_000,
             cast_credit: 64,

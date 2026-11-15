@@ -263,6 +263,7 @@ impl Node {
                     .collect(),
                 egress: config.egress.runtime(),
                 blobs: config.blobs.runtime(),
+                modbus: None,
                 datasources: datasources.clone(),
                 buckets: config
                     .buckets
@@ -680,6 +681,7 @@ fn bind_drivers(
                     metrics: false,
                     connect: None,
                     egress: None,
+                    endpoints: Vec::new(),
                 },
             ))
         })

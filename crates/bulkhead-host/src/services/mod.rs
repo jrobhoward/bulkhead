@@ -37,6 +37,7 @@ pub mod groups;
 pub mod keyvalue;
 pub mod logging;
 pub mod metrics;
+pub mod modbus;
 pub mod secrets;
 pub mod sockets;
 pub mod sql;
@@ -229,6 +230,8 @@ pub(crate) struct Shared {
     sql: Arc<sql::Shared>,
     sockets: Arc<sockets::Shared>,
     blobs: Arc<blobs::Shared>,
+    /// The Modbus drivers apps' calls go to (ROADMAP DA5).
+    modbus: Option<crate::config::ModbusDrivers>,
     /// Host names to addresses, for sockets, egress and SQL (ROADMAP DA9).
     names: crate::names::Names,
 }
@@ -249,6 +252,7 @@ impl Shared {
             sql: Arc::new(sql::Shared::new(config)),
             sockets: Arc::new(sockets::Shared::new(&names)),
             blobs,
+            modbus: config.modbus.clone(),
             names,
         })
     }
@@ -267,6 +271,11 @@ impl Shared {
     /// SQL datasources, whose drivers it calls (ROADMAP DA3).
     pub(crate) fn sql(&self) -> &Arc<sql::Shared> {
         &self.sql
+    }
+
+    /// The Modbus drivers, if the node runs them (ROADMAP DA5).
+    pub(crate) fn modbus(&self) -> Option<&crate::config::ModbusDrivers> {
+        self.modbus.as_ref()
     }
 
     /// Blobs between apps (ROADMAP BL1), for `bulkhead status`.

@@ -459,9 +459,13 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
             let hub = hub.clone();
             Handled::Later(Box::pin(async move {
                 let ctx = &hub.ctx;
-                let served = ctx.spec.driver.as_ref().and_then(|d| d.egress.as_deref());
+                let driver = ctx.spec.driver.as_ref();
+                let served = driver.and_then(|d| d.egress.as_deref());
+                let endpoints = driver.map(|d| d.endpoints.as_slice()).unwrap_or_default();
                 Answer::Connected(
-                    match crate::native::driver::connect_to(&ctx.rt, served, &host, port).await {
+                    match crate::native::driver::connect_to(&ctx.rt, served, endpoints, &host, port)
+                        .await
+                    {
                         Ok(fd) => hub
                             .fds
                             .send(std::os::fd::AsFd::as_fd(&fd), Passed::Stream)

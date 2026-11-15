@@ -704,3 +704,136 @@ async fn egress_driver____its_apps_instances_exited____denied() {
     assert_eq!(after, "err:Denied");
     d.kill();
 }
+
+/// A runtime whose driver `drv` the node connects to `endpoints` alone,
+/// and the native fixture.
+fn node_endpoints(endpoints: Vec<bulkhead_host::DriverEndpoint>) -> (Runtime, LoadedApp) {
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native: native_config(),
+        drivers: BTreeMap::from([(
+            "drv".to_string(),
+            DriverProfile {
+                endpoints,
+                ..DriverProfile::default()
+            },
+        )]),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let code = rt.load_native(NativeCode {
+        path: native_fixtures().1.clone(),
+        kind: NativeProgram::Executable,
+    });
+    (rt, code)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver____given_endpoints____the_node_connects_those_and_no_other() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    greeter(listener, "device");
+    let (rt, code) = node_endpoints(vec![bulkhead_host::DriverEndpoint::Tcp {
+        host: "127.0.0.1".into(),
+        port,
+        timeout: Duration::from_secs(1),
+    }]);
+    let d = spawn(&rt, &code, "drv");
+    let plain = spawn(&rt, &code, "plain");
+
+    let from_callback = ask(&d, &format!("driver-connect-to 127.0.0.1 {port}")).await;
+    let from_sender = ask(&d, &format!("sender-connect-to 127.0.0.1 {port}")).await;
+    let other_port = ask(&d, &format!("driver-connect-to 127.0.0.1 {}", port + 1)).await;
+    let not_a_driver = ask(&plain, &format!("driver-connect-to 127.0.0.1 {port}")).await;
+
+    assert_eq!(from_callback, "device");
+    assert_eq!(from_sender, "device");
+    assert_eq!(other_port, "err:Denied");
+    assert_eq!(not_a_driver, "err:Denied");
+}
+
+/// A runtime running the Modbus drivers' stand-in (the native fixture as
+/// `bulkhead-modbus`, answering `Ok(function)`), with device `pump-1`
+/// there and `valve-1` on a primary driver that does not run, no server.
+fn node_modbus() -> (Runtime, LoadedApp) {
+    let mut drivers = bulkhead_host::ModbusDrivers::default();
+    drivers.devices.insert("pump-1".into());
+    drivers.primary.insert("valve-1".into());
+    drivers.timeout = Duration::from_millis(300);
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native: native_config(),
+        modbus: Some(drivers),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let code = rt.load_native(NativeCode {
+        path: native_fixtures().1.clone(),
+        kind: NativeProgram::Executable,
+    });
+    (rt, code)
+}
+
+/// An instance of `app` declaring the Modbus package with `scope`.
+fn modbus_app(
+    rt: &Runtime,
+    code: &LoadedApp,
+    app: &str,
+    scope: serde_json::Value,
+) -> InstanceHandle {
+    let mut spec = InstanceSpec {
+        memory_max: 64 << 20,
+        callback_deadline: Duration::from_secs(5),
+        init_timeout: Duration::from_secs(5),
+        ..InstanceSpec::new(app, "1.0.0")
+    };
+    spec.services.extensions.insert(
+        bulkhead_host::services::modbus::MODBUS_PACKAGE.to_string(),
+        bulkhead_host::services::extension::ExtensionSpec::new(scope),
+    );
+    rt.spawn(code, spec).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn modbus____calls_the_node_allows____forwarded_others_answered_by_the_node() {
+    let (rt, code) = node_modbus();
+    let apps = rt.start_apps(Vec::new()).await.unwrap();
+    apps.add(bulkhead_host::AppDeployment::new(
+        common::app_manifest(
+            bulkhead_host::services::modbus::MODBUS_DEVICES_APP,
+            serde_json::json!({
+                "kind": "native-process",
+                "native": { "program": "executable" },
+                "limits": { "callback_deadline_ms": 5000, "memory_max": "64MiB" },
+            }),
+        ),
+        code.clone(),
+    ))
+    .await
+    .unwrap();
+    let a = modbus_app(
+        &rt,
+        &code,
+        "scada",
+        serde_json::json!({ "read": ["pump-1", "valve-1", "ghost"] }),
+    );
+    let ext = |call: &str| format!("ext bulkhead-modbus:modbus {call}");
+
+    let read = ask(&a, &ext(r#"client#read-holding ["pump-1", 0, 2]"#)).await;
+    let write = ask(&a, &ext(r#"client#write-holding ["pump-1", 0, [1]]"#)).await;
+    let unknown = ask(&a, &ext(r#"client#read-holding ["ghost", 0, 2]"#)).await;
+    let not_running = ask(&a, &ext(r#"client#read-coils ["valve-1", 0, 2]"#)).await;
+    let serve = ask(&a, &ext(r#"server#set-holding [0, [1]]"#)).await;
+    let nonsense = ask(&a, &ext(r#"client#reboot ["pump-1"]"#)).await;
+
+    assert_eq!(read, r#"{"Ok":"client#read-holding"}"#);
+    assert_eq!(write, r#"{"Err":"AccessDenied"}"#, "read-only");
+    assert_eq!(unknown, r#"{"Err":"NoSuchDevice"}"#);
+    assert_eq!(
+        not_running,
+        r#"{"Err":{"Offline":"bulkhead-modbus-primary is not running"}}"#
+    );
+    assert_eq!(serve, r#"{"Err":"AccessDenied"}"#);
+    assert_eq!(nonsense, r#"err:NoSuchFunction("client#reboot")"#);
+    apps.stop().await;
+}

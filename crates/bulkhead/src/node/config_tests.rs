@@ -669,6 +669,20 @@ fn NodeConfig____a_driver_named_as_an_apps_egress_driver____refused() {
     assert!(err.contains("an app's own egress driver"), "{err}");
 }
 
+#[rstest::rstest]
+#[case("bulkhead-modbus")]
+#[case("bulkhead-modbus-primary")]
+#[case("bulkhead-modbus-server")]
+fn NodeConfig____a_driver_named_as_a_modbus_driver____refused(#[case] name: &str) {
+    let err = NodeConfig::from_toml_str(&format!(
+        "data_dir = \"/d\"\n[drivers.{name}]\nfiles = []\n"
+    ))
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("own Modbus drivers"), "{err}");
+}
+
 #[test]
 fn egress____unset____defaults_and_no_ceiling() {
     let config = NodeConfig::from_toml_str("data_dir = \"/d\"\n").unwrap();

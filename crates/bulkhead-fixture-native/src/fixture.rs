@@ -613,6 +613,18 @@ impl App for Fixture {
     }
 
     fn handle_call(&mut self, ctx: &mut Ctx, call: CallRef, msg: Envelope) -> Option<Envelope> {
+        // A Modbus call the node forwards (ROADMAP DA5), standing in for
+        // the driver: answered `Ok(function)`, with the call's schema.
+        if msg.schema.as_deref() == Some("bulkhead/modbus") {
+            let function =
+                ciborium::from_reader::<(String, ciborium::Value), _>(msg.body.as_slice())
+                    .map_or_else(|e| format!("bad call: {e}"), |(f, _)| f);
+            let mut body = Vec::new();
+            let _ = ciborium::into_writer(&Ok::<String, ()>(function), &mut body);
+            let mut reply = Envelope::new("application/cbor", body);
+            reply.schema = msg.schema;
+            return Some(reply);
+        }
         // `{"key": ..., "cmd": ...}` from `call-app`: a body a pool can
         // hash, carrying a command.
         let command = if msg.content_type == "application/json" {

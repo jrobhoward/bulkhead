@@ -474,6 +474,13 @@ async fn extension_call(
     function: String,
     args: Vec<u8>,
 ) -> Result<Result<p::Bytes, p::ExtensionError>, String> {
+    if package == crate::services::modbus::MODBUS_PACKAGE
+        && let Some(drivers) = state.ctx.rt.services.modbus().cloned()
+    {
+        let (scope, granted) = state.modbus.clone();
+        let rt = state.ctx.rt.clone();
+        return Ok(modbus_call(&rt, scope.as_ref(), granted, &drivers, &function, args).await);
+    }
     let Some(ext) = state
         .ctx
         .rt
@@ -491,6 +498,26 @@ async fn extension_call(
         }
         Err(NativeCallError::BadArguments(why)) => Ok(Err(p::ExtensionError::BadArguments(why))),
         Err(NativeCallError::Crash(why)) => Err(format!("extension {package}: {why}")),
+    }
+}
+
+/// A `bulkhead-modbus:modbus` call (ROADMAP DA5): the node's checks, then
+/// the driver's answer.
+async fn modbus_call(
+    rt: &RuntimeInner,
+    scope: Option<&serde_json::Value>,
+    granted: bool,
+    drivers: &crate::config::ModbusDrivers,
+    function: &str,
+    args: Vec<u8>,
+) -> Result<p::Bytes, p::ExtensionError> {
+    use crate::services::modbus::{self, Route};
+    match modbus::route(drivers, scope, granted, function, &args)? {
+        Route::Answer(result) => Ok(p::Bytes(result)),
+        Route::Driver(driver) => match modbus::forward(rt, drivers, driver, function, args).await {
+            Ok(result) => Ok(p::Bytes(result)),
+            Err(why) => Ok(p::Bytes(modbus::unavailable(function, why))),
+        },
     }
 }
 
@@ -940,10 +967,14 @@ impl InstanceTask {
                 })) => {
                     let rt = state.ctx.rt.clone();
                     let (endpoint, served) = (state.connect.as_ref(), state.egress.as_deref());
+                    let endpoints = state.endpoints.clone();
                     let connected = super::killable(&self.kill, &self.control, async {
                         match &request {
                             Request::ConnectTo { host, port } => {
-                                crate::native::driver::connect_to(&rt, served, host, *port).await
+                                crate::native::driver::connect_to(
+                                    &rt, served, &endpoints, host, *port,
+                                )
+                                .await
                             }
                             _ => crate::native::driver::connect(&rt, endpoint).await,
                         }

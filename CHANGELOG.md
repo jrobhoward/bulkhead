@@ -8,6 +8,17 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Modbus out of the node, the node's side (ROADMAP DA5, step 1):
+  `DriverProfile.endpoints`, where the node connects a driver by host
+  and port (`Request::ConnectTo`) and nowhere else; `services::modbus`,
+  which checks apps' `bulkhead-modbus:modbus` calls as the extension did
+  (the grant, `read`, `write`, `serve`, a known device, the server
+  running), answers its refusals itself in the same shapes, and forwards
+  the rest to the Modbus drivers (`RuntimeConfig.modbus`; schema
+  `bulkhead/modbus`); nothing uses it yet. The names `bulkhead-modbus`,
+  `bulkhead-modbus-primary` and `bulkhead-modbus-server` are reserved
+  for bundles and `[drivers.<app>]`.
+
 - HTTP egress documented (ROADMAP DA4, step 6): DESIGN.md ("HTTP
   egress"), SECURITY.md (the egress driver's trust, its boundary, the
   parser row moved), OPERATIONS.md ("HTTP egress": installing it, a

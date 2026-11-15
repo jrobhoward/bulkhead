@@ -183,6 +183,11 @@ impl Node {
                 "{name} is the node's own resolver of host names; no bundle may take its name"
             )));
         }
+        if is_modbus_driver(&name) {
+            return Err(NodeError::Refused(format!(
+                "{name} is one of the node's own Modbus drivers; no bundle may take its name"
+            )));
+        }
         if name.starts_with(bulkhead_host::SQL_DRIVER_PREFIX) {
             return Err(NodeError::Refused(format!(
                 "{name}: names starting {} are the datasources' own drivers; no bundle may take one",
@@ -634,4 +639,12 @@ fn write_program(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()?;
     drop(file);
     std::fs::rename(&tmp, path)
+}
+
+/// Whether `name` is one of the node's Modbus drivers (ROADMAP DA5).
+pub(super) fn is_modbus_driver(name: &str) -> bool {
+    use bulkhead_host::services::modbus::{
+        MODBUS_DEVICES_APP, MODBUS_PRIMARY_APP, MODBUS_SERVER_APP,
+    };
+    [MODBUS_DEVICES_APP, MODBUS_PRIMARY_APP, MODBUS_SERVER_APP].contains(&name)
 }

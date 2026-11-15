@@ -1334,6 +1334,18 @@ impl NodeConfig {
                     "{RESOLVE_APP} is the node's own resolver, configured by [resolver]"
                 ));
             }
+            if [
+                bulkhead_host::services::modbus::MODBUS_DEVICES_APP,
+                bulkhead_host::services::modbus::MODBUS_PRIMARY_APP,
+                bulkhead_host::services::modbus::MODBUS_SERVER_APP,
+            ]
+            .contains(&app.as_str())
+            {
+                return invalid(format!(
+                    "{app} is one of the node's own Modbus drivers, configured by \
+                     [extensions.\"bulkhead-modbus:modbus\"]"
+                ));
+            }
             if app.starts_with(bulkhead_host::SQL_DRIVER_PREFIX) {
                 return invalid(format!(
                     "{}<name> is a datasource's own driver, configured by [datasources.<name>]",
