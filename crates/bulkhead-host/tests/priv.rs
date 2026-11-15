@@ -819,3 +819,85 @@ async fn helper____egress_driver____under_its_own_user_reaches_the_apps_server_t
     a.kill();
     apps.stop().await;
 }
+
+/// The `shmem` bytes charged to app `app`'s cgroup under this test
+/// process's helpers (`<cgroup>/apps/<app>`, which counts its instances).
+#[cfg(target_os = "linux")]
+fn app_shmem(app: &str) -> u64 {
+    let ours = format!("bulkhead-test-{}-", std::process::id());
+    std::fs::read_dir("/sys/fs/cgroup")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&ours))
+        .filter_map(|e| {
+            std::fs::read_to_string(e.path().join("apps").join(app).join("memory.stat")).ok()
+        })
+        .filter_map(|stat| {
+            stat.lines()
+                .find_map(|l| l.strip_prefix("shmem "))
+                .map(|v| v.trim().parse::<u64>().unwrap())
+        })
+        .sum()
+}
+
+/// A blob between two apps under the helper (ROADMAP BL1): each app under
+/// a user of its own, the reader's descriptor working with no file
+/// permissions involved, neither able to change it once sealed, and on
+/// Linux the memory charged to the writer's cgroup, not the reader's.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____blob____written_by_one_user_read_by_another() {
+    let Some(started) = helper("helper____blob") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let code = program(&started, &rt);
+    let manifest = |name: &str| {
+        common::app_manifest(
+            name,
+            serde_json::json!({
+                "kind": "native-process",
+                "native": { "program": "executable" },
+                "capabilities": { "bulkhead:blobs": {} },
+                "limits": { "callback_deadline_ms": 5000, "memory_max": "64MiB" },
+            }),
+        )
+    };
+    let apps = rt
+        .start_apps(vec![
+            bulkhead_host::AppDeployment::new(manifest("writer"), code.clone()),
+            bulkhead_host::AppDeployment::new(manifest("reader"), code),
+        ])
+        .await
+        .unwrap();
+    let w = apps.app("writer").unwrap().instances().remove(0);
+    let r = apps.app("reader").unwrap().instances().remove(0);
+    let size = 4 << 20;
+
+    let id = ask(&w, &format!("blob-create {size}")).await;
+    let filled = ask(&w, &format!("blob-fill {id} ab")).await;
+    let sealed = ask(&w, &format!("blob-seal {id}")).await;
+    let shared = ask(&w, &format!("blob-share {id} reader")).await;
+    let read = ask(&r, &format!("blob-open {id}")).await;
+    let tried = ask(&r, &format!("blob-try {id}")).await;
+    let users = (ask(&w, "ids").await, ask(&r, "ids").await);
+    #[cfg(target_os = "linux")]
+    let charged = (app_shmem("writer"), app_shmem("reader"));
+
+    assert_eq!(
+        (filled.as_str(), sealed.as_str(), shared.as_str()),
+        ("ok", "ok", "ok"),
+        "blob {id}"
+    );
+    assert_eq!(read, format!("{size} abababababababab"));
+    assert!(
+        tried.split_whitespace().all(|kv| !kv.ends_with("=ok")),
+        "{tried}"
+    );
+    assert_ne!(users.0, users.1, "a user of its own each");
+    #[cfg(target_os = "linux")]
+    {
+        assert!(charged.0 >= size, "the writer's cgroup: {charged:?}");
+        assert!(charged.1 < size / 4, "the reader's cgroup: {charged:?}");
+    }
+    apps.stop().await;
+}

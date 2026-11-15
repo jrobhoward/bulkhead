@@ -303,6 +303,11 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Blobs on Linux and FreeBSD (ROADMAP BL1, step 4): `tests/blobs.rs`
+  passes on both; a helper test writes a blob as one app's user and
+  reads it as another's, neither able to change it once sealed, and on
+  Linux finds it charged to the writer's cgroup alone.
+
 - Blobs in the SDK (ROADMAP BL1, step 3): `bulkhead_sdk::blob` (cargo
   feature `blob`): `BlobWriter::create`, `write_at`, `seal`; `share`,
   `open` (a `BlobReader`: `map()` read-only with no copy, or `read_at`),
