@@ -94,6 +94,10 @@ tokio-rustls = { workspace = true }
 tokio-modbus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
 
+[[example]]
+name = "admin_cost"
+required-features = ["tls"]
+
 [[test]]
 name = "cli"
 required-features = ["node"]

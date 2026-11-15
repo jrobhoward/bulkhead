@@ -1,0 +1,29 @@
+ 19:08:44 up 1 day,  3:21,  1 user,  load average: 0.26, 2.03, 1.74
+## before
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 1158 | 1230 | 760 |
+| remote status of an absent app | 1164 | 1272 | 760 |
+| GET /metrics | 123 | 170 | 90 |
+## after
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 1272 | 1396 | 1000 |
+| remote status of an absent app | 1280 | 1377 | 1000 |
+| GET /metrics | 200 | 263 | 240 |
+## before
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 1164 | 1234 | 770 |
+| remote status of an absent app | 1168 | 1214 | 770 |
+| GET /metrics | 126 | 171 | 110 |
+## after
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 1269 | 1371 | 980 |
+| remote status of an absent app | 1274 | 1372 | 1000 |
+| GET /metrics | 201 | 261 | 240 |

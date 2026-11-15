@@ -8,6 +8,10 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `examples/admin_cost` (crate `bulkhead`) measures remote admin requests
+  and metrics scrapes against a running node (ROADMAP DA7, step 6;
+  BASELINE.md, 2026-11-14).
+
 - The remote admin API's TLS runs outside the node (ROADMAP DA7, step 4):
   for `[admin]` the node binds the address and starts `bulkhead-admin` as
   an app of its own (beside the runner, or `[native] admin`), which holds

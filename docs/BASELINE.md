@@ -3043,6 +3043,20 @@ One connection, p50 (the node's in the same run):
 - **What it buys:** no DNS reply parsed in the node (DESIGN.md, "Protocols outside the core"). At the rates apps resolve names (a connection's start, a pool's), tens of microseconds a lookup are not felt; an app that resolves per request should keep its addresses.
 - **Found while measuring:** the streams the node opens for the driver lacked `TCP_NODELAY`, so each query (its length, then its message) waited 40 ms for the server's delayed ACK; the driver now sets it, as hickory does on its own streams.
 
+## 2026-11-14: the remote admin API and the metrics endpoint as drivers (DA7)
+
+`crates/bulkhead/examples/admin_cost.rs` (run by `admin_cost.sh` beside it), against a `bulkhead node` process with `[admin]` and `[metrics]` on loopback: 1,000 remote requests of each kind one at a time through the CLI's client (a new TLS 1.3 connection with raw public keys for each, as the CLI makes, and each request signed, ROADMAP DA7 step 1), then 1,000 `GET /metrics`, each on a new connection. Before: the node at step 1 (commit 43b1071), terminating TLS and serving the metrics itself, signatures already checked. After: the node through `bulkhead-admin` and `bulkhead-metrics`. CPU is the node's process and its children's (the drivers'), per request. Release builds, two rounds each: the 16-core machine (load under 0.5 at the start, no VM running) and the Raspberry Pi 5 (load under 0.3). Results: `crates/bulkhead/examples/results/admin-{x86,pi5}-2026-11-14.txt`.
+
+| Request | 16-core p50, before → after | 16-core CPU | Pi p50 | Pi CPU |
+| --- | --- | --- | --- | --- |
+| remote `list` | 530 → 621–649 µs | 400–410 → 560–580 µs | 1,158–1,164 → 1,269–1,272 µs | 760–770 → 980–1,000 µs |
+| remote `status` | 529–531 → 563–601 µs | 350 → 460–500 µs | 1,164–1,168 → 1,274–1,280 µs | 760–770 → 1,000 µs |
+| `GET /metrics` | 117–121 → 218–260 µs | 80 → 240–290 µs | 123–126 → 200–201 µs | 90–110 → 240 µs |
+
+- **A remote request** costs 30 to 120 µs more at p50 (6 to 22%) and 110 to 240 µs more CPU, on a request whose TLS handshake dominates: a second process's handshake and accept, the admin stream asked of the node and passed, and the bytes copied once more each way.
+- **A scrape** costs 75 to 140 µs more and 2.2 to 3.6 times the CPU: the text crosses the driver's channel and is written by the driver's hyper. At Prometheus's interval (15 s and more), a fraction of a millisecond each.
+- **What it buys:** no TLS handshake from a stranger and no unauthenticated HTTP request is parsed in the node, and the admin driver, compromised, cannot act for an operator (DESIGN.md, SECURITY.md).
+
 ## Not measured yet
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.

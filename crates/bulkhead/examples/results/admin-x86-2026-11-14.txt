@@ -1,0 +1,28 @@
+## before
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 530 | 917 | 400 |
+| remote status of an absent app | 531 | 753 | 350 |
+| GET /metrics | 117 | 148 | 80 |
+## after
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 621 | 992 | 560 |
+| remote status of an absent app | 601 | 829 | 500 |
+| GET /metrics | 260 | 325 | 290 |
+## before
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 530 | 922 | 410 |
+| remote status of an absent app | 529 | 748 | 350 |
+| GET /metrics | 121 | 157 | 80 |
+## after
+1000 each, one at a time; CPU of the node and its drivers
+| request | p50 µs | p99 µs | node CPU µs/request |
+| --- | --- | --- | --- |
+| remote list (a new TLS connection each) | 649 | 960 | 580 |
+| remote status of an absent app | 563 | 766 | 460 |
+| GET /metrics | 218 | 280 | 240 |
