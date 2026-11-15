@@ -3104,9 +3104,23 @@ One connection, p50 (the node's in the same run):
 - **Memory:** a driver per app, 4.7 to 5.0 MiB resident warm and idle on the 16-core machine and 6.2 to 6.3 MiB on the Pi; 9.7 to 10.4 MiB, and 7.7 to 9.1 MiB, after the rows (the 1 MiB bodies).
 - **What it buys:** no HTTP response or server TLS is parsed in the node, and a driver, compromised, holds one app's requests and reaches that app's destinations only, through connections the node opens (DESIGN.md, SECURITY.md).
 
+## 2026-11-15: blobs against the rings (S42)
+
+`spikes/s42` (`scripts/run.sh bench`): the same bytes from one app to another through the node, through `bulkhead-native`'s rings as one frame each way (two crossings, as through a driver), or as a blob: a memfd the node makes, sizes and seals, the writer fills (mapped, or `pwrite`), the node seals against writes, and the reader maps read-only (or `pread`s); both apps through `bulkhead-runner`. p50 and CPU (node, writer and reader) per transfer; release builds, two rounds each: the 16-core machine (no VM running, load under 1) and the Raspberry Pi 5 (load under 1.3). Results: `spikes/s42/results/{x86,pi5}-2026-11-15.txt`.
+
+| Transfer | 16-core: rings → best blob | 16-core CPU | Pi: rings → best blob | Pi CPU |
+| --- | --- | --- | --- | --- |
+| 64 KiB | 14–18 → 117–140 µs | 47–54 → 213–233 µs | 14 → 92–119 µs | 42–43 → 184–215 µs |
+| 1 MiB | 913–930 → 909–972 µs | 1.70–1.72 → 1.05–1.09 ms | 389 → 1,089–1,182 µs | 0.71 → 1.24–1.31 ms |
+| 20 MiB | 20.4–20.7 → 18.0–18.1 ms | 35.7–36.1 → 18.1 ms | 14.8–15.8 → 17.0–17.9 ms | 24–26 → 17–18 ms |
+
+- A blob costs about 100 µs before its first byte and a fault, a zeroed page and its freeing every 4 KiB; its pages made ahead (`fallocate`) save 15 to 45% at 64 KiB and 1 MiB. The rings win to about 1 MiB; blobs save CPU only toward 20 MiB (half on the 16-core machine, a third on the Pi).
+- The rings' floor for 1 MiB through the node twice, 0.4 to 0.9 ms, is two to seven times below what the node's own path added for it through DA4's driver (1.6 to 2.8 ms): the gap is the node's handling of large frames (ROADMAP PF1).
+
 ## Not measured yet
 
-- Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4), and the node's channel's rate for large messages.
+- Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
+- One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.
 

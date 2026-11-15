@@ -1,0 +1,20 @@
+# S42: blobs, the claim check. Standalone: built from this directory alone
+# on each machine (`cargo build --release`), against the main workspace's
+# `bulkhead-native` by path, so the rings, the descriptor socket and the
+# sealed mappings are the ones the node uses, and the writer and reader run
+# through the real `bulkhead-runner`.
+[package]
+name = "s42"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bulkhead-native = { path = "../../crates/bulkhead-native", default-features = false, features = ["channel"] }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "mm", "pipe", "process"] }
+libc = "0.2"
+
+[profile.release]
+debug = 1
+
+[workspace]

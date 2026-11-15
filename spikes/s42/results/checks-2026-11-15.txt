@@ -1,0 +1,32 @@
+# s42 checks, 2026-11-15, through bulkhead-runner (Landlock and seccomp on Linux, Capsicum on FreeBSD)
+
+== 16-core machine (Linux 6.8), as the user: every check PASS, as on the Ubuntu VM below without the cgroup figures
+
+== Ubuntu 26.04 VM (Linux 7.0), as root: run.sh root-checks (users 61001 and 61002, a cgroup each)
+writer pid=1991 uid=61001, reader pid=1992 uid=61002, through /tmp/s42-root.f1EtYw/bulkhead-runner
+PASS w1 mmap: filled, sealed, read by the other app: seal Ok(()), sum matches true
+PASS w2 pwrite: filled, sealed, read by the other app: seal Ok(()), sum matches true
+PASS the writer cannot resize a granted blob: ftruncate before filling: EPERM
+PASS the writer cannot change a sealed blob: pwrite=EPERM ftruncate=EPERM mmap_write=EPERM mprotect_write=-
+PASS a reader cannot change a sealed blob: pwrite=EPERM ftruncate=EPERM mmap_write=EPERM mprotect_write=EACCES
+PASS a writable mapping kept by the writer blocks the write seal: refused: Os { code: 16, kind: ResourceBusy, message: "Device or resource busy" }
+NOTE F_SEAL_FUTURE_WRITE with a kept writable mapping: the seal Ok(()); a write through the writer's kept mapping after it landed, so it cannot make a blob immutable
+PASS a reader keeps a blob the node let go of (the node cannot revoke it): 20 MiB read before and after: sums match true
+NOTE memory: filled (writer's mapping kept): shmem writer 20484 KiB, reader 4 KiB, parent 20488 KiB; system Shmem +20456 KiB
+NOTE memory: read (reader's mapping kept, writer's dropped): shmem writer 20484 KiB, reader 4 KiB, parent 20488 KiB; system Shmem +20456 KiB
+NOTE memory: writer exited, its cgroup removed: shmem writer 0 KiB, reader 4 KiB, parent 20484 KiB; system Shmem +20456 KiB
+NOTE memory: node's descriptor closed, reader still mapped: shmem writer 0 KiB, reader 4 KiB, parent 20484 KiB; system Shmem +20456 KiB
+NOTE memory: reader dropped it: shmem writer 0 KiB, reader 4 KiB, parent 4 KiB; system Shmem -20 KiB
+
+== FreeBSD 15.0 VM, as root: run.sh root-checks (users 61001 and 61002; racct on)
+writer pid=1610 uid=61001, reader pid=1611 uid=61002, through /tmp/s42-root.DrPZAl/bulkhead-runner
+PASS w1 mmap: filled, sealed, read by the other app: seal Ok(()), sum matches true
+PASS w2 pwrite: filled, sealed, read by the other app: seal Ok(()), sum matches true
+PASS the writer cannot resize a granted blob: ftruncate before filling: ENOTCAPABLE
+PASS the writer cannot change a sealed blob: pwrite=EPERM ftruncate=ENOTCAPABLE mmap_write=EACCES mprotect_write=-
+PASS a reader cannot change a sealed blob: pwrite=ENOTCAPABLE ftruncate=ENOTCAPABLE mmap_write=ENOTCAPABLE mprotect_write=EACCES
+PASS a writable mapping kept by the writer blocks the write seal: refused: Os { code: 16, kind: ResourceBusy, message: "Device busy" }
+PASS a reader keeps a blob the node let go of (the node cannot revoke it): 20 MiB read before and after: sums match true
+NOTE rctl, writer with its mapping: memoryuse=44M vmemoryuse=61M
+NOTE rctl, reader with its mapping: memoryuse=23M vmemoryuse=35M
+(read 2.1 s after each stage, racct's update interval; the same run as the user passes every check)

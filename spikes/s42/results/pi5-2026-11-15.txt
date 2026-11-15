@@ -1,0 +1,45 @@
+# s42 bench, Raspberry Pi 5 (Cortex-A76 x4, Linux 7.0), 2026-11-15, release build, through bulkhead-runner
+# CPU: node + writer + reader per transfer (/proc/<pid>/schedstat); 'ahead': fallocate time per blob, taken out of the row
+
+== round 1, 2026-11-15T12:43:45-06:00, load 1.13 0.30 0.10
+| size | path | p50 µs | p99 µs | CPU µs (node + writer + reader) | MB/s |
+| --- | --- | --- | --- | --- | --- |
+| 64 KiB | ring | 14 | 19 | 43 | 4551 |
+| 64 KiB | blob: mmap, mmap | 119 | 173 | 215 | 530 |
+| 64 KiB | blob: pwrite, mmap | 94 | 166 | 186 | 665 |
+| 64 KiB | blob: pwrite, pread | 93 | 154 | 184 | 677 |
+| 64 KiB | blob: mmap, mmap; pages ahead | 77 | 96 | 184 (+10 ahead) | 835 |
+| 64 KiB | blob: pwrite, pread; pages ahead | 51 | 70 | 140 (+9 ahead) | 1260 |
+| 1 MiB | ring | 389 | 461 | 715 | 2667 |
+| 1 MiB | blob: mmap, mmap | 1182 | 1546 | 1308 | 868 |
+| 1 MiB | blob: pwrite, mmap | 1102 | 1434 | 1241 | 919 |
+| 1 MiB | blob: pwrite, pread | 1376 | 1718 | 1521 | 739 |
+| 1 MiB | blob: mmap, mmap; pages ahead | 792 | 824 | 919 (+197 ahead) | 1327 |
+| 1 MiB | blob: pwrite, pread; pages ahead | 912 | 990 | 1043 (+202 ahead) | 1141 |
+| 20 MiB | ring | 15827 | 16519 | 26454 | 1312 |
+| 20 MiB | blob: mmap, mmap | 19969 | 20633 | 20049 | 1058 |
+| 20 MiB | blob: pwrite, mmap | 17037 | 17868 | 17184 | 1227 |
+| 20 MiB | blob: pwrite, pread | 29993 | 31228 | 30119 | 697 |
+| 20 MiB | blob: mmap, mmap; pages ahead | 15342 | 15976 | 15451 (+3503 ahead) | 1367 |
+| 20 MiB | blob: pwrite, pread; pages ahead | 26474 | 28415 | 26652 (+3340 ahead) | 787 |
+== round 2, 2026-11-15T12:43:53-06:00, load 1.28 0.34 0.12
+| size | path | p50 µs | p99 µs | CPU µs (node + writer + reader) | MB/s |
+| --- | --- | --- | --- | --- | --- |
+| 64 KiB | ring | 14 | 17 | 42 | 4630 |
+| 64 KiB | blob: mmap, mmap | 119 | 160 | 213 | 539 |
+| 64 KiB | blob: pwrite, mmap | 94 | 170 | 186 | 667 |
+| 64 KiB | blob: pwrite, pread | 92 | 281 | 184 | 674 |
+| 64 KiB | blob: mmap, mmap; pages ahead | 78 | 100 | 185 (+10 ahead) | 826 |
+| 64 KiB | blob: pwrite, pread; pages ahead | 51 | 72 | 141 (+9 ahead) | 1253 |
+| 1 MiB | ring | 389 | 447 | 710 | 2670 |
+| 1 MiB | blob: mmap, mmap | 1180 | 1484 | 1295 | 877 |
+| 1 MiB | blob: pwrite, mmap | 1089 | 1426 | 1239 | 921 |
+| 1 MiB | blob: pwrite, pread | 1366 | 1870 | 1498 | 751 |
+| 1 MiB | blob: mmap, mmap; pages ahead | 783 | 840 | 912 (+200 ahead) | 1338 |
+| 1 MiB | blob: pwrite, pread; pages ahead | 907 | 1022 | 1041 (+202 ahead) | 1143 |
+| 20 MiB | ring | 14837 | 15549 | 23971 | 1404 |
+| 20 MiB | blob: mmap, mmap | 20278 | 21008 | 20383 | 1032 |
+| 20 MiB | blob: pwrite, mmap | 17923 | 18584 | 18045 | 1167 |
+| 20 MiB | blob: pwrite, pread | 31269 | 32097 | 31220 | 673 |
+| 20 MiB | blob: mmap, mmap; pages ahead | 15023 | 15943 | 15194 (+3524 ahead) | 1390 |
+| 20 MiB | blob: pwrite, pread; pages ahead | 27090 | 28281 | 27206 (+3350 ahead) | 771 |
