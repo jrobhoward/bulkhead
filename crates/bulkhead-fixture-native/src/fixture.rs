@@ -344,6 +344,23 @@ impl Fixture {
                 self.waiting = Some(call);
                 return None;
             }
+            // `sender-reply <ms> <text>`: the call left waiting, answered
+            // `text` after `ms` by a thread of its own through a sender
+            // channel (ROADMAP AP1b).
+            "sender-reply" => {
+                let ms: u64 = first.parse().unwrap_or(0);
+                let answer = tail.to_string();
+                return match ctx.sender() {
+                    Ok(mut sender) => {
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(ms));
+                            sender.reply(call, text(&answer));
+                        });
+                        None
+                    }
+                    Err(e) => Some(format!("err:{e:?}")),
+                };
+            }
             "log" => {
                 app::log(Level::Warn, rest);
                 "ok".into()

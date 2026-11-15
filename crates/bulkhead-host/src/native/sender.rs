@@ -434,6 +434,11 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 .native_register(kind, &name, &help, &labels, &buckets),
         )),
         Request::OpenSender => Handled::Now(Answer::Sender(Hub::open(hub))),
+        Request::Reply { call_ref, msg } => {
+            ctx.me
+                .reply_from_sender(call_ref, convert::host_envelope(msg));
+            Handled::Now(Answer::Unit)
+        }
         request @ (Request::AdminStream | Request::MetricsText) => {
             let profile = ctx.spec.driver.as_ref();
             let allowed = crate::native::driver::Allowed {

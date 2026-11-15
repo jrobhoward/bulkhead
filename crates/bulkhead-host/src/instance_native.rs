@@ -1342,6 +1342,10 @@ impl InstanceTask {
                 None
             }
             Op::Connection(accepted) => self.native_connection(state, port, spec, accepted).await,
+            Op::Reply { call_ref, msg } => {
+                state.reply_to(call_ref, msg);
+                None
+            }
         }
     }
 

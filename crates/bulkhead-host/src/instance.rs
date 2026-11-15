@@ -65,6 +65,10 @@ enum Op {
     /// Take a connection a listener accepted, for the app's
     /// `handle_connection`.
     Connection(crate::listener::Accepted),
+    /// Answer a call the instance took with no reply, for one of its
+    /// sender channels (ROADMAP AP1b): handled between callbacks, so after
+    /// the callback that left the call waiting.
+    Reply { call_ref: u64, msg: Envelope },
 }
 
 /// Why reading an instance's state failed.
@@ -584,6 +588,13 @@ impl InstanceHandle {
         let _ = self.shared.ops.send(Box::new(Op::Announce));
     }
 
+    /// Answer the call `call_ref` the instance left waiting, from one of
+    /// its sender channels. Dropped if the call was answered already or the
+    /// instance has exited.
+    pub(crate) fn reply_from_sender(&self, call_ref: u64, msg: Envelope) {
+        let _ = self.shared.ops.send(Box::new(Op::Reply { call_ref, msg }));
+    }
+
     /// Hand the instance a connection its app's listener accepted, ahead
     /// of its mailbox. Ignored (the connection closes) once it has exited.
     pub(crate) fn connection(&self, accepted: crate::listener::Accepted) {
@@ -801,7 +812,7 @@ impl InstanceTask {
                 Op::Snapshot { reply } | Op::MoveOut { reply } => {
                     let _ = reply.send(Err(SnapshotError::NotRunning));
                 }
-                Op::Announce | Op::Connection(_) => {}
+                Op::Announce | Op::Connection(_) | Op::Reply { .. } => {}
             }
         }
         probe::instance_exit(self.pid, &reason);

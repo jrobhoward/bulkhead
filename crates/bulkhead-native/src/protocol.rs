@@ -572,6 +572,7 @@ pub enum Request {
     /// the answer, as for a published snapshot. On a sender channel the
     /// app may ask for [`Request::SelfPid`], [`Request::Cast`],
     /// [`Request::CastWait`], [`Request::Call`], [`Request::CallApp`],
+    /// [`Request::Reply`] (to a call a callback left waiting, ROADMAP AP1b),
     /// [`Request::Kv`] (not
     /// watches), [`Request::KvOpen`], [`Request::MetricRegister`] and
     /// another [`Request::OpenSender`], and send `Metrics` updates and hot

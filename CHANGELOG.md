@@ -8,6 +8,14 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A sender channel may answer a call its instance's callback left waiting
+  (`Request::Reply`, ROADMAP AP1b; DA3, step 1): `Sender::reply` and
+  `AsyncSender::reply`. The node hands the reply to the instance's task,
+  which answers between callbacks, so after the callback that left the
+  call waiting; a reply to a call already answered or given up is dropped.
+  `bulkhead-resolve`'s worker answers lookups this way, no longer casting
+  each answer back to its callback thread.
+
 - `examples/admin_cost` (crate `bulkhead`) measures remote admin requests
   and metrics scrapes against a running node (ROADMAP DA7, step 6;
   BASELINE.md, 2026-11-14).

@@ -189,6 +189,16 @@ impl AsyncSender {
         }
     }
 
+    /// Answer the call `call_ref` a callback of this instance left
+    /// waiting, as [`Sender::reply`]: sent at once, the node's
+    /// acknowledgement awaited.
+    pub async fn reply(&self, call_ref: u64, msg: Envelope) {
+        match Answered(self.ask(Request::Reply { call_ref, msg })).await {
+            Answer::Unit => {}
+            other => protocol_error(&format!("Reply answered with {other:?}")),
+        }
+    }
+
     /// Where the app called `app`, which does not run here, runs now, if
     /// on the failover partner (`Request::Elsewhere`): for a driver given
     /// the route table (ROADMAP DA2).

@@ -200,3 +200,46 @@ async fn sender____request_a_sender_may_not_make____instance_crashes() {
     };
     assert!(why.contains("not allowed on a sender channel"), "{why}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender____reply_to_a_call_left_waiting____the_caller_answered() {
+    let a = up("snd-reply", None, &[]);
+
+    let now = ask(&a, "sender-reply 0 from a thread").await;
+    let later = ask(&a, "sender-reply 200 later").await;
+
+    assert_eq!(now, "from a thread");
+    assert_eq!(later, "later");
+    a.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender____reply_pending____other_calls_answered_meanwhile() {
+    let a = up("snd-reply-busy", None, &[]);
+    let waiting = {
+        let a = a.clone();
+        tokio::spawn(async move { ask(&a, "sender-reply 500 slow").await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let meanwhile = ask(&a, "echo quick").await;
+    let slow = waiting.await.unwrap();
+
+    assert_eq!((meanwhile.as_str(), slow.as_str()), ("quick", "slow"));
+    a.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender____reply_after_the_caller_gave_up____dropped_and_the_instance_runs_on() {
+    let a = up("snd-reply-late", None, &[]);
+
+    let gave_up = a
+        .call(text("sender-reply 300 too late"), Duration::from_millis(50))
+        .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let after = ask(&a, "echo still here").await;
+
+    assert!(gave_up.is_err(), "{gave_up:?}");
+    assert_eq!(after, "still here");
+    a.kill();
+}

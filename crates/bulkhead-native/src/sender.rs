@@ -131,6 +131,16 @@ impl Sender {
         }
     }
 
+    /// Answer the call `call_ref` a callback of this instance left
+    /// waiting (`Reply::Later`), from this thread (ROADMAP AP1b). A second
+    /// answer, or one after the caller gave up, is dropped.
+    pub fn reply(&mut self, call_ref: u64, msg: Envelope) {
+        match self.request(Request::Reply { call_ref, msg }) {
+            Answer::Unit => {}
+            other => unexpected(&other),
+        }
+    }
+
     /// This instance's pid.
     pub fn self_pid(&mut self) -> Pid {
         match self.request(Request::SelfPid) {

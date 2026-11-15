@@ -1,20 +1,18 @@
 //! The driver app: the callback thread, which answers the node, and one
 //! worker thread, which resolves.
 //!
-//! - The node calls with [`RESOLVE_SCHEMA`]; the callback thread answers
-//!   later and hands the name to the worker.
+//! - The node calls with [`RESOLVE_SCHEMA`]; the callback thread leaves
+//!   the call waiting and hands the name to the worker.
 //! - The worker runs hickory on a tokio current-thread runtime with a
-//!   sender channel of its own. Replies to the node's calls go out from the
-//!   callback thread only, and only the callback thread may ask the node
-//!   for a socket, so the worker hands back by casting to its own
-//!   instance: [`RESOLVED_SCHEMA`] with a lookup's answer,
-//!   [`CONNECT_SCHEMA`] when hickory wants a stream to a nameserver,
-//!   [`CLOSED_SCHEMA`] when hickory is done with one. Its manifest accepts
-//!   messages from itself only (`accept_from`), and an answer is sent only
-//!   for a call still waiting.
+//!   sender channel of its own, and answers the node's call itself on it
+//!   (`Request::Reply`, ROADMAP AP1b). Only the callback thread may ask
+//!   the node for a socket, so the worker hands back by casting to its own
+//!   instance for that: [`CONNECT_SCHEMA`] when hickory wants a stream to a
+//!   nameserver, [`CLOSED_SCHEMA`] when hickory is done with one. Its
+//!   manifest accepts messages from itself only (`accept_from`).
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::rc::Rc;
@@ -36,19 +34,10 @@ use crate::config::Config;
 use crate::lookup::{self, Answer, Failure, RESOLVE_SCHEMA, Request};
 use crate::provider::{NodeStreams, OneStream, Opened, Wanted};
 
-/// The worker's lookup answered, cast to its own instance.
-pub const RESOLVED_SCHEMA: &str = "bulkhead/resolve-answered";
 /// A stream to a nameserver wanted, cast to its own instance.
 pub const CONNECT_SCHEMA: &str = "bulkhead/resolve-connect";
 /// A stream done with, cast to its own instance.
 pub const CLOSED_SCHEMA: &str = "bulkhead/resolve-closed";
-
-/// A lookup's answer for the node's call `call`.
-#[derive(Debug, Serialize, Deserialize)]
-struct Resolved {
-    call: u64,
-    answer: Answer,
-}
 
 /// hickory's request `id` for a stream to `addr`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,8 +64,6 @@ struct Job {
 pub struct Resolve {
     jobs: mpsc::UnboundedSender<Job>,
     opened: mpsc::UnboundedSender<(u64, io::Result<Opened>)>,
-    /// The node's calls waiting for an answer.
-    waiting: HashSet<u64>,
     /// The streams the node opened, by key: the node counts each until
     /// it is dropped here.
     streams: HashMap<u64, TcpStream>,
@@ -154,7 +141,6 @@ impl App for Resolve {
         Ok(Self {
             jobs,
             opened,
-            waiting: HashSet::new(),
             streams: HashMap::new(),
             next_key: 0,
         })
@@ -174,7 +160,6 @@ impl App for Resolve {
                     })
                     .is_ok()
                 {
-                    self.waiting.insert(call.0);
                     return Reply::Later;
                 }
                 Answer::failed(Failure::Temporary, "the resolver's worker stopped".into())
@@ -184,15 +169,8 @@ impl App for Resolve {
         Reply::Now(answer_envelope(&answer))
     }
 
-    fn handle_cast(&mut self, ctx: &mut Ctx, msg: Envelope) {
+    fn handle_cast(&mut self, _ctx: &mut Ctx, msg: Envelope) {
         match msg.schema.as_deref() {
-            Some(RESOLVED_SCHEMA) => {
-                if let Ok(r) = msg.decode::<Resolved>()
-                    && self.waiting.remove(&r.call)
-                {
-                    ctx.reply(CallRef(r.call), answer_envelope(&r.answer));
-                }
-            }
             Some(CONNECT_SCHEMA) => {
                 if let Ok(c) = msg.decode::<Connect>() {
                     let opened = self.connect(c.addr);
@@ -354,13 +332,9 @@ async fn run(start: Start) {
                     sender.metric_add(m.failed, 1.0);
                 }
             }
-            let resolved = Resolved {
-                call: job.call,
-                answer,
-            };
-            if let Err(e) = sender.cast(me, cast_body(RESOLVED_SCHEMA, &resolved)).await {
-                bulkhead_sdk::warn!("a lookup's answer not handed back: {e:?}");
-            }
+            sender
+                .reply(job.call, answer_envelope(&answer).into())
+                .await;
         });
     }
 }
