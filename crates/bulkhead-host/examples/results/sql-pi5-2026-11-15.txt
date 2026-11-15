@@ -1,0 +1,64 @@
+# sql_cost, Raspberry Pi 5, 2026-11-15; 5,000 operations a row
+# before: commit 5af7aa0 (the node's own pool), the DA3 block removed
+# after: the datasource's driver (bulkhead-sql); the load figure is the 1-minute average at each round's start
+# (the unfixed rounds ran back to back: later rounds' load is the previous round's own instances)
+
+start 2026-11-15T00:05:45-06:00 load 0.29 1.81 1.28 1/200 32669
+== before run 1 load 0.29 1.81 1.28 2/200 32670
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3769 | 4227 | 622 | 262 |
+| execute: `UPDATE` one row | 4563 | 4882 | 610 | 220 |
+| transaction: begin, `UPDATE`, commit | 4720 | 5132 | 934 | 211 |
+| 16 instances at once, `SELECT 1` | 39802 | 63136 | 905 | 398 |
+== after run 1 load 16.52 9.30 4.54 1/196 128626
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3931 | 4146 | 1036 | 254 |
+| execute: `UPDATE` one row | 4482 | 4770 | 1002 | 222 |
+| transaction: begin, `UPDATE`, commit | 4883 | 5186 | 1612 | 204 |
+| 16 instances at once, `SELECT 1` | 43740 | 68467 | 1437 | 362 |
+== before run 2 load 15.86 11.34 6.82 1/197 224737
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3293 | 3482 | 604 | 303 |
+| execute: `UPDATE` one row | 3907 | 4153 | 580 | 255 |
+| transaction: begin, `UPDATE`, commit | 4214 | 4472 | 918 | 237 |
+| 16 instances at once, `SELECT 1` | 35333 | 57407 | 844 | 446 |
+== after run 2 load 17.26 11.68 7.99 2/196 320538
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3577 | 3793 | 1052 | 279 |
+| execute: `UPDATE` one row | 4533 | 4876 | 1030 | 220 |
+| transaction: begin, `UPDATE`, commit | 4929 | 5250 | 1626 | 202 |
+| 16 instances at once, `SELECT 1` | 39488 | 63452 | 1350 | 400 |
+
+# with the reset fixed (ROLLBACK, then DISCARD ALL; the before tree's pool reset with DISCARD ALL alone), each round started under load 0.3
+== after, reset fixed, run 1 load 0.28 3.05 5.60 1/194 418373
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 263 | 324 | 326 | 3758 |
+| execute: `UPDATE` one row | 352 | 407 | 342 | 2826 |
+| transaction: begin, `UPDATE`, commit | 610 | 704 | 794 | 1631 |
+| 16 instances at once, `SELECT 1` | 2805 | 4119 | 312 | 5715 |
+== before (in-node pool), DISCARD ALL alone, run 1 load 0.29 1.99 4.51 1/197 419012
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 149 | 227 | 176 | 6594 |
+| execute: `UPDATE` one row | 183 | 273 | 152 | 5242 |
+| transaction: begin, `UPDATE`, commit | 341 | 399 | 360 | 2950 |
+| 16 instances at once, `SELECT 1` | 1019 | 5728 | 171 | 11570 |
+== after, reset fixed, run 2 load 0.29 1.56 3.70 1/197 419641
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 264 | 317 | 330 | 3749 |
+| execute: `UPDATE` one row | 357 | 421 | 344 | 2783 |
+| transaction: begin, `UPDATE`, commit | 617 | 710 | 802 | 1611 |
+| 16 instances at once, `SELECT 1` | 2986 | 4312 | 330 | 5369 |
+== before (in-node pool), DISCARD ALL alone, run 2 load 0.27 1.46 3.11 1/194 420488
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 159 | 229 | 176 | 6246 |
+| execute: `UPDATE` one row | 186 | 273 | 150 | 5183 |
+| transaction: begin, `UPDATE`, commit | 342 | 406 | 366 | 2930 |
+| 16 instances at once, `SELECT 1` | 1086 | 5894 | 178 | 11188 |

@@ -3057,6 +3057,35 @@ One connection, p50 (the node's in the same run):
 - **A scrape** costs 75 to 140 µs more and 2.2 to 3.6 times the CPU: the text crosses the driver's channel and is written by the driver's hyper. At Prometheus's interval (15 s and more), a fraction of a millisecond each.
 - **What it buys:** no TLS handshake from a stranger and no unauthenticated HTTP request is parsed in the node, and the admin driver, compromised, cannot act for an operator (DESIGN.md, SECURITY.md).
 
+## 2026-11-15: SQL through a datasource's driver (DA3)
+
+`crates/bulkhead-host/examples/sql_cost.rs`: the native fixture's `sql-*` commands, each a call into an app instance whose request goes to the node and, since DA3, on to `bulkhead-sql` and a scratch Postgres on its Unix socket (a pool of 16), 5,000 operations a row: `SELECT 1` and a one-row `UPDATE` one at a time, a transaction (begin, the `UPDATE`, commit: three requests), and 16 instances at once each running `SELECT 1`. CPU is the harness's and its children's (the node's side, the app, the driver), not Postgres's, per operation. Before: the node's own pool (commit 5af7aa0). Release builds, two rounds each: the 16-core machine (no VM running, load under 1 at the first start) and the Raspberry Pi 5 (load under 0.3 at each start). Results: `crates/bulkhead-host/examples/results/sql-{x86,pi5}-2026-11-15.txt`.
+
+**Found while measuring:** the pool's reset, `ROLLBACK; DISCARD ALL` in one message, has always failed: Postgres runs a multi-statement message as an implicit transaction block, which `DISCARD ALL` refuses, and the pool then drops the connection and opens another. Every statement outside a transaction had a new connection, and a new Postgres backend: about 3.1 ms on the 16-core machine and 3.3 to 3.8 ms on the Pi, whichever side the pool was on. `bulkhead-sql` now sends the two statements one at a time (CHANGELOG, Fixed). The table compares both pools with a reset that works (the node's, for this, `DISCARD ALL` alone, one message fewer).
+
+| Operation | 16-core p50, node → driver | 16-core CPU | Pi p50 | Pi CPU |
+| --- | --- | --- | --- | --- |
+| `SELECT 1` | 125–170 → 245–302 µs | 152–208 → 298–318 µs | 149–159 → 263–264 µs | 176 → 326–330 µs |
+| one-row `UPDATE` | 207–231 → 277–342 µs | 206–214 → 278–326 µs | 183–186 → 352–357 µs | 150–152 → 342–344 µs |
+| transaction (3 requests) | 420–430 → 591–618 µs | 502–522 → 762–782 µs | 341–342 → 610–617 µs | 360–366 → 794–802 µs |
+| 16 at once, `SELECT 1` | 46,600–47,500 → 21,400–22,400 /s | 133–135 → 195–202 µs | 11,200–11,600 → 5,400–5,700 /s | 171–178 → 312–330 µs |
+
+- **A statement through the driver** costs 50 to 180 µs more at p50 and 60 to 190 µs more CPU, a request: the call from the node to the driver, its worker woken, the answer from its sender channel, and the request and rows in CBOR once more each way. Against the pool as it shipped, which reconnected each time, a statement now takes a tenth of the time.
+- **Sixteen at once halve the rate:** the driver runs its pool and every connection on one worker thread, which was at 100% of a core through the 16-instance row on the 16-core machine; the node's pool ran on its multi-threaded runtime. A datasource whose apps run more statements than about 20,000 a second on the 16-core machine, or 5,000 on the Pi, needs the driver to use more than one thread.
+- **What it buys:** no reply from a database server is parsed in the node, no datasource's password is read by it, and a driver, compromised, reaches its one database (DESIGN.md, SECURITY.md).
+
+### The resolver's lookups again, idle (DA9, DA3 step 1)
+
+`lookup_cost` (2026-11-14 entry) rerun after the resolver's worker began answering from its sender channel (`Request::Reply`), no longer casting back to its callback thread; two rounds on each machine, the 16-core machine's under load 1, the Pi's under 0.3. Results: `crates/bulkhead-resolve/examples/results/{x86,pi5}-2026-11-15.txt`.
+
+| Lookup through the driver | 16-core p50, 11-14 → 11-15 | 16-core CPU | Pi p50 | Pi CPU |
+| --- | --- | --- | --- | --- |
+| hosts file | 26–35 → 38–44 µs | 92–125 → 83–90 µs | 52–57 → 49 µs | 146–162 → 104–106 µs |
+| cached | 48–54 → 45–49 µs | 139–155 → 90–94 µs | 68–71 → 57–58 µs | 191–196 → 108 µs |
+| uncached, loopback server | 198–205 → 168–180 µs | 357–378 → 265–284 µs | 160–162 → 151–157 µs | 351 → 245–252 µs |
+
+- The reply from the worker takes a tenth to two fifths off a lookup's CPU on both machines, and up to a sixth off its time, except a hosts-file name on the 16-core machine, 3 to 18 µs slower at p50 (not looked into).
+
 ## Not measured yet
 
 - Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.

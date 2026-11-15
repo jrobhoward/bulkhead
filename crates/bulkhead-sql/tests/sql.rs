@@ -268,6 +268,9 @@ async fn sql____a_connection_back_in_the_pool____its_session_reset() {
 
     assert_eq!(path, vec![vec![text("\"$user\", public")]]);
     assert_ne!(first, second);
+    // Reset, not replaced: a reset that fails makes the pool open a new
+    // connection for each statement.
+    assert_eq!(s.counter("connections_total"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

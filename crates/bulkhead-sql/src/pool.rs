@@ -5,7 +5,7 @@
 //!
 //! The node's stream is the one thing the driver connects with; it opens
 //! nothing itself. Every connection the pool hands out again is first
-//! reset with `ROLLBACK; DISCARD ALL`, so a transaction left open, or a
+//! reset with `ROLLBACK`, then `DISCARD ALL` ([`RESET`]), so a transaction left open, or a
 //! session setting, never carries over to the next statement, which may
 //! be another app's.
 
@@ -108,6 +108,10 @@ impl AsyncWrite for Stream {
     }
 }
 
+/// What resets a connection the pool hands out again, each statement sent
+/// on its own.
+pub const RESET: [&str; 2] = ["ROLLBACK", "DISCARD ALL"];
+
 /// The pool.
 pub type Pool = managed::Pool<Manager>;
 
@@ -183,10 +187,16 @@ impl managed::Manager for Manager {
         if client.is_closed() {
             return Err(RecycleError::message("the connection closed"));
         }
-        client
-            .batch_execute("ROLLBACK; DISCARD ALL")
-            .await
-            .map_err(|e| RecycleError::Backend(sql_error(&e)))
+        // Two messages: in one, Postgres runs both as an implicit
+        // transaction block, which `DISCARD ALL` refuses, and the pool
+        // would open a new connection for every statement.
+        for reset in RESET {
+            client
+                .batch_execute(reset)
+                .await
+                .map_err(|e| RecycleError::Backend(sql_error(&e)))?;
+        }
+        Ok(())
     }
 }
 

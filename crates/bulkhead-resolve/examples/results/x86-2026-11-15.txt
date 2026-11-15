@@ -1,0 +1,25 @@
+== lookup_cost run 1 load 0.47 2.89 2.84 1/1357 1679804
+lookups: 10000 each, one at a time; CPU of this process and the driver; 16 cores
+| lookup | p50 µs | p99 µs | CPU µs/lookup | lookups/s |
+| --- | --- | --- | --- | --- |
+| hosts file: driver | 38.4 | 86.1 | 83.0 | 23760 |
+| hosts file: getaddrinfo (localhost) | 25.4 | 39.6 | 29.0 | 35473 |
+| cached: driver | 44.8 | 68.4 | 90.0 | 20910 |
+| cached: hickory in this process | 3.0 | 11.1 | 5.0 | 244589 |
+| cached: getaddrinfo via the system's resolver (example.com) | 317.7 | 393.8 | 168.0 | 3119 |
+| uncached: driver | 180.4 | 291.0 | 284.0 | 5411 |
+| uncached: hickory in this process | 121.8 | 243.9 | 220.0 | 7876 |
+DNS queries the server answered: 40004 (A and AAAA per uncached lookup)
+== lookup_cost run 2 load 0.93 2.91 2.85 1/1352 1679832
+lookups: 10000 each, one at a time; CPU of this process and the driver; 16 cores
+| lookup | p50 µs | p99 µs | CPU µs/lookup | lookups/s |
+| --- | --- | --- | --- | --- |
+| hosts file: driver | 43.8 | 63.3 | 90.0 | 22269 |
+| hosts file: getaddrinfo (localhost) | 24.7 | 34.5 | 26.0 | 39893 |
+| cached: driver | 48.6 | 75.1 | 94.0 | 20019 |
+| cached: hickory in this process | 3.1 | 11.1 | 5.0 | 238549 |
+| cached: getaddrinfo via the system's resolver (example.com) | 312.5 | 387.7 | 152.0 | 3451 |
+| uncached: driver | 168.3 | 278.7 | 265.0 | 5792 |
+| uncached: hickory in this process | 120.0 | 244.2 | 221.0 | 7915 |
+DNS queries the server answered: 40004 (A and AAAA per uncached lookup)
+end load 0.94 2.88 2.84 1/1352 1679857

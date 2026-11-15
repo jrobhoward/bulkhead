@@ -8,6 +8,10 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `examples/sql_cost` (crate `bulkhead-host`) measures a statement, a
+  transaction and 16 instances at once through a native app and the
+  datasource's driver (ROADMAP DA3, step 6; BASELINE.md, 2026-11-15).
+
 - DA3's tests under the privileged helper and end to end (ROADMAP DA3,
   step 5): `tests/priv.rs` runs a datasource's driver under its own user,
   reading its shared password file and logging in over the node's TCP
@@ -859,6 +863,17 @@ All notable changes are recorded here. The format follows
   `dumpable`.
 
 ### Fixed
+
+- A datasource's pool never reused a connection (ROADMAP DA3, step 6;
+  since the pool was the node's, before DA3): its reset, `ROLLBACK;
+  DISCARD ALL` in one message, ran as an implicit transaction block,
+  which `DISCARD ALL` refuses, so every reset failed and the pool opened a
+  new connection, and Postgres a new backend, for each statement outside
+  a transaction (about 3 ms on a Unix socket). `bulkhead-sql` sends
+  `ROLLBACK`, then `DISCARD ALL`; a statement now takes about a tenth of
+  the time (docs/BASELINE.md, 2026-11-15). Callers were isolated all the
+  same: each statement had a session of its own. A test checks that a
+  pool of one keeps one connection.
 
 - Under the privileged helper a driver given two files in one directory
   (the admin key and the operators file, or an HTTPS certificate and its

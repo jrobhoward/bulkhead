@@ -1,0 +1,64 @@
+# sql_cost, 16-core machine, 2026-11-15, no VM running; 5,000 operations a row
+# before: commit 5af7aa0 (the node's own pool), the DA3 block removed
+# after: the datasource's driver (bulkhead-sql); the load figure is the 1-minute average at each round's start
+# (the unfixed rounds ran back to back: later rounds' load is the previous round's own instances)
+
+start 2026-11-14T23:57:02-06:00 load 0.93 2.24 1.50 1/1354 1295094
+== before run 1 (5af7aa0, in-node pool) load 0.93 2.24 1.50 1/1354 1295095
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3150 | 3452 | 412 | 326 |
+| execute: `UPDATE` one row | 3728 | 4049 | 406 | 271 |
+| transaction: begin, `UPDATE`, commit | 3945 | 4263 | 746 | 255 |
+| 16 instances at once, `SELECT 1` | 6858 | 9057 | 323 | 2325 |
+== after run 1 (driver) load 7.27 3.56 2.06 1/1350 1391013
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3231 | 3628 | 714 | 311 |
+| execute: `UPDATE` one row | 3793 | 4203 | 714 | 264 |
+| transaction: begin, `UPDATE`, commit | 4218 | 4583 | 1274 | 240 |
+| 16 instances at once, `SELECT 1` | 6839 | 9281 | 479 | 2329 |
+== before run 2 (5af7aa0, in-node pool) load 7.62 4.35 2.53 2/1360 1486999
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3178 | 3476 | 414 | 320 |
+| execute: `UPDATE` one row | 3743 | 4113 | 406 | 269 |
+| transaction: begin, `UPDATE`, commit | 3941 | 4283 | 750 | 255 |
+| 16 instances at once, `SELECT 1` | 6904 | 9387 | 335 | 2311 |
+== after run 2 (driver) load 8.08 5.01 3.00 1/1372 1582960
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 3229 | 3577 | 686 | 310 |
+| execute: `UPDATE` one row | 3790 | 4247 | 700 | 264 |
+| transaction: begin, `UPDATE`, commit | 4116 | 4563 | 1250 | 243 |
+| 16 instances at once, `SELECT 1` | 6880 | 9646 | 477 | 2311 |
+
+# with the reset fixed (ROLLBACK, then DISCARD ALL; the before tree's pool reset with DISCARD ALL alone)
+== after, reset fixed, run 1 load 0.47 1.74 2.40 1/1352 1687321
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 302 | 400 | 318 | 3551 |
+| execute: `UPDATE` one row | 342 | 460 | 326 | 2921 |
+| transaction: begin, `UPDATE`, commit | 591 | 799 | 762 | 1686 |
+| 16 instances at once, `SELECT 1` | 739 | 997 | 195 | 21437 |
+== after, reset fixed, run 2 load 2.65 2.16 2.51 1/1344 1687968
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 245 | 354 | 298 | 4020 |
+| execute: `UPDATE` one row | 277 | 418 | 278 | 3428 |
+| transaction: begin, `UPDATE`, commit | 618 | 828 | 782 | 1627 |
+| 16 instances at once, `SELECT 1` | 690 | 1260 | 202 | 22384 |
+== before (in-node pool), reset DISCARD ALL alone, run 1 load 0.48 1.82 2.34 1/1355 1689838
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 170 | 247 | 208 | 5761 |
+| execute: `UPDATE` one row | 207 | 320 | 214 | 4511 |
+| transaction: begin, `UPDATE`, commit | 430 | 567 | 522 | 2303 |
+| 16 instances at once, `SELECT 1` | 320 | 557 | 135 | 47468 |
+== before (in-node pool), reset DISCARD ALL alone, run 2 load 3.80 2.46 2.52 1/1361 1690517
+| operation | p50 µs | p99 µs | CPU µs/op | ops/s |
+| --- | --- | --- | --- | --- |
+| query `SELECT 1` | 125 | 216 | 152 | 7586 |
+| execute: `UPDATE` one row | 231 | 328 | 206 | 4272 |
+| transaction: begin, `UPDATE`, commit | 420 | 550 | 502 | 2359 |
+| 16 instances at once, `SELECT 1` | 305 | 717 | 133 | 46598 |
