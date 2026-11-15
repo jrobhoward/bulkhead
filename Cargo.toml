@@ -4,6 +4,7 @@ members = [
     "crates/bulkhead",
     "crates/bulkhead-admin",
     "crates/bulkhead-bundle",
+    "crates/bulkhead-egress",
     "crates/bulkhead-fixture-conformance",
     "crates/bulkhead-fixture-conn",
     "crates/bulkhead-fixture-counter",

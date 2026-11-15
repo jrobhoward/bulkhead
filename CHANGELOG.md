@@ -8,6 +8,20 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- New crate `bulkhead-egress` (ROADMAP DA4, step 2): an app's outgoing
+  HTTP as a driver app, not yet started by the node. It takes the node's
+  checked requests as calls (schema `bulkhead/egress`, an
+  `EgressRequest`: the protocol's `HttpRequest` with the first-byte and
+  between-bytes timeouts the node allows, in CBOR) and answers
+  `Result<HttpResponse, HttpError>` from its worker thread. Its pool
+  (hyper-util's client, HTTP/1.1, rustls on ring against the PEM roots in
+  its init arguments) connects only through the node
+  (`Request::ConnectTo`); a destination the node refuses is the app's
+  `prohibited`. Response bodies over its `max_response_body` fail the
+  request; hop-by-hop headers are neither sent nor answered. Counter
+  `bulkhead_egress_connections_total`. `scripts/check.sh deps` fails if
+  the node links it.
+
 - Egress drivers ask the node for connections (ROADMAP DA4, step 1):
   `Request::ConnectTo { host, port }` (protocol 14, golden frames added;
   `Ctx`, `Sender` and `AsyncSender::connect_to`) answers a stream the node
