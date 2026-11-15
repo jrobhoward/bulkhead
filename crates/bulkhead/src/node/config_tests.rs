@@ -877,3 +877,41 @@ fn native____ingress_set____kept() {
         Some(std::path::Path::new("/usr/lib/bulkhead/bulkhead-ingress"))
     );
 }
+
+#[test]
+fn blobs____unset____defaults() {
+    let config = NodeConfig::from_toml_str("data_dir = \"/d\"\n").unwrap();
+
+    let b = config.blobs.runtime();
+
+    assert_eq!(b.max_bytes, 1 << 30);
+    assert_eq!(b.max_blob, 256 << 20);
+    assert_eq!(b.default_ttl, std::time::Duration::from_secs(60));
+    assert_eq!(b.max_ttl, std::time::Duration::from_secs(3600));
+}
+
+#[test]
+fn blobs____set____read_into_the_runtime() {
+    let config = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[blobs]\nmax_bytes = \"2GiB\"\nmax_blob = \"64MiB\"\ndefault_ttl_s = 5\nmax_ttl_s = 30\n",
+    )
+    .unwrap();
+
+    let b = config.blobs.runtime();
+
+    assert_eq!(b.max_bytes, 2 << 30);
+    assert_eq!(b.max_blob, 64 << 20);
+    assert_eq!(b.default_ttl, std::time::Duration::from_secs(5));
+    assert_eq!(b.max_ttl, std::time::Duration::from_secs(30));
+}
+
+#[rstest::rstest]
+#[case::blob_over_the_app_ceiling("max_bytes = \"1MiB\"\nmax_blob = \"2MiB\"")]
+#[case::default_over_max_ttl("default_ttl_s = 61\nmax_ttl_s = 60")]
+#[case::zero_max_bytes("max_bytes = 0")]
+fn blobs____inconsistent____refused(#[case] section: &str) {
+    let found = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n[blobs]\n{section}\n"));
+
+    let err = found.unwrap_err().to_string();
+    assert!(err.contains("blobs."), "{err}");
+}

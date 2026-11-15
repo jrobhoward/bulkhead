@@ -558,3 +558,29 @@ fn validate____native_process_with_keyvalue____accepted() {
 
     assert!(found.is_ok(), "{found:?}");
 }
+
+#[test]
+fn validate____blobs_without_max_bytes____the_default() {
+    let spec = AppSpec::from_json_value(&json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "capabilities": { "bulkhead:blobs": {} }
+    }))
+    .unwrap();
+
+    let scope = spec.capabilities.blobs.unwrap();
+
+    assert_eq!(scope.max_bytes.bytes(), DEFAULT_BLOBS_MAX_BYTES);
+}
+
+#[test]
+fn validate____blobs_with_zero_max_bytes____refused() {
+    let found = AppSpec::from_json_value(&json!({
+        "kind": "native-process",
+        "native": { "program": "executable" },
+        "capabilities": { "bulkhead:blobs": { "max_bytes": "0B" } }
+    }));
+
+    let err = found.unwrap_err().to_string();
+    assert!(err.contains("bulkhead:blobs.max_bytes"), "{err}");
+}

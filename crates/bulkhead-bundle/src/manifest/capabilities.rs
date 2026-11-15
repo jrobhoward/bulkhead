@@ -42,6 +42,9 @@ pub enum Capability {
     Metrics,
     /// `bulkhead:groups`: local process groups and publish.
     Groups,
+    /// `bulkhead:blobs`: data passed between apps as sealed memory
+    /// (ROADMAP BL1).
+    Blobs,
 }
 
 impl Capability {
@@ -58,6 +61,7 @@ impl Capability {
         Self::Sql,
         Self::Metrics,
         Self::Groups,
+        Self::Blobs,
     ];
 
     /// The key used under `capabilities` in the manifest and in operator
@@ -76,6 +80,7 @@ impl Capability {
             Self::Sql => "bulkhead:sql",
             Self::Metrics => "bulkhead:metrics",
             Self::Groups => "bulkhead:groups",
+            Self::Blobs => "bulkhead:blobs",
         }
     }
 
@@ -238,6 +243,13 @@ pub struct Capabilities {
         skip_serializing_if = "Option::is_none"
     )]
     pub groups: Option<GroupsScope>,
+    /// `bulkhead:blobs`.
+    #[serde(
+        rename = "bulkhead:blobs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub blobs: Option<BlobsScope>,
     /// Extension packages the app uses, by package name
     /// (`"example:greeting"`), each with the scope its host service reads.
     /// Served only by nodes built with that service (`bulkhead-host`'s
@@ -272,6 +284,7 @@ impl Capabilities {
             Capability::Sql => self.sql.is_some(),
             Capability::Metrics => self.metrics.is_some(),
             Capability::Groups => self.groups.is_some(),
+            Capability::Blobs => self.blobs.is_some(),
         }
     }
 
@@ -304,6 +317,9 @@ impl Capabilities {
         }
         if let Some(s) = &self.sql {
             v.at(Capability::Sql.key(), |v| s.validate(v));
+        }
+        if let Some(s) = &self.blobs {
+            v.at(Capability::Blobs.key(), |v| s.validate(v));
         }
         if let Some(s) = &self.metrics {
             let valid = s
@@ -639,6 +655,34 @@ pub struct Route {
     /// requests round-robin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_header: Option<String>,
+}
+
+/// Scope of `bulkhead:blobs` (ROADMAP BL1): how much the app's live
+/// blobs may hold at once, inside node config's `[blobs] max_bytes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BlobsScope {
+    /// Bytes of the app's blobs not yet freed, every instance together.
+    pub max_bytes: ByteSize,
+}
+
+/// [`BlobsScope::max_bytes`] when a manifest does not set it: 64 MiB.
+pub const DEFAULT_BLOBS_MAX_BYTES: u64 = 64 << 20;
+
+impl Default for BlobsScope {
+    fn default() -> Self {
+        Self {
+            max_bytes: ByteSize(DEFAULT_BLOBS_MAX_BYTES),
+        }
+    }
+}
+
+impl BlobsScope {
+    fn validate(&self, v: &mut Validator) {
+        if self.max_bytes.bytes() == 0 {
+            v.error_at("max_bytes", "must be greater than zero");
+        }
+    }
 }
 
 /// Scope of `bulkhead:sockets`. Bind and connect have separate rules: Rust's

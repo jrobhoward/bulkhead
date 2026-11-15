@@ -373,6 +373,8 @@ pub struct RuntimeConfig {
     pub datasources: BTreeMap<String, SqlDatasource>,
     /// HTTP egress for every app.
     pub egress: Egress,
+    /// Blobs between apps (`bulkhead:blobs`, ROADMAP BL1).
+    pub blobs: Blobs,
     /// Most log records per second per app, `bulkhead:logging` records and
     /// captured stdout and stderr lines together; an app's own
     /// `rate_limit_per_sec` can only lower it. 0 for no ceiling.
@@ -540,6 +542,34 @@ impl Default for NativeConfig {
     }
 }
 
+/// Blobs between apps (`bulkhead:blobs`, ROADMAP BL1): data one app
+/// writes into sealed memory the node made, and apps it shares it with
+/// read by descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Blobs {
+    /// The most any app's manifest may ask for as its `max_bytes`; a
+    /// deploy asking more is refused.
+    pub max_bytes: u64,
+    /// The largest single blob.
+    pub max_blob: u64,
+    /// How long a sealed blob lives when its app asks for no time.
+    pub default_ttl: Duration,
+    /// The longest a sealed blob may live.
+    pub max_ttl: Duration,
+}
+
+impl Default for Blobs {
+    fn default() -> Self {
+        Self {
+            max_bytes: 1 << 30,
+            max_blob: 256 << 20,
+            default_ttl: Duration::from_secs(60),
+            max_ttl: Duration::from_secs(3600),
+        }
+    }
+}
+
 /// HTTP egress (`bulkhead:http-egress`): what every
 /// app's outgoing requests share. Each app may reach only what its
 /// manifest's `allow` lists, within [`Egress::allow`].
@@ -613,6 +643,7 @@ impl Default for RuntimeConfig {
             secrets: BTreeMap::new(),
             datasources: BTreeMap::new(),
             egress: Egress::default(),
+            blobs: Blobs::default(),
             log_records_per_sec: 1_000,
             incoming_calls_per_peer: 10_000,
             cast_credit: 64,

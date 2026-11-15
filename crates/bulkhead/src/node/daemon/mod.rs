@@ -262,6 +262,7 @@ impl Node {
                     })
                     .collect(),
                 egress: config.egress.runtime(),
+                blobs: config.blobs.runtime(),
                 datasources: datasources.clone(),
                 buckets: config
                     .buckets

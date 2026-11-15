@@ -491,6 +491,8 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 routes.then(|| ctx.rt.elsewhere(&app)).flatten(),
             ))
         }
+        // Blobs (ROADMAP BL1) are not served yet.
+        Request::Blob(_) => Handled::Now(Answer::Blob(Err(p::BlobError::Denied))),
         other => Handled::Refused(format!("{other:?}")),
     }
 }

@@ -1457,3 +1457,52 @@ async fn native____executable_deployed____answers_and_network_refused() {
     assert_eq!(echo, "native");
     assert!(read.contains("Permission denied"), "{read}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blobs____max_bytes_over_the_node_ceiling____refused() {
+    let mut n =
+        TestNode::start_native("[blobs]\nmax_bytes = \"1MiB\"\nmax_blob = \"1MiB\"\n").await;
+    let manifest = |max_bytes: &str| {
+        fast(json!({ "capabilities": {
+            "bulkhead:config": {},
+            "bulkhead:keyvalue": {},
+            "bulkhead:groups": {},
+            "bulkhead:secrets": { "secrets": [] },
+            "bulkhead:sql": {},
+            "bulkhead:metrics": { "prefix": "blobs" },
+            "bulkhead:http-egress": {},
+            "bulkhead:blobs": { "max_bytes": max_bytes }
+        } }))
+    };
+
+    let over = n
+        .client
+        .deploy(app_bundle(
+            &n.key,
+            "blobber",
+            "1.0.0",
+            &native_sdk(),
+            manifest("2MiB"),
+        ))
+        .await
+        .unwrap_err();
+    let inside = n
+        .client
+        .deploy(app_bundle(
+            &n.key,
+            "blobber",
+            "1.0.0",
+            &native_sdk(),
+            manifest("1MiB"),
+        ))
+        .await;
+
+    assert_eq!(kind(&over), "invalid");
+    assert!(
+        over.to_string()
+            .contains("over the node's [blobs] max_bytes"),
+        "{over}"
+    );
+    assert!(inside.is_ok(), "{inside:?}");
+    n.shutdown().await;
+}

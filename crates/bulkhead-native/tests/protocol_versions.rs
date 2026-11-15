@@ -22,11 +22,11 @@ use std::path::PathBuf;
 
 use bulkhead_native::hot::{self, KvFrame, KvOp, KvReply};
 use bulkhead_native::protocol::{
-    self, Answer, Bytes, CallError, CastError, ConfigError, Envelope, ExitReason, ExtensionError,
-    FdRef, FromApp, GroupsAnswer, GroupsRequest, HttpRequest, HttpResponse, Info, KvAnswer,
-    KvError, KvRequest, Level, MIN_VERSION, MetricError, MetricKind, MetricUpdate, NetAnswer,
-    NetRequest, NetStream, Pid, RegisterError, Request, SecretError, SenderChannel, SqlAnswer,
-    SqlRequest, SqlRows, SqlValue, ToApp, VERSION,
+    self, Answer, BlobAnswer, BlobId, BlobRequest, Bytes, CallError, CastError, ConfigError,
+    Envelope, ExitReason, ExtensionError, FdRef, FromApp, GroupsAnswer, GroupsRequest, HttpRequest,
+    HttpResponse, Info, KvAnswer, KvError, KvRequest, Level, MIN_VERSION, MetricError, MetricKind,
+    MetricUpdate, NetAnswer, NetRequest, NetStream, Pid, RegisterError, Request, SecretError,
+    SenderChannel, SqlAnswer, SqlRequest, SqlRows, SqlValue, ToApp, VERSION,
 };
 
 fn file(version: u16) -> PathBuf {
@@ -130,6 +130,7 @@ fn request_name(r: &Request) -> &'static str {
         Request::MetricsText => "MetricsText",
         Request::Connect => "Connect",
         Request::ConnectTo { .. } => "ConnectTo",
+        Request::Blob(_) => "Blob",
     }
 }
 
@@ -158,6 +159,7 @@ fn answer_name(a: &Answer) -> &'static str {
         Answer::AdminStream(_) => "AdminStream",
         Answer::MetricsText(_) => "MetricsText",
         Answer::Connected(_) => "Connected",
+        Answer::Blob(_) => "Blob",
     }
 }
 
@@ -223,6 +225,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "MetricsText",
             "Connect",
             "ConnectTo",
+            "Blob",
         ],
     ),
     (
@@ -251,6 +254,7 @@ const NAMES: &[(&str, &[&str])] = &[
             "AdminStream",
             "MetricsText",
             "Connected",
+            "Blob",
         ],
     ),
 ];
@@ -436,6 +440,10 @@ fn requests() -> Vec<Request> {
             host: "api.example.com".into(),
             port: 443,
         },
+        Request::Blob(BlobRequest::Seal {
+            id: BlobId(9),
+            ttl_ms: 60_000,
+        }),
     ]
 }
 
@@ -475,6 +483,10 @@ fn answers() -> Vec<Answer> {
         Answer::AdminStream(Ok(FdRef(3))),
         Answer::MetricsText(Ok("# TYPE x counter\nx 1\n".into())),
         Answer::Connected(Ok(FdRef(4))),
+        Answer::Blob(Ok(BlobAnswer::Created {
+            id: BlobId(9),
+            fd: FdRef(5),
+        })),
     ]
 }
 

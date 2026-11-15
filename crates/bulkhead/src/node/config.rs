@@ -200,6 +200,10 @@ pub struct NodeConfig {
     /// app may reach, trusted roots, timeouts and the connection pool.
     #[serde(default)]
     pub egress: EgressBinding,
+    /// Blobs between apps (`bulkhead:blobs`, ROADMAP BL1): the most an
+    /// app may hold, the largest blob, how long they live.
+    #[serde(default)]
+    pub blobs: BlobsBinding,
     /// TCP and UDP from apps (`bulkhead:sockets`): the most any app may reach,
     /// bind and listen on. Unset: no ceiling.
     #[serde(default)]
@@ -868,6 +872,65 @@ impl EgressBinding {
     }
 }
 
+/// `[blobs]`: blobs between apps (`bulkhead:blobs`, ROADMAP BL1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlobsBinding {
+    /// The most any app's `max_bytes` may be; a deploy asking more is
+    /// refused.
+    #[serde(default = "default_blobs_max_bytes")]
+    pub max_bytes: ByteSize,
+    /// The largest single blob.
+    #[serde(default = "default_blobs_max_blob")]
+    pub max_blob: ByteSize,
+    /// Seconds a sealed blob lives when its app asks for no time.
+    #[serde(default = "default_blobs_ttl_s")]
+    pub default_ttl_s: u64,
+    /// The most seconds a sealed blob may live.
+    #[serde(default = "default_blobs_max_ttl_s")]
+    pub max_ttl_s: u64,
+}
+
+impl Default for BlobsBinding {
+    fn default() -> Self {
+        Self {
+            max_bytes: default_blobs_max_bytes(),
+            max_blob: default_blobs_max_blob(),
+            default_ttl_s: default_blobs_ttl_s(),
+            max_ttl_s: default_blobs_max_ttl_s(),
+        }
+    }
+}
+
+impl BlobsBinding {
+    /// The runtime's blob settings.
+    #[must_use]
+    pub fn runtime(&self) -> bulkhead_host::Blobs {
+        let mut b = bulkhead_host::Blobs::default();
+        b.max_bytes = self.max_bytes.bytes();
+        b.max_blob = self.max_blob.bytes();
+        b.default_ttl = std::time::Duration::from_secs(self.default_ttl_s);
+        b.max_ttl = std::time::Duration::from_secs(self.max_ttl_s);
+        b
+    }
+}
+
+fn default_blobs_max_bytes() -> ByteSize {
+    ByteSize::gib(1)
+}
+
+fn default_blobs_max_blob() -> ByteSize {
+    ByteSize::mib(256)
+}
+
+fn default_blobs_ttl_s() -> u64 {
+    60
+}
+
+fn default_blobs_max_ttl_s() -> u64 {
+    3600
+}
+
 /// `[sockets]`: TCP and UDP from apps. Each app's
 /// `bulkhead:sockets` rules must fall inside the rules here, in the manifest's
 /// syntax (`{ cidr = "10.0.0.0/8", ports = "1883" }`); a deploy asking for
@@ -1370,6 +1433,23 @@ impl NodeConfig {
         Ok(())
     }
 
+    fn check_blobs(&self) -> Result<(), NodeError> {
+        let b = &self.blobs;
+        let invalid = |what: &str| Err(NodeError::Invalid(format!("node config: blobs.{what}")));
+        if b.max_bytes.bytes() == 0 {
+            return invalid("max_bytes must be more than 0");
+        }
+        if b.max_blob.bytes() == 0 || b.max_blob > b.max_bytes {
+            return invalid("max_blob must be more than 0 and at most max_bytes");
+        }
+        if b.max_ttl_s == 0 || b.default_ttl_s == 0 || b.default_ttl_s > b.max_ttl_s {
+            return invalid(
+                "default_ttl_s and max_ttl_s must be more than 0, the default at most the maximum",
+            );
+        }
+        Ok(())
+    }
+
     fn check_egress(&self) -> Result<(), NodeError> {
         let e = &self.egress;
         if let Some(allow) = &e.allow {
@@ -1446,6 +1526,7 @@ impl NodeConfig {
         }
         config.check_failover()?;
         config.check_egress()?;
+        config.check_blobs()?;
         config.check_sockets()?;
         config.check_native()?;
         config.check_drivers()?;

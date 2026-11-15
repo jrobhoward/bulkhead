@@ -38,7 +38,8 @@
 //! [`Request::Elsewhere`] and `CallApp`'s `partner` (DA2), and
 //! [`Request::AdminStream`] and [`Request::MetricsText`] (DA7),
 //! [`Request::Connect`] (DA3) and [`Request::ConnectTo`] (DA4), for the
-//! node's own drivers.
+//! node's own drivers, and [`Request::Blob`], data passed between apps
+//! as sealed memory (ROADMAP BL1).
 //!
 //! A sender channel carries the same frames as the app's own channel, from
 //! one thread at any time, not only during a callback: `Request`s (only
@@ -644,6 +645,103 @@ pub enum Request {
         /// The port.
         port: u16,
     },
+    /// A blob: data passed between apps as sealed memory, by its id
+    /// (`bulkhead:blobs`, ROADMAP BL1): [`Answer::Blob`]. Allowed on a
+    /// sender channel too.
+    Blob(BlobRequest),
+}
+
+/// A blob's id: node-wide, never reused while the node runs. It grants
+/// nothing: an app opens only blobs its own app wrote or was shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BlobId(pub u64);
+
+/// What an app asks of a blob (`bulkhead:blobs`, ROADMAP BL1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlobRequest {
+    /// A new blob of `size` bytes for this instance to fill:
+    /// [`BlobAnswer::Created`], its writable descriptor passed before the
+    /// answer, sized and sealed against growing and shrinking. Counts
+    /// against the app's `max_bytes` until the blob is freed.
+    Create {
+        /// Its size in bytes, at least 1.
+        size: u64,
+    },
+    /// Seal the blob this instance filled against any further write,
+    /// after it removed every writable mapping of it
+    /// ([`BlobError::Mapped`] otherwise): [`BlobAnswer::Unit`]. It lives
+    /// `ttl_ms` at most (0 for the node's default, capped by its
+    /// maximum), or until its app and every app it was shared with
+    /// released it.
+    Seal {
+        /// The blob.
+        id: BlobId,
+        /// How long it may live, in milliseconds; 0 for the default.
+        ttl_ms: u64,
+    },
+    /// Let `app` open a sealed blob this app wrote, where the messaging
+    /// ACLs let this app call that one: [`BlobAnswer::Unit`].
+    Share {
+        /// The blob.
+        id: BlobId,
+        /// The app.
+        app: String,
+    },
+    /// Open a sealed blob this app wrote or was shared:
+    /// [`BlobAnswer::Opened`], a read-only descriptor passed before the
+    /// answer. The descriptor stays the app's until it closes it, even
+    /// after the blob is freed.
+    Open {
+        /// The blob.
+        id: BlobId,
+    },
+    /// This app is done with the blob: [`BlobAnswer::Unit`]. Freed once
+    /// its writing app and every app it was shared with released it.
+    Release {
+        /// The blob.
+        id: BlobId,
+    },
+}
+
+/// A blob request's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlobAnswer {
+    /// Done.
+    Unit,
+    /// A new blob and its writable descriptor.
+    Created {
+        /// The blob.
+        id: BlobId,
+        /// Its descriptor.
+        fd: FdRef,
+    },
+    /// An opened blob: its size and its read-only descriptor.
+    Opened {
+        /// Its size in bytes.
+        size: u64,
+        /// Its descriptor.
+        fd: FdRef,
+    },
+}
+
+/// Why a blob request failed: as `bulkhead_sdk::blob::BlobError`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlobError {
+    /// Not granted, not this app's or instance's to do, or a share the
+    /// messaging ACLs refuse.
+    Denied,
+    /// No such blob: never made, freed, or expired.
+    NotFound,
+    /// Over the app's `max_bytes`.
+    OverQuota,
+    /// Larger than the node's largest blob, or empty.
+    TooLarge,
+    /// A writable mapping of it remains, so it cannot be sealed.
+    Mapped,
+    /// Not sealed yet, so it cannot be shared or opened.
+    NotSealed,
+    /// Anything else.
+    Other(String),
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if takes a reference.
@@ -1321,6 +1419,9 @@ pub enum Answer {
     /// A connection the node made for a driver ([`Request::Connect`],
     /// [`Request::ConnectTo`]), its descriptor passed before this answer.
     Connected(Result<FdRef, NetError>),
+    /// A blob request's outcome ([`Request::Blob`]), a descriptor it
+    /// names passed before this answer.
+    Blob(Result<BlobAnswer, BlobError>),
 }
 
 /// A frame that could not be read.

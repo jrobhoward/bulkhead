@@ -461,6 +461,8 @@ async fn service_answer(state: &mut InstanceState, request: Request) -> Result<A
             function,
             args,
         } => Answer::Extension(extension_call(state, &package, function, args.0).await?),
+        // Blobs (ROADMAP BL1) are not served yet.
+        Request::Blob(_) => Answer::Blob(Err(p::BlobError::Denied)),
         other => return Err(format!("not a service request: {other:?}")),
     })
 }

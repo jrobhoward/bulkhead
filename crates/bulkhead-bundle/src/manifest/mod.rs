@@ -36,10 +36,11 @@ mod validate;
 
 pub use bytesize::{ByteSize, ParseByteSizeError};
 pub use capabilities::{
-    AccessMode, Bucket, Capabilities, Capability, ConfigScope, DEFAULT_MAX_SOCKETS, Datasource,
-    Durability, FilesystemScope, GroupsScope, HttpIncomingScope, HttpOutgoingScope, InterfaceName,
-    KeyValueScope, LoggingScope, MetricsScope, PortRange, Preopen, RESERVED_NAMESPACES, Route,
-    SecretsScope, SocketRule, SocketsScope, SqlScope, cidr_contains, is_extension_key, parse_cidr,
+    AccessMode, BlobsScope, Bucket, Capabilities, Capability, ConfigScope, DEFAULT_BLOBS_MAX_BYTES,
+    DEFAULT_MAX_SOCKETS, Datasource, Durability, FilesystemScope, GroupsScope, HttpIncomingScope,
+    HttpOutgoingScope, InterfaceName, KeyValueScope, LoggingScope, MetricsScope, PortRange,
+    Preopen, RESERVED_NAMESPACES, Route, SecretsScope, SocketRule, SocketsScope, SqlScope,
+    cidr_contains, is_extension_key, parse_cidr,
 };
 pub use error::{ManifestError, ValidationError};
 pub use lifecycle::{

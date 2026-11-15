@@ -222,6 +222,14 @@ impl Node {
             self.config.egress.allow.as_deref(),
         )
         .map_err(|e| NodeError::Invalid(format!("bulkhead:http-egress: {e}")))?;
+        if let Some(scope) = &manifest.spec.capabilities.blobs
+            && scope.max_bytes > self.config.blobs.max_bytes
+        {
+            return Err(NodeError::Invalid(format!(
+                "bulkhead:blobs: max_bytes {} is over the node's [blobs] max_bytes {}",
+                scope.max_bytes, self.config.blobs.max_bytes
+            )));
+        }
         if let (Some(scope), Some(ceiling)) = (&spec.services.sockets.scope, &self.config.sockets) {
             ceiling
                 .admits(scope)

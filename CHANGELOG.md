@@ -303,6 +303,14 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Blobs between apps, their interface (ROADMAP BL1, step 1): the
+  capability `bulkhead:blobs` (`max_bytes`, default 64 MiB), node config
+  `[blobs]` (`max_bytes`, the most any app may ask for, 1 GiB;
+  `max_blob`, 256 MiB; `default_ttl_s`, 60; `max_ttl_s`, 3600), a deploy
+  asking for more than the ceiling refused, and protocol 14's
+  `Request::Blob` (`Create`, `Seal`, `Share`, `Open`, `Release`) and
+  `Answer::Blob`, answered `denied` until the node serves them.
+
 - `bulkhead-resolve`, the resolver driver (ROADMAP DA9): hickory-resolver on a worker thread, over TCP
   streams the node opens to the nameservers it names (no UDP), with
   `resolv.conf`'s search list and options and the hosts file passed as
