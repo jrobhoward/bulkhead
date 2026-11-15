@@ -21,7 +21,9 @@ use serde_json::json;
 const MIB: u64 = 1 << 20;
 
 /// A runtime with `writer` (4 MiB of blobs), `reader`, `outsider` (which
-/// accepts messages from no one the writer is) and `plain` (no blobs).
+/// accepts messages from no one the writer is) and `plain` (no blobs), on
+/// the native fixture, and `sdk-writer` and `sdk-reader` on the SDK
+/// fixture (`bulkhead_sdk::blob`).
 struct Node {
     rt: Runtime,
     apps: Apps,
@@ -56,8 +58,12 @@ async fn node() -> Node {
         path: native_fixtures().1.clone(),
         kind: NativeProgram::Executable,
     });
+    let sdk = common::sdk_app(&rt);
     let deploy = |name: &str, spec: serde_json::Value| {
         AppDeployment::new(app_manifest(name, spec), code.clone())
+    };
+    let deploy_sdk = |name: &str, spec: serde_json::Value| {
+        AppDeployment::new(app_manifest(name, spec), sdk.clone())
     };
     let apps = rt
         .start_apps(vec![
@@ -71,6 +77,8 @@ async fn node() -> Node {
                 manifest(Some(json!({})), json!({ "accept_from": ["reader"] })),
             ),
             deploy("plain", manifest(None, json!({}))),
+            deploy_sdk("sdk-writer", manifest(Some(json!({})), json!({}))),
+            deploy_sdk("sdk-reader", manifest(Some(json!({})), json!({}))),
         ])
         .await
         .unwrap();
@@ -278,4 +286,47 @@ async fn blob____from_a_sender_channel____made_and_read() {
     assert!(id.parse::<u64>().is_ok(), "{id}");
     assert_eq!(shared, "ok");
     assert_eq!(read, "4096 abcabcabcabcabca");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdk____blob_put_and_shared____read_mapped_and_copied() {
+    let n = node().await;
+
+    let id = n.ask("sdk-writer", "blob-put 70000 sdk").await;
+    let shared = n
+        .ask("sdk-writer", &format!("blob-share {id} sdk-reader"))
+        .await;
+    let mapped = n.ask("sdk-reader", &format!("blob-map {id}")).await;
+    let copied = n.ask("sdk-reader", &format!("blob-copy {id}")).await;
+    let released = n.ask("sdk-reader", &format!("blob-release {id}")).await;
+
+    assert!(id.parse::<u64>().is_ok(), "{id}");
+    assert_eq!(shared, "ok");
+    assert_eq!(mapped, "70000 sdksdksdksdksdks");
+    assert_eq!(copied, mapped);
+    assert_eq!(released, "ok");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdk____blob_from_a_sender_thread____read_by_the_other_app() {
+    let n = node().await;
+
+    let id = n.ask("sdk-writer", "sender-blob-put 4096 thr").await;
+    n.ask("sdk-writer", &format!("blob-share {id} sdk-reader"))
+        .await;
+    let mapped = n.ask("sdk-reader", &format!("blob-map {id}")).await;
+
+    assert_eq!(mapped, "4096 thrthrthrthrthrt");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdk____unshared_or_missing____the_sdk_errors() {
+    let n = node().await;
+    let id = n.ask("sdk-writer", "blob-put 4096 x").await;
+
+    let unshared = n.ask("sdk-reader", &format!("blob-map {id}")).await;
+    let missing = n.ask("sdk-reader", "blob-copy 999999").await;
+
+    assert_eq!(unshared, "err:access denied");
+    assert_eq!(missing, "err:no such blob");
 }

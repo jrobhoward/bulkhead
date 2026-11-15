@@ -386,3 +386,76 @@ impl SenderBucket<'_> {
 fn unexpected(answer: &p::KvAnswer) -> crate::kv::KvError {
     crate::kv::KvError::Other(format!("unexpected keyvalue answer {answer:?}"))
 }
+
+/// Blobs from a sender's thread ([`Sender::blobs`]): as
+/// [`crate::blob`]'s functions, asking through the sender.
+#[cfg(feature = "blob")]
+#[derive(Debug)]
+pub struct SenderBlobs<'a>(&'a mut Sender);
+
+#[cfg(feature = "blob")]
+impl Sender {
+    /// Blobs, asked for through this sender.
+    pub fn blobs(&mut self) -> SenderBlobs<'_> {
+        SenderBlobs(self)
+    }
+}
+
+#[cfg(feature = "blob")]
+impl SenderBlobs<'_> {
+    /// As [`crate::blob::BlobWriter::create`].
+    ///
+    /// # Errors
+    ///
+    /// As there.
+    pub fn create(&mut self, size: u64) -> Result<crate::blob::BlobWriter, crate::blob::BlobError> {
+        crate::blob::BlobWriter::create_with(&mut |r| (self.0).0.blob(r), size)
+    }
+
+    /// As [`crate::blob::BlobWriter::seal`].
+    ///
+    /// # Errors
+    ///
+    /// As there.
+    pub fn seal(
+        &mut self,
+        blob: crate::blob::BlobWriter,
+        ttl: Option<Duration>,
+    ) -> Result<crate::blob::BlobId, crate::blob::BlobError> {
+        blob.seal_with(&mut |r| (self.0).0.blob(r), ttl)
+    }
+
+    /// As [`crate::blob::share`].
+    ///
+    /// # Errors
+    ///
+    /// As there.
+    pub fn share(
+        &mut self,
+        id: crate::blob::BlobId,
+        app: &str,
+    ) -> Result<(), crate::blob::BlobError> {
+        crate::blob::share_with(&mut |r| (self.0).0.blob(r), id, app)
+    }
+
+    /// As [`crate::blob::open`].
+    ///
+    /// # Errors
+    ///
+    /// As there.
+    pub fn open(
+        &mut self,
+        id: crate::blob::BlobId,
+    ) -> Result<crate::blob::BlobReader, crate::blob::BlobError> {
+        crate::blob::open_with(&mut |r| (self.0).0.blob(r), id)
+    }
+
+    /// As [`crate::blob::release`].
+    ///
+    /// # Errors
+    ///
+    /// As there.
+    pub fn release(&mut self, id: crate::blob::BlobId) -> Result<(), crate::blob::BlobError> {
+        crate::blob::release_with(&mut |r| (self.0).0.blob(r), id)
+    }
+}

@@ -37,6 +37,12 @@
 //!   request (`bulkhead_sdk::http_client`); replies `<status> <body>`, or
 //!   `err:<error>`. `fetch-with <header> <url>`: a GET with header
 //!   `<header>: 1`, replied the same way.
+//! - Blobs (`bulkhead_sdk::blob`), space separated: `blob-put <size>
+//!   <text>` fills a new blob with `<text>` repeated, seals it and replies
+//!   its id; `blob-share <id> <app>`, `blob-release <id>`: `ok`;
+//!   `blob-map <id>` and `blob-copy <id>`: `<size> <first 16 bytes>`,
+//!   read mapped or copied; `sender-blob-put <size> <text>`: as
+//!   `blob-put`, from a thread of its own through a sender.
 //! - `produce:<app>:<n>:<batch>`: send `n` sample points to the app
 //!   (`whereis`), one cast each with `batch` 0, else in batches of `batch`
 //!   through `bulkhead_sdk::batch`; replies `ok`. Casts of points (single
@@ -480,6 +486,9 @@ impl App for Fixture {
         if let Some(rest) = command.strip_prefix("fetch ") {
             return Reply::Now(Envelope::text(fetch(rest)));
         }
+        if command.starts_with("blob-") || command.starts_with("sender-blob-") {
+            return Reply::Now(Envelope::text(blob(ctx, command)));
+        }
         if let Some(rest) = command.strip_prefix("produce:") {
             return Reply::Now(Envelope::text(produce(ctx, rest)));
         }
@@ -585,3 +594,72 @@ impl App for Fixture {
 }
 
 bulkhead_sdk::app!(Fixture);
+
+/// `<size> <text>`: the size and the text to fill with.
+fn size_text(rest: &str) -> (u64, String) {
+    let (size, text) = rest.split_once(' ').unwrap_or((rest, "x"));
+    (size.parse().unwrap_or(0), text.to_string())
+}
+
+/// `text` repeated over `size` bytes.
+fn filled(size: u64, text: &str) -> Vec<u8> {
+    text.bytes()
+        .cycle()
+        .take(usize::try_from(size).unwrap_or(0))
+        .collect()
+}
+
+/// `<size> <first 16 bytes>`.
+fn head(size: u64, bytes: &[u8]) -> String {
+    format!(
+        "{size} {}",
+        String::from_utf8_lossy(&bytes[..bytes.len().min(16)])
+    )
+}
+
+/// The blob commands (`bulkhead_sdk::blob`).
+fn blob(ctx: &mut Ctx, command: &str) -> String {
+    use bulkhead_sdk::blob::{self, BlobId, BlobWriter};
+    let (verb, rest) = command.split_once(' ').unwrap_or((command, ""));
+    let id = |s: &str| s.parse::<BlobId>().unwrap_or(BlobId(0));
+    let result: Result<String, blob::BlobError> = (|| match verb {
+        "blob-put" => {
+            let (size, text) = size_text(rest);
+            let w = BlobWriter::create(size)?;
+            w.write_at(0, &filled(size, &text))?;
+            Ok(w.seal(None)?.to_string())
+        }
+        "blob-share" => {
+            let (b, app) = rest.split_once(' ').unwrap_or((rest, ""));
+            blob::share(id(b), app).map(|()| "ok".into())
+        }
+        "blob-release" => blob::release(id(rest)).map(|()| "ok".into()),
+        "blob-map" => {
+            let r = blob::open(id(rest))?;
+            let bytes = r.map()?;
+            Ok(head(r.len(), &bytes))
+        }
+        "blob-copy" => {
+            let r = blob::open(id(rest))?;
+            let mut buf = [0u8; 16];
+            let n = r.read_at(0, &mut buf)?;
+            Ok(head(r.len(), &buf[..n]))
+        }
+        "sender-blob-put" => {
+            let (size, text) = size_text(rest);
+            let mut sender = ctx
+                .sender()
+                .map_err(|e| blob::BlobError::Other(e.to_string()))?;
+            std::thread::spawn(move || {
+                let mut blobs = sender.blobs();
+                let w = blobs.create(size)?;
+                w.write_at(0, &filled(size, &text))?;
+                blobs.seal(w, None).map(|id| id.to_string())
+            })
+            .join()
+            .unwrap_or_else(|_| Err(blob::BlobError::Other("the thread panicked".into())))
+        }
+        other => Err(blob::BlobError::Other(format!("unknown {other}"))),
+    })();
+    result.unwrap_or_else(|e| format!("err:{e}"))
+}

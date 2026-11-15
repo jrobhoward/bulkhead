@@ -303,6 +303,15 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Blobs in the SDK (ROADMAP BL1, step 3): `bulkhead_sdk::blob` (cargo
+  feature `blob`): `BlobWriter::create`, `write_at`, `seal`; `share`,
+  `open` (a `BlobReader`: `map()` read-only with no copy, or `read_at`),
+  `release`; `BlobId` to send in messages, `BlobError`; and
+  `Sender::blobs()` for the app's own threads. The writer fills a blob
+  with `pwrite` rather than a writable mapping: S42 found it as fast,
+  and a mapping would need `unsafe` in the SDK. WRITING_APPS.md: "Large
+  data: blobs".
+
 - Blobs between apps, served (ROADMAP BL1, step 2): the node makes each
   blob as a memfd (on FreeBSD an anonymous shared memory object), sized
   and sealed against resizing, and passes the writer a descriptor

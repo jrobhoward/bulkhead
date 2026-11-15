@@ -10,7 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-bulkhead-sdk = { workspace = true, features = ["config", "groups", "http", "http-client", "keyvalue", "metrics", "secrets", "sql", "watch"] }
+bulkhead-sdk = { workspace = true, features = ["blob", "config", "groups", "http", "http-client", "keyvalue", "metrics", "secrets", "sql", "watch"] }
 serde = { workspace = true }
 
 [lints]

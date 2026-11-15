@@ -10,6 +10,9 @@ repository.workspace = true
 publish = false
 
 [features]
+# `bulkhead_sdk::blob`: data passed between apps as sealed memory
+# (`bulkhead:blobs`).
+blob = []
 # `bulkhead_sdk::config`: the app's configuration (`bulkhead:config`).
 config = []
 # `bulkhead_sdk::kv`: keyvalue buckets (`bulkhead:keyvalue`).

@@ -38,6 +38,8 @@
 //! - [`files`]: the paths of preopened files (`bulkhead:files`).
 //! - [`extension`]: calls to extensions, the host services a node is built
 //!   with from outside Bulkhead.
+//! - `blob` (cargo feature `blob`): `bulkhead:blobs`, data passed between
+//!   apps as sealed memory, by id.
 //! - `config` (cargo feature `config`): `bulkhead:config`.
 //! - `kv` (cargo feature `keyvalue`): `bulkhead:keyvalue` buckets.
 //! - `groups` (cargo feature `groups`): `bulkhead:groups`, process groups
@@ -68,6 +70,8 @@ extern crate self as bulkhead_sdk;
 
 mod app;
 pub mod batch;
+#[cfg(feature = "blob")]
+pub mod blob;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "connection")]
