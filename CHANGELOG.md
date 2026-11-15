@@ -8,6 +8,15 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP egress documented (ROADMAP DA4, step 6): DESIGN.md ("HTTP
+  egress"), SECURITY.md (the egress driver's trust, its boundary, the
+  parser row moved), OPERATIONS.md ("HTTP egress": installing it, a
+  driver per app, roots, `max_response_body`, the name limit),
+  MANIFEST.md, WRITING_APPS.md, OBSERVABILITY.md
+  (`bulkhead_egress_connections_total`), ARCHITECTURE.md, GLOSSARY.md,
+  README.md and CLAUDE.md. ROADMAP: DA4 done, DA4b for what it left,
+  CR1's egress part done, Next DA5.
+
 - HTTP egress measured (ROADMAP DA4, step 5): the new
   `bulkhead-host` example `egress_cost` (the SDK fixture's `fetch`
   against a local server, HTTP and HTTPS, one at a time and 16 instances

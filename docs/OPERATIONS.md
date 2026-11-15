@@ -41,7 +41,7 @@ The privileged helper keeps its own state, apart from the node's, in its configu
 | `BULKHEAD_CONTACTS` | `bulkhead shell` | The contacts file, instead of `--contacts` (default `contacts.toml` under `$XDG_CONFIG_HOME/bulkhead` or `~/.config/bulkhead`) |
 | `XDG_CONFIG_HOME` | `bulkhead shell` | Where the contacts file and the shell's history (`bulkhead/history`) are |
 | `BULKHEAD_KEY_PASSWORD` | `bulkhead bundle`, `bulkhead keygen` | The signing key's password, instead of a prompt |
-| `SSL_CERT_FILE`, `SSL_CERT_DIR` | `bulkhead node` | Where HTTP egress reads the system's root certificates, instead of the OS defaults (`[egress] system_roots`) |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | `bulkhead node` | Where the node reads the system's root certificates for HTTP egress, instead of the OS defaults (`[egress] system_roots`) |
 | `RUST_LOG` | `bulkhead node` | Log filter (default `info`), for example `info,bulkhead::lease=debug` |
 | `BULKHEAD_PRIV_FD` | `bulkhead node`, set by `bulkhead-priv` | The descriptor of the privileged helper's socket. Node config's `[priv]` and this variable go together: the node refuses to start with one and not the other |
 | `BULKHEAD_PRIV_TESTS`, `BULKHEAD_CONFORMANCE_HELPER` | `bulkhead-host`'s tests, as root on a test machine | `1` runs the helper's own tests (`tests/priv.rs`), and the conformance suite's native mode under the helper |
@@ -168,6 +168,20 @@ Since ROADMAP DA3 (2026-11-15) the node runs no Postgres client: for each `[data
 - **Restarts.** A statement in flight when the driver ends answers `unavailable`, as do later statements of transactions it held; other requests wait for the new driver, up to `acquire_timeout_ms`. An instance's connection cap per datasource is the node's, so a driver restart does not change it.
 - **Metrics:** `bulkhead_sql_requests_total`, `bulkhead_sql_requests_failed_total` and `bulkhead_sql_connections_total`, labelled `datasource` (OBSERVABILITY.md).
 - **Cost.** A request through the driver takes 50 to 180 µs longer than through the node's own pool did, for 60 to 190 µs more CPU; 16 instances at once get about half the statements a second, since the driver runs every connection on one thread: about 21,000 a second on 16 cores and 5,500 on a Raspberry Pi 5 (BASELINE.md, 2026-11-15). Split a busier database across two datasources until the driver uses more threads (ROADMAP DA3b).
+
+## HTTP egress
+
+Since ROADMAP DA4 (2026-11-15) the node sends no app's HTTP request itself: for each app granted `bulkhead:http-egress` with an `allow` list it starts `bulkhead-egress` as the app `bulkhead-egress-<app>`, which holds that app's connection pool and sends the requests the node checked and forwards, over connections the node opens for it (DESIGN.md, "HTTP egress"; SECURITY.md, "HTTP egress"). Apps and their manifests are unchanged.
+
+- **Install** `bulkhead-egress` beside `bulkhead-runner`, built with `cargo build --release -p bulkhead-egress`, or name it in `[native] egress`; deploying, starting or upgrading an app that needs it without such a file fails with that reason. It belongs to the node's install, as the runner does. Names starting `bulkhead-egress-` are reserved: no bundle or `[drivers.<app>]` may take one. An app declaring `bulkhead:http-egress` may have a name of at most 48 characters, so that its driver's name is a valid app name; a longer one is refused at deploy.
+- **One per app,** started before the app and removed after it stops or is removed; an upgrade keeps it, and one that adds egress starts it. Each runs as one instance that `bulkhead ps` lists by its app name, with its log lines under that name, `memory_max` 256 MiB, restarted when it exits (never giving up). Idle, it uses about 5 to 6 MiB resident.
+- **Connections.** The driver opens no socket: the node connects it to a host and port its app's `allow` names, within `connect_timeout_ms`, resolving a name through `bulkhead-resolve` on each new connection. The pool keeps idle connections for `pool_idle_timeout_ms`, at most `pool_max_idle_per_host` a host.
+- **Root certificates** are read by the node once, as it starts, from the system (`system_roots`; `SSL_CERT_FILE` and `SSL_CERT_DIR` in the node's environment) and from `ca_file`, and passed to each driver as text; the driver reads no file. A new CA, or a change to the system's roots, takes effect when the node restarts.
+- **Response size.** `[egress] max_response_body` (default 16 MiB, at most 16 MiB) bounds a response body; a larger one fails the request.
+- **Under the privileged helper** the driver runs as a user of its own; nothing needs sharing with it.
+- **Restarts.** A request in flight when the driver ends fails, and its slot is freed; others wait for the new driver, up to `connect_timeout_ms`.
+- **Metrics:** `bulkhead_egress_connections_total` from the driver, labelled `for` (OBSERVABILITY.md), beside the node's `bulkhead_egress_requests_total`.
+- **Cost.** A request through the driver takes 20 to 50 µs longer on 16 cores and 80 to 90 µs on a Raspberry Pi 5 than through the node's own pool did; 16 instances of one app at once get four fifths of the requests a second on 16 cores and two fifths on the Pi (about 15,000), since the driver runs every connection on one thread; a 1 MiB response takes 1.6 to 2.8 ms more (BASELINE.md, 2026-11-15; ROADMAP DA4b).
 
 ## The privileged helper
 

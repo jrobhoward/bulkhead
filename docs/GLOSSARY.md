@@ -74,7 +74,7 @@ Two words have more than one meaning:
 - **Resolver driver:** `bulkhead-resolve`, the driver app every member node starts to resolve host names (ROADMAP DA9), so no DNS reply is parsed in the node; it reaches its nameservers over TCP streams the node opens.
 - **Ingress:** the node's HTTP server, `bulkhead-ingress`, a driver app the node starts for `[http]` (ROADMAP DA2): a request to a route becomes a call to the owning app's pool.
 - **Listener, connection handler:** a TCP port the node owns, whose every accepted connection goes to an instance of the app's pool, each holding many (MANIFEST.md, `listeners`).
-- **Egress:** outgoing HTTP from an app, filtered by the manifest's `allow` and node config's ceiling, through the node's connection pool.
+- **Egress:** outgoing HTTP from an app, checked by the node against the manifest's `allow` and node config's ceiling, and sent by the app's egress driver, the app `bulkhead-egress-<app>`, over connections the node opens (ROADMAP DA4). [OPERATIONS.md](OPERATIONS.md).
 - **Volume:** a host directory node config names (`[volumes]`), mapped to a guest path by a manifest preopen, read-only or read-write.
 - **Datasource:** a Postgres database node config binds (`[datasources.<name>]`), that granted apps query through `bulkhead:sql` by name; pooled by a driver of its own, the app `bulkhead-sql-<name>`, which the node connects to that database alone (ROADMAP DA3). [OPERATIONS.md](OPERATIONS.md).
 

@@ -21,6 +21,7 @@ flowchart TD
     ingress["bulkhead-ingress (bin)<br/>the HTTP ingress driver: hyper, rustls"]
     resolve["bulkhead-resolve (bin)<br/>the resolver driver: hickory-resolver"]
     sql["bulkhead-sql (bin)<br/>a datasource's driver: tokio-postgres, deadpool"]
+    egress["bulkhead-egress (bin)<br/>an app's egress driver: hyper-util, rustls"]
     bulkhead --> host
     bulkhead --> bundle
     bulkhead -->|"modbus feature"| ext
@@ -37,7 +38,9 @@ flowchart TD
     bulkhead -.->|"starts on a member"| resolve
     bulkhead -.->|"starts for [http]"| ingress
     sql -->|"SDK, sender_async"| guests
+    egress -->|"SDK, sender_async"| guests
     bulkhead -.->|"starts per [datasources.name]"| sql
+    bulkhead -.->|"starts per app granted http-egress"| egress
 ```
 
 Solid arrows point from a crate to the crates it depends on; dotted arrows are what runs on the host, not Cargo dependencies.
@@ -54,6 +57,7 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-ingress` | library and `bulkhead-ingress` | The HTTP ingress driver (ROADMAP DA2): an SDK app the node starts for `[http]`, hyper's HTTP/1.1 server and rustls on tokio, a current-thread runtime and a sender channel (`bulkhead_native::sender_async`) per worker thread; `config` (the node's init arguments), `serve` (one request, its limits and statuses), `tls` (certificates by SNI, reloaded), `driver` (threads, host events, metrics). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-resolve` | library and `bulkhead-resolve` | The resolver driver (ROADMAP DA9): an SDK app every member node starts, hickory-resolver on a worker thread with a tokio runtime and a sender channel; `config` (the nameservers, `resolv.conf` and hosts text, TCP only), `lookup` (the `bulkhead/resolve` call), `provider` (hickory's I/O over streams the node opens, one per nameserver), `driver` (the callback thread taking the node's calls, the worker answering them on its sender channel and casting to its own instance for sockets). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-sql` | library and `bulkhead-sql` | A datasource's Postgres client as a driver (ROADMAP DA3): an SDK app the node starts as `bulkhead-sql-<name>` for each `[datasources.<name>]`; `config` (the node's init arguments), `pool` (deadpool over streams the node connects, `Request::Connect`; TLS; the reset), `statements` (running a `SqlRequest`, the result limit, faults), `values`, `driver` (the callback thread handing calls to a worker thread with a tokio runtime and a sender channel, which answers each with `Request::Reply`). No node crate depends on it, and the node's tree holds no Postgres crate (`scripts/check.sh deps`). |
+| `bulkhead-egress` | library and `bulkhead-egress` | An app's HTTP client as a driver (ROADMAP DA4): an SDK app the node starts as `bulkhead-egress-<app>` for each app granted `bulkhead:http-egress`; `config` (the node's init arguments: timeouts, the pool, the body cap, the roots as PEM), `request` (`EgressRequest`, the schema), `client` (hyper-util's pool with hyper-rustls over streams the node connects per destination, `Request::ConnectTo`; the timeouts, the body cap, error classes), `driver` (the callback thread handing calls to a worker thread with a tokio runtime and a sender channel, which answers each with `Request::Reply`). No node crate depends on it, and `bulkhead-host` has no HTTP client (`scripts/check.sh deps`). |
 | `bulkhead-keys` | library | Pinned Ed25519 keys (nodes', operators'), TLS 1.3 with raw public keys, the operators file, and the remote admin request signature; shared by the node, the CLI and the admin driver, no tokio. |
 | `bulkhead-metrics` | library and `bulkhead-metrics` | The metrics endpoint as a driver (DA7): hyper serving `GET /metrics`, the text asked of the node (`Request::MetricsText`). |
 | `bulkhead-modbus` | library | The Modbus TCP extension; depends on `bulkhead-host` alone. |
@@ -192,7 +196,7 @@ A listener (`listener`) hands each accepted connection to an instance of the app
 
 ### Out of an app
 
-- **HTTP egress** (`services::egress`): the node's own client sends each request. A request goes out only if it matches the manifest's `allow` (inside node config's `[egress] allow`), through the node's connection pool, at most `max_concurrent` per app at once. Its resolver refuses names that resolve only to loopback or link-local addresses unless `allow_loopback`. Host names go to the resolver driver (`Names`), not libc.
+- **HTTP egress** (`services::egress`, feature `egress`): the node checks each request (the grant, the manifest's `allow` inside node config's `[egress] allow`, `methods`, forbidden headers), holds the app's permit (at most `max_concurrent` per app at once) and forwards it as a call to the app's driver, `bulkhead-egress-<app>` (`daemon/egress.rs` starts and stops them with their apps; `Runtime::egress_driver_args`). The driver sends it on its pool, asking the node for each new connection (`Request::ConnectTo`: `native/driver.rs` checks the host and port against the `allow` sets of the app's running instances, kept per app in egress's `Shared`, resolves a name through `Names`, refuses loopback and link-local addresses for a name unless `allow_loopback`, connects, and passes the stream).
 - **App sockets** (`services::sockets`): the node makes each socket, checking every address (the manifest's `connect` and `bind` rules, `listen`, and the guard on loopback, link-local and unspecified destinations), and passes TCP streams on the descriptor socket; UDP sockets and listeners stay in the node. A semaphore permit per socket counts them per app (`max_sockets`). A `connect_host` name goes to the resolver driver (`Names`); its addresses are checked as any.
 - **Waiting on a socket:** the app asks with a tag; the node watches the socket and delivers the host event `io-ready` once it is ready.
 - **SQL** (`services::sql`, feature `sql`): the node checks the grant, holds the app's permit per datasource (a semaphore per app and datasource) for a request or a whole transaction, keeps the instance's transactions by number with the driver instance that began each, and forwards each request as a call to the datasource's driver, `bulkhead-sql-<name>` (`daemon/sql.rs` starts them; `SqlDatasource::driver_profile`). The driver runs it on its pool, asking the node for each new connection (`Request::Connect`: `native/driver.rs` resolves the host through `Names` and connects, or connects the Unix socket, and passes the stream). An instance's exit casts its open transactions' rollback to their driver.
@@ -433,7 +437,7 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Supervisor | 1 per supervisor, plus 1 per child watching its exit | `supervisor` | supervisor exit |
 | App watcher | 1 per app, and 1 per blue-green new side | `apps` | root supervisor exit |
 | Listener accept, connection instance | several per listener; 1 per connection | `listener` | stop; connection close or idle timeout |
-| HTTP egress connections | pooled, per host | `services::egress` | idle timeout |
+| An app's egress driver (an OS process, `bulkhead-egress-<app>`): its callback thread, and a worker thread with a tokio runtime running the pool, a task per request and per connection | 1 per app granted `bulkhead:http-egress` on a node running it | daemon (`egress.rs`), as a native instance, before the app | the app's stop or removal |
 | Liveness loop | 1, once a node has a peer | `Liveness::add_peer` | runtime drop |
 | Serial path | 1 per configured device | `node/serial_path.rs` | stop |
 | Failover node loop | 1 on a pair member | `Runtime::start_failover` | runtime drop |
@@ -468,7 +472,7 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Peers and sessions; paths and this node's payload | `transport::liveness::Liveness` | std `Mutex`; std `RwLock` |
 | Members and creations | `transport::membership::Membership` | std `Mutex` |
 | Failover inbox; the witness's record and its persistence | `failover::Shared` | std `Mutex` each |
-| Services' shared state: buckets (memory, and the redb handle), watches, groups, log rate buckets, metric series, secret sources, the egress pool, socket counts per app, SQL caps per app and datasource (the pools are in the drivers) | `services::Shared` | per service |
+| Services' shared state: buckets (memory, and the redb handle), watches, groups, log rate buckets, metric series, secret sources, egress caps and allow sets per app (the pools are in the drivers), socket counts per app, SQL caps per app and datasource (the pools are in the drivers) | `services::Shared` | per service |
 | The replica: role, mode, the partner's match index, writes waiting to commit, a snapshot in transfer | `replication::Task` (owned by its task, no lock) | none |
 | A moved singleton's snapshot taken for its start | `RuntimeInner::handovers` (`handover::Pending`) | std `Mutex` |
 | Failover role for `hot-standby` instances | `RuntimeInner::failover_role` | std `RwLock` |

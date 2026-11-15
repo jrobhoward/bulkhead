@@ -78,7 +78,7 @@ log_level = "info"
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `name` | yes | App name: lowercase ASCII letters, digits, `-` and `_`, starting with a letter or digit, at most 64 characters. Names the app in every command and namespaces its storage. |
+| `name` | yes | App name: lowercase ASCII letters, digits, `-` and `_`, starting with a letter or digit, at most 64 characters (48 for an app declaring `bulkhead:http-egress`, whose egress driver is named `bulkhead-egress-<name>`). Names the app in every command and namespaces its storage. |
 | `version` | yes | Semantic version. A node keeps the current and the previous version, for rollback. |
 | `description`, `authors`, `license`, `repository` | no | Shown in the bundle; no effect on running. |
 
@@ -290,7 +290,7 @@ How the rest works natively:
 - `bulkhead:sql`: the manifest's datasources with their `max_connections`, granted and bound by the operator, each query, statement and transaction a request to the node (`bulkhead_sdk::sql`, `Ctx::sql` on the app API). A transaction holds one of the app's connections until it commits or rolls back; dropping the SDK's handle rolls it back, and one still open when the instance exits is rolled back.
 - `bulkhead:files`'s preopens: each names a volume from the node's `[volumes]`, read-only (`"ro"`) or read-write (`"rw"`), and the bundle's `priv/` files are read-only at `/priv`. The program opens them on the host's filesystem, under the runner's Landlock rules, at the paths `BULKHEAD_PREOPENS` gives; `bulkhead_sdk::files::path("/data/orders.json")` returns the right path. A read-write volume allows reading, writing, making and removing files, directories and symbolic links, and renaming within it; executing nothing from it.
 - `bulkhead:sockets` works on the manifest's rules, the address guard and `max_sockets`, with the node making every socket: it connects (or resolves a name and connects), listens and accepts, and passes each TCP stream to the program, connected, keeping a copy it shuts down when the program closes the stream (so a stream kept after closing is dead). Listeners and UDP sockets stay in the node: the program accepts, sends and receives datagrams with requests, each destination and source checked against the rules. Readiness is watched by the node and arrives as the host event `io-ready`. `bulkhead_sdk::net`'s `TcpStream` and `TcpListener` are the API (UDP through `Ctx::net`); reading and writing a passed stream are the program's own system calls, counted against the callback deadline.
-- `bulkhead:http-egress`: each request is sent by the node's egress client on the same rules (the `allow` list, `methods`, forbidden headers, `max_concurrent`, the address guard, node config's timeouts, roots and CA file, no redirects), and the whole response comes back, its body up to 16 MiB (a frame).
+- `bulkhead:http-egress`: each request is checked by the node on the same rules (the `allow` list, `methods`, forbidden headers, `max_concurrent`) and sent by the app's egress driver (`bulkhead-egress-<app>`, ROADMAP DA4) over connections the node opens under the address guard, with node config's timeouts, roots and CA file, and no redirects; the whole response comes back, its body up to `[egress] max_response_body` (16 MiB at most, a frame).
 - `listeners` (an executable only) bind on the node's addresses, and each accepted connection goes to an instance of the app's pool: the next in turn, or by the peer's IP address with `instances.routing = "hash:<any>"`, so one client's connections share an instance while the pool's size holds. The node passes the stream on the instance's descriptor socket and runs its `handle_connection` (`bulkhead_sdk::connection::Handler`); the instance reads it when the node says it has bytes (`io-ready`), as a `bulkhead:sockets` stream, so one instance serves many connections, one callback at a time. `max_connections` counts a connection until the app closes it or its instance exits, and the idle timeout is the kernel's `TCP_INFO`: no data either way for `idle_timeout_ms` and the node shuts the socket down. A crash closes every connection its instance held, and the listener's `crashed` stays 0 (the app's restarts count it). The app is upgraded as any app; an upgrade closes the connections open on the instances it replaces. The connections do not count against `max_sockets`, and the app needs no `bulkhead:sockets`.
 - An extension the manifest declares under `extensions."<package>"` is granted by the operator by package name; the program calls its functions through the node (`bulkhead_sdk::extension::call`, `Ctx::extension` on the app API) by the extension's names for them (`greet#hello`), with arguments and results in CBOR, and the extension reads the same scope table and checks the same grant.
 - The runner restricts the program before it runs (SECURITY.md, "Native-process apps"): it reads only the system libraries, its own directory, the app's `priv/` files and its volumes, writes only its read-write volumes, executes nothing else, opens no sockets of its own (no `socket`, `connect`, `accept` or `io_uring`), and signals only itself. Linux only: on FreeBSD nothing yet (ROADMAP FB2).
@@ -365,6 +365,7 @@ between_bytes_timeout_ms = 30000       # between chunks of a response body
 pool_idle_timeout_ms = 90000           # idle pooled connections are closed after this
 pool_max_idle_per_host = 32
 max_concurrent = 64                    # requests in flight per app, unless its manifest says
+max_response_body = "16MiB"            # larger response bodies fail the request; at most 16 MiB
 
 [sockets]                              # TCP and UDP from apps (bulkhead:sockets); unset: no ceiling
 connect = [{ cidr = "10.20.0.0/16", ports = "1883" }]  # the most any app may connect to (manifest syntax)
@@ -385,6 +386,7 @@ resolve = "/usr/local/bin/bulkhead-resolve"  # the resolver of host names every 
 admin = "/usr/local/bin/bulkhead-admin"      # the remote admin API's driver, with [admin]; unset: beside the runner
 metrics = "/usr/local/bin/bulkhead-metrics"  # the metrics endpoint's driver, with [metrics]; unset: beside the runner
 sql = "/usr/local/bin/bulkhead-sql"          # each datasource's driver, with [datasources]; unset: beside the runner
+egress = "/usr/local/bin/bulkhead-egress"    # each egress app's driver, with an app granted bulkhead:http-egress; unset: beside the runner
 
 [resolver]                             # host names (ROADMAP DA9), resolved by bulkhead-resolve; every key optional
 resolv_conf = "/etc/resolv.conf"       # search, domain, options ndots/timeout/attempts; and its nameservers, unless:

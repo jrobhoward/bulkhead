@@ -232,6 +232,15 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   on its sender channel). Their tests start a scratch Postgres as the
   current user (as `nobody` under root) and skip when none is installed.
   App sockets are `src/services/sockets`.
+- The egress service (`crates/bulkhead-host/src/services/egress`, cargo
+  feature `egress`) checks each request, holds each app's cap and allow
+  sets, and forwards the request to the app's driver; it links no HTTP
+  client. `crates/bulkhead-egress` is that driver (ROADMAP DA4), one per
+  app granted `bulkhead:http-egress`, started and stopped with its app by
+  `crates/bulkhead/src/node/daemon/egress.rs` as `bulkhead-egress-<app>`:
+  `config`, `request`, `client` (hyper-util and hyper-rustls over streams
+  the node connects, `Request::ConnectTo`), `driver`. Its tests and the
+  host's `tests/egress.rs` need the host's `egress` feature.
 - `crates/bulkhead-host/src/delivery.rs`: the one place a pid is routed
   (local, dead, or another node). Process-core code that names a pid calls
   it, never the process table directly. `src/transport/`: frames between
