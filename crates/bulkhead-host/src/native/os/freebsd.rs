@@ -22,6 +22,7 @@ pub(crate) fn for_app(fd: BorrowedFd<'_>, what: Passed) -> io::Result<Option<Own
         Passed::Memfd => rights::MEMFD,
         Passed::Door => rights::DOOR,
         Passed::Bell => rights::BELL,
+        Passed::BlobWrite => rights::BLOB_WRITE,
     };
     limit_rights(copy.as_raw_fd(), list)?;
     if what == Passed::Stream {

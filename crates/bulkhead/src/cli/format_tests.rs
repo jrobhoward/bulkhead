@@ -43,6 +43,26 @@ fn apps____none____says_so() {
 }
 
 #[test]
+fn detail____app_holding_blobs____shows_them() {
+    let d = AppDetail {
+        summary: summary("orders", "running"),
+        signer: String::new(),
+        granted: vec![],
+        denied: vec![],
+        warnings: vec![],
+        restarts: 0,
+        instance_list: vec![],
+        listeners: vec![],
+        runs_as: String::new(),
+        blobs: Some((2, 4096)),
+    };
+
+    let out = detail(&d);
+
+    assert!(out.contains("blobs:     2, 4096 bytes"), "{out}");
+}
+
+#[test]
 fn detail____failed_app____shows_reason_and_denied() {
     let mut s = summary("orders", "failed");
     s.reason = Some("crashed: max restart intensity".into());
@@ -56,6 +76,7 @@ fn detail____failed_app____shows_reason_and_denied() {
         instance_list: vec![],
         listeners: vec![],
         runs_as: "its own user".into(),
+        blobs: None,
     };
 
     let out = detail(&d);
@@ -140,6 +161,7 @@ fn detail____connection_handler____lists_listeners() {
             idle_closed: 5,
         }],
         runs_as: String::new(),
+        blobs: None,
     };
 
     let out = detail(&d);

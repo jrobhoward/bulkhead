@@ -44,6 +44,7 @@ use crate::native::port::{Incoming, KvCall, Port};
 use crate::output::{CapturedOutput, Tags};
 use crate::probe;
 use crate::runtime::{LoadedApp, RuntimeInner};
+use crate::services::blobs::{self, Blobs};
 use crate::services::config::Config;
 use crate::services::egress::Egress;
 use crate::services::groups::Groups;
@@ -461,8 +462,6 @@ async fn service_answer(state: &mut InstanceState, request: Request) -> Result<A
             function,
             args,
         } => Answer::Extension(extension_call(state, &package, function, args.0).await?),
-        // Blobs (ROADMAP BL1) are not served yet.
-        Request::Blob(_) => Answer::Blob(Err(p::BlobError::Denied)),
         other => return Err(format!("not a service request: {other:?}")),
     })
 }
@@ -1001,6 +1000,19 @@ impl InstanceTask {
                         }
                     }
                     host += asked.elapsed();
+                }
+                #[cfg(unix)]
+                Some(Incoming::Frame(FromApp::Request {
+                    id,
+                    request: Request::Blob(request),
+                })) => {
+                    let (rt, me) = (state.ctx.rt.clone(), state.ctx.me.clone());
+                    let reply = HostState::<Blobs>::service(state)
+                        .state
+                        .native(request, |app| blobs::may_share(&rt, &me, app));
+                    let answer =
+                        Answer::Blob(blobs::pass(reply, |fd, kind| port.send_fd(fd, kind)));
+                    port.send(&ToApp::Answer { id, answer });
                 }
                 Some(Incoming::Frame(FromApp::Request { id, request })) => {
                     let asked = Instant::now();

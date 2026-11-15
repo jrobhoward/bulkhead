@@ -180,6 +180,10 @@ impl Node {
             } else {
                 "the node's user".into()
             },
+            blobs: match self.rt.blob_usage(name) {
+                (0, _) => None,
+                (count, bytes) => Some((count as u64, bytes)),
+            },
         })
     }
 

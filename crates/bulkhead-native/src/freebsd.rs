@@ -68,6 +68,16 @@ pub mod rights {
         libc::CAP_FCNTL,
     ];
 
+    /// A blob to fill (ROADMAP BL1): written (`pwrite` needs `SEEK`) or
+    /// mapped read-write, its size read; never resized.
+    pub const BLOB_WRITE: &[u64] = &[
+        libc::CAP_READ,
+        libc::CAP_WRITE,
+        libc::CAP_SEEK,
+        libc::CAP_MMAP_RW,
+        libc::CAP_FSTAT,
+    ];
+
     /// A published bucket's snapshot: mapped read-only, its size read.
     pub const SNAPSHOT: &[u64] = &[libc::CAP_READ, libc::CAP_MMAP_R, libc::CAP_FSTAT];
 

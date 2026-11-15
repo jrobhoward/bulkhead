@@ -26,9 +26,9 @@ use crate::app::{Ctx, take_fd};
 use crate::channel::{AppEnd, FromNode, Spin, ToNode};
 use crate::hot::{KvFrame, KvOp, KvReply};
 use crate::protocol::{
-    self, Answer, Bytes, CallError, CastError, Envelope, FromApp, KvAnswer, KvError, KvRequest,
-    MetricError, MetricKind, MetricUpdate, NetError, Pid, Request, SenderChannel, SenderError,
-    ToApp,
+    self, Answer, BlobAnswer, BlobError, BlobRequest, Bytes, CallError, CastError, Envelope,
+    FromApp, KvAnswer, KvError, KvRequest, MetricError, MetricKind, MetricUpdate, NetError, Pid,
+    Request, SenderChannel, SenderError, ToApp,
 };
 
 /// One thread's channel to the node.
@@ -149,6 +149,20 @@ impl Sender {
             Answer::Connected(result) => {
                 take_fd(result?).map_err(|e| NetError::Other(e.to_string()))
             }
+            other => unexpected(&other),
+        }
+    }
+
+    /// A blob request (`bulkhead:blobs`, ROADMAP BL1). A descriptor the
+    /// answer names ([`BlobAnswer::Created`], [`BlobAnswer::Opened`]) is
+    /// taken with `app::take_fd`.
+    ///
+    /// # Errors
+    ///
+    /// As [`BlobError`] describes.
+    pub fn blob(&mut self, request: BlobRequest) -> Result<BlobAnswer, BlobError> {
+        match self.request(Request::Blob(request)) {
+            Answer::Blob(result) => result,
             other => unexpected(&other),
         }
     }

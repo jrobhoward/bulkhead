@@ -94,6 +94,10 @@ pub struct AppDetail {
     /// user"`. Empty from a node older than this field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub runs_as: String,
+    /// The app's blobs the node holds (`bulkhead:blobs`, ROADMAP BL1): how
+    /// many and their bytes. Absent with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blobs: Option<(u64, u64)>,
 }
 
 /// One listener of a connection-handler app.

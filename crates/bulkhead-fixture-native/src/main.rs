@@ -47,6 +47,7 @@
 //! | `accept NAME` | the peer's address, once a connection on listener `NAME` is accepted, `hello` written and the connection closed; or `err:` |
 //! | `accept-fd N` | `ok` if `accept4` on descriptor `N` succeeds, else `err:` and the OS error (`EPERM` where the filter refuses it) |
 //! | `sender ...` | sender channels used from threads of the fixture's own (`src/senders.rs` lists them) |
+//! | `blob-...`, `sender-blob ...` | blobs (`src/blobs.rs` lists them) |
 //!
 //! | `note TEXT`, `notes` | `ok`; the notes so far, joined by commas: the state a snapshot carries, one per line |
 //! | `loaded-from` | the version whose snapshot it started from, or `none` |
@@ -62,6 +63,8 @@
 
 use std::process::ExitCode;
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod blobs;
 #[cfg(unix)]
 mod fixture;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

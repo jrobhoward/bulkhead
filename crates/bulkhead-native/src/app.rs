@@ -51,11 +51,11 @@ use crate::channel::{AppEnd, FromNode, ToNode};
 
 use crate::hot::KvOp;
 use crate::protocol::{
-    self, Answer, Bytes, CallError, CastError, ConfigError, Envelope, ExitReason, ExtensionError,
-    FdRef, FromApp, GroupsAnswer, GroupsError, GroupsRequest, HttpError, HttpRequest, HttpResponse,
-    Info, KvAnswer, KvError, KvRequest, Level, MetricError, MetricKind, MetricUpdate, NetAnswer,
-    NetError, NetRequest, NetStream, Pid, RegisterError, Request, ScanPage, ScanQuery, SecretError,
-    SqlAnswer, SqlError, SqlRequest, ToApp, VERSION,
+    self, Answer, BlobAnswer, BlobError, BlobRequest, Bytes, CallError, CastError, ConfigError,
+    Envelope, ExitReason, ExtensionError, FdRef, FromApp, GroupsAnswer, GroupsError, GroupsRequest,
+    HttpError, HttpRequest, HttpResponse, Info, KvAnswer, KvError, KvRequest, Level, MetricError,
+    MetricKind, MetricUpdate, NetAnswer, NetError, NetRequest, NetStream, Pid, RegisterError,
+    Request, ScanPage, ScanQuery, SecretError, SqlAnswer, SqlError, SqlRequest, ToApp, VERSION,
 };
 
 /// A call's reference, for a later [`Ctx::reply`].
@@ -800,6 +800,20 @@ impl Ctx {
     pub fn net(&mut self, request: NetRequest) -> Result<NetAnswer, NetError> {
         match self.request(Request::Net(request)) {
             Answer::Net(result) => result,
+            other => unexpected(&other),
+        }
+    }
+
+    /// A blob request (`bulkhead:blobs`, ROADMAP BL1). A descriptor the
+    /// answer names ([`BlobAnswer::Created`], [`BlobAnswer::Opened`]) is
+    /// taken with [`take_fd`].
+    ///
+    /// # Errors
+    ///
+    /// As [`BlobError`] describes.
+    pub fn blob(&mut self, request: BlobRequest) -> Result<BlobAnswer, BlobError> {
+        match self.request(Request::Blob(request)) {
+            Answer::Blob(result) => result,
             other => unexpected(&other),
         }
     }

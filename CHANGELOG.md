@@ -303,6 +303,21 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Blobs between apps, served (ROADMAP BL1, step 2): the node makes each
+  blob as a memfd (on FreeBSD an anonymous shared memory object), sized
+  and sealed against resizing, and passes the writer a descriptor
+  (FreeBSD rights: read, write, seek, map read-write, stat); it seals a
+  blob against writes once no writable mapping remains (`mapped`
+  otherwise), shares it with apps the writer's messaging ACL may call and
+  that accept it, and gives an app it was shared with a read-only
+  descriptor. A blob is freed once its app and every app it was shared
+  with released it, at its expiry (a sweep each second), or, unsealed,
+  when the instance that made it ends; a descriptor an app holds stays
+  readable. Blob requests work on sender channels too. New metrics
+  `bulkhead_blobs_bytes` and `bulkhead_blobs_total{outcome}`, and
+  `bulkhead status` shows an app's blobs; `Ctx::blob` and `Sender::blob`
+  in `bulkhead-native`.
+
 - Blobs between apps, their interface (ROADMAP BL1, step 1): the
   capability `bulkhead:blobs` (`max_bytes`, default 64 MiB), node config
   `[blobs]` (`max_bytes`, the most any app may ask for, 1 GiB;

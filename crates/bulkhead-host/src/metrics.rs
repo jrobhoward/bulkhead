@@ -359,7 +359,16 @@ pub(crate) struct AppStats {
     /// Socket addresses refused by policy, and sockets refused over
     /// `max_sockets`.
     sockets_refused: AtomicU64,
+    /// Bytes of the app's blobs the node holds (`bulkhead:blobs`).
+    blob_bytes: AtomicU64,
+    /// Blob requests by outcome ([`BLOB_OUTCOMES`]).
+    blobs: [AtomicU64; 5],
 }
+
+/// What happened to blobs, as `bulkhead_blobs_total` labels it: created,
+/// sealed, refused (a request refused), freed (released by every app, or
+/// unsealed when its instance ended), expired.
+pub(crate) const BLOB_OUTCOMES: [&str; 5] = ["created", "sealed", "refused", "freed", "expired"];
 
 /// The outcomes of an outgoing HTTP request, as `bulkhead_egress_requests_total`
 /// labels them: sent (a response came), denied (not allowed), limited (the
@@ -377,6 +386,8 @@ impl Default for AppStats {
             egress: Default::default(),
             sockets_open: AtomicU64::new(0),
             sockets_refused: AtomicU64::new(0),
+            blob_bytes: AtomicU64::new(0),
+            blobs: Default::default(),
         }
     }
 }
@@ -422,6 +433,24 @@ impl AppStats {
     /// A socket address was refused, or a socket over `max_sockets`.
     pub(crate) fn socket_refused(&self) {
         self.sockets_refused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The app's blobs grew (or, negative, shrank) by `delta` bytes.
+    pub(crate) fn blob_bytes(&self, delta: i128) {
+        let magnitude = u64::try_from(delta.unsigned_abs()).unwrap_or(u64::MAX);
+        if delta >= 0 {
+            self.blob_bytes.fetch_add(magnitude, Ordering::Relaxed);
+        } else {
+            self.blob_bytes.fetch_sub(magnitude, Ordering::Relaxed);
+        }
+    }
+
+    /// A blob request or blob ended with `outcome`, an index into
+    /// [`BLOB_OUTCOMES`].
+    pub(crate) fn blob(&self, outcome: usize) {
+        if let Some(n) = self.blobs.get(outcome) {
+            n.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// An instance exited with `reason`.
@@ -582,6 +611,7 @@ impl Metrics {
             }
         }
         write_sockets(&mut out, &apps);
+        write_blobs(&mut out, &apps);
         for (app, (m, _)) in &apps {
             m.write(&mut out, app);
         }
@@ -647,6 +677,46 @@ fn write_histogram(
 fn header(out: &mut String, name: &str, kind: &str, help: &str) {
     let _ = writeln!(out, "# HELP {name} {help}");
     let _ = writeln!(out, "# TYPE {name} {kind}");
+}
+
+/// `bulkhead_blobs_bytes` and `bulkhead_blobs_total`, for apps that have
+/// asked for a blob.
+fn write_blobs(out: &mut String, apps: &BTreeMap<String, AppEntry>) {
+    let used = |s: &AppStats| s.blobs.iter().any(|n| n.load(Ordering::Relaxed) > 0);
+    header(
+        out,
+        "bulkhead_blobs_bytes",
+        "gauge",
+        "Bytes of the app's blobs the node holds (bulkhead:blobs).",
+    );
+    for (app, (_, s)) in apps {
+        if used(s) {
+            let _ = writeln!(
+                out,
+                "bulkhead_blobs_bytes{{app=\"{}\"}} {}",
+                escape(app),
+                s.blob_bytes.load(Ordering::Relaxed)
+            );
+        }
+    }
+    header(
+        out,
+        "bulkhead_blobs_total",
+        "counter",
+        "Blobs, by outcome: created, sealed, refused (a request refused), freed, expired.",
+    );
+    for (app, (_, s)) in apps {
+        if used(s) {
+            for (outcome, n) in BLOB_OUTCOMES.iter().zip(&s.blobs) {
+                let _ = writeln!(
+                    out,
+                    "bulkhead_blobs_total{{app=\"{}\",outcome=\"{outcome}\"}} {}",
+                    escape(app),
+                    n.load(Ordering::Relaxed)
+                );
+            }
+        }
+    }
 }
 
 /// `bulkhead_sockets_open` and `bulkhead_sockets_refused_total`, for apps

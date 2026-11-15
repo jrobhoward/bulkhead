@@ -28,6 +28,9 @@ struct Fixture {
     /// Sender channels `sender open` made (ROADMAP AP1).
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     senders: crate::senders::Senders,
+    /// Blobs it holds (ROADMAP BL1).
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    blobs: crate::blobs::Blobs,
 }
 
 /// The bytes of the file at guest path `guest`, opened by descriptor where
@@ -539,6 +542,10 @@ impl Fixture {
             "metric" => metric(ctx, first, tail),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             "sender" => self.senders.command(ctx, rest),
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            "blob-create" | "blob-fill" | "blob-map" | "blob-unmap" | "blob-seal"
+            | "blob-share" | "blob-open" | "blob-reread" | "blob-release" | "blob-try"
+            | "blob-drop" | "sender-blob" => self.blobs.command(ctx, verb, rest),
             "kill" => {
                 let target: i32 = rest.parse().unwrap_or(0);
                 // SAFETY: `kill` takes no pointers; any pid and signal 0

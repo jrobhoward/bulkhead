@@ -79,4 +79,6 @@ pub(crate) enum Passed {
     Door,
     /// A sender channel's bell (the app writes it).
     Bell,
+    /// A blob to fill (ROADMAP BL1): read, written, mapped read-write.
+    BlobWrite,
 }

@@ -17,6 +17,7 @@ use crate::output::Tags;
 use crate::pid::Pid;
 use crate::process::{Timers, limit};
 use crate::runtime::RuntimeInner;
+use crate::services::blobs::Blobs;
 use crate::services::config::Config;
 use crate::services::egress::Egress;
 use crate::services::groups::Groups;
@@ -256,6 +257,7 @@ host_state!(Secrets, secrets);
 host_state!(MetricsService, metrics);
 host_state!(Sql, sql);
 host_state!(Sockets, sockets);
+host_state!(Blobs, blobs);
 
 /// Exit reason (`crashed`) for an instance over its pending-call limit.
 const PENDING_CALL_LIMIT: &str = "pending_call_limit";

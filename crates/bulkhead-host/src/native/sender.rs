@@ -491,8 +491,16 @@ fn handle(hub: &Arc<Hub>, states: &mut SenderStates, request: Request) -> Handle
                 routes.then(|| ctx.rt.elsewhere(&app)).flatten(),
             ))
         }
-        // Blobs (ROADMAP BL1) are not served yet.
-        Request::Blob(_) => Handled::Now(Answer::Blob(Err(p::BlobError::Denied))),
+        Request::Blob(request) => {
+            let ctx = &hub.ctx;
+            let reply = states.blobs.native(request, |app| {
+                crate::services::blobs::may_share(&ctx.rt, &ctx.me, app)
+            });
+            Handled::Now(Answer::Blob(crate::services::blobs::pass(
+                reply,
+                |fd, kind| hub.fds.send(fd, kind),
+            )))
+        }
         other => Handled::Refused(format!("{other:?}")),
     }
 }

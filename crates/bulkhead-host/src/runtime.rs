@@ -248,6 +248,17 @@ impl RuntimeInner {
         spec
     }
 
+    /// The messaging ACL of app `name`, if an instance of it runs here.
+    pub(crate) fn app_acl(&self, name: &str) -> Option<Arc<crate::acl::Acl>> {
+        self.pools
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()?
+            .pick(None)
+            .map(|h| h.acl())
+    }
+
     /// The instance of the running app called `name` that `msg` routes to
     /// under its `instances.routing`, as for a local caller.
     pub(crate) fn route_app(&self, name: &str, msg: &Envelope) -> Option<InstanceHandle> {
@@ -907,6 +918,13 @@ impl Runtime {
         for instance in self.instances() {
             instance.announce();
         }
+    }
+
+    /// How many blobs of `app` the node holds, and their bytes
+    /// (`bulkhead:blobs`, ROADMAP BL1).
+    #[must_use]
+    pub fn blob_usage(&self, app: &str) -> (usize, u64) {
+        self.inner.services.blobs().usage(app)
     }
 
     /// Every app's metrics and the host's, in the Prometheus text format.

@@ -29,6 +29,7 @@
 //! `announce`), and a request in the native protocol; the process core and
 //! orchestration do not change.
 
+pub mod blobs;
 pub mod config;
 pub mod egress;
 pub mod extension;
@@ -187,6 +188,8 @@ pub struct ServiceSpecs {
     pub sql: sql::SqlSpec,
     /// `bulkhead:sockets`.
     pub sockets: sockets::SocketsSpec,
+    /// `bulkhead:blobs`.
+    pub blobs: blobs::BlobsSpec,
     /// Extensions the manifest declares, by package.
     pub extensions: BTreeMap<String, ExtensionSpec>,
 }
@@ -203,6 +206,7 @@ impl ServiceSpecs {
             metrics: metrics::MetricsService::spec(manifest),
             sql: sql::Sql::spec(manifest),
             sockets: sockets::Sockets::spec(manifest),
+            blobs: blobs::Blobs::spec(manifest),
             extensions: manifest
                 .capabilities
                 .extensions
@@ -224,6 +228,7 @@ pub(crate) struct Shared {
     metrics: Arc<()>,
     sql: Arc<sql::Shared>,
     sockets: Arc<sockets::Shared>,
+    blobs: Arc<blobs::Shared>,
     /// Host names to addresses, for sockets, egress and SQL (ROADMAP DA9).
     names: crate::names::Names,
 }
@@ -231,6 +236,8 @@ pub(crate) struct Shared {
 impl Shared {
     pub(crate) fn new(config: &RuntimeConfig) -> Result<Self, HostError> {
         let names = crate::names::Names::new(config.resolver.clone());
+        let blobs = Arc::new(blobs::Blobs::shared(config)?);
+        blobs::Shared::sweep_every_second(&blobs);
         Ok(Self {
             config: Arc::new(config::Config::shared(config)?),
             egress: Arc::new(egress::Shared::new(config)?),
@@ -241,6 +248,7 @@ impl Shared {
             metrics: Arc::new(metrics::MetricsService::shared(config)?),
             sql: Arc::new(sql::Shared::new(config)),
             sockets: Arc::new(sockets::Shared::new(&names)),
+            blobs,
             names,
         })
     }
@@ -259,6 +267,11 @@ impl Shared {
     /// SQL datasources, whose drivers it calls (ROADMAP DA3).
     pub(crate) fn sql(&self) -> &Arc<sql::Shared> {
         &self.sql
+    }
+
+    /// Blobs between apps (ROADMAP BL1), for `bulkhead status`.
+    pub(crate) fn blobs(&self) -> &Arc<blobs::Shared> {
+        &self.blobs
     }
 
     /// Process groups, which other nodes' frames update.
@@ -282,6 +295,7 @@ impl Shared {
         metrics::MetricsService::exited(&self.metrics, pid);
         sql::Sql::exited(&self.sql, pid);
         sockets::Sockets::exited(&self.sockets, pid);
+        blobs::Blobs::exited(&self.blobs, pid);
     }
 }
 
@@ -296,6 +310,7 @@ pub(crate) struct States {
     pub(crate) metrics: metrics::Instance,
     pub(crate) sql: sql::Instance,
     pub(crate) sockets: sockets::Instance,
+    pub(crate) blobs: blobs::Instance,
     pub(crate) extensions: extension::ExtensionStates,
 }
 
@@ -307,6 +322,7 @@ pub(crate) struct States {
 pub(crate) struct SenderStates {
     pub(crate) keyvalue: keyvalue::Instance,
     pub(crate) metrics: metrics::Instance,
+    pub(crate) blobs: blobs::Instance,
 }
 
 impl SenderStates {
@@ -334,6 +350,11 @@ impl SenderStates {
                 &spec.services.metrics,
                 &info(metrics::MetricsService::CAPABILITY),
             ),
+            blobs: blobs::Blobs::instance(
+                &shared.blobs,
+                &spec.services.blobs,
+                &info(blobs::Blobs::CAPABILITY),
+            ),
         }
     }
 }
@@ -350,6 +371,7 @@ impl States {
         events.extend(metrics::MetricsService::announce(&self.metrics, tags));
         events.extend(sql::Sql::announce(&self.sql, tags));
         events.extend(sockets::Sockets::announce(&self.sockets, tags));
+        events.extend(blobs::Blobs::announce(&self.blobs, tags));
         events
     }
 
@@ -427,6 +449,11 @@ impl States {
                 &shared.sockets,
                 &services.sockets,
                 &info(sockets::Sockets::CAPABILITY),
+            ),
+            blobs: blobs::Blobs::instance(
+                &shared.blobs,
+                &services.blobs,
+                &info(blobs::Blobs::CAPABILITY),
             ),
             extensions: states,
         })
