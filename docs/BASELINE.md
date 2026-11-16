@@ -3117,6 +3117,20 @@ One connection, p50 (the node's in the same run):
 - A blob costs about 100 µs before its first byte and a fault, a zeroed page and its freeing every 4 KiB; its pages made ahead (`fallocate`) save 15 to 45% at 64 KiB and 1 MiB. The rings win to about 1 MiB; blobs save CPU only toward 20 MiB (half on the 16-core machine, a third on the Pi).
 - The rings' floor for 1 MiB through the node twice, 0.4 to 0.9 ms, is two to seven times below what the node's own path added for it through DA4's driver (1.6 to 2.8 ms): the gap is the node's handling of large frames (ROADMAP PF1).
 
+## 2026-11-15: Modbus through its driver (DA5)
+
+`crates/bulkhead-modbus/examples/modbus_load.rs` (the native successor of the 2026-10-15 harness): fake Modbus TCP devices in the harness whose registers all change on every read, polled over loopback and delivered to `examples/scada/points`, a hash-routed pool writing each update into a shared `memory` bucket in one batch, the runtime on 4 tokio workers; 10 s a run after 2 s of warming. Updates are the pool's cast callbacks from the node's counters (asking the pool would queue behind the updates), with the casts its full mailboxes dropped; CPU is the harness's (the fake devices included) and its children's, per update. Before: the in-node extension (commit 3571010). Release builds, two rounds each, before and after in turn: the 16-core machine (no VM running; load 5 to 8 at each start, mostly the rounds' own) and the Raspberry Pi 5 (load 0.6 at the first start). Results: `crates/bulkhead-modbus/examples/results/{x86,pi5}-2026-11-15.txt`.
+
+| Devices, registers, poll, pool | 16-core updates/s, extension → driver | 16-core CPU per update | Pi updates/s | Pi CPU per update |
+| --- | --- | --- | --- | --- |
+| 16, 100, 10 ms, 4 (1,600 asked) | 1,600 → 1,600 | 615–622 → 651–656 µs | 1,601 → 1,599–1,600 | 486–495 → 518–521 µs |
+| 64, 125, 1 ms, 4 (64,000 asked) | 1,022–1,037 → 9,375–9,592 | 4,033–4,090 → 535–559 µs | 760 → 3,592–3,665 | 5,223–5,228 → 892–901 µs |
+| 64, 125, 1 ms, 8 | 1,801–1,804 → 9,738–9,861 | 2,396–2,399 → 546 µs | 1,425–1,428 → 4,540–4,568 | 2,747–2,748 → 808–810 µs |
+
+- **At a rate the pool keeps up with** (16 devices every 10 ms), both store every update, and the driver costs 5 to 7% more CPU per update: the update now crosses from the driver to the node before the node casts it.
+- **Far past it** (64 devices every millisecond), the driver stores three to nine times the updates (five to nine on the 16-core machine, three to five on the Pi) and drops a quarter of the casts or fewer: the extension polled on the node's own four workers, so the polling and the casts it could not deliver took the time the pool's instance tasks needed; in a process of its own the polling no longer competes with them. Neither keeps up with 64,000 polls a second; the pool and its bucket are the limit (WRITING_APPS.md, "Many small updates").
+- **What it buys:** no Modbus device reply or master's request is parsed in the node (DESIGN.md, SECURITY.md).
+
 ## Not measured yet
 
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).

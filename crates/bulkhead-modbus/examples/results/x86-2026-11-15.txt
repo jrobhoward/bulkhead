@@ -1,0 +1,31 @@
+# modbus_load, 16-core machine (Threadripper 1950X, Linux 6.8), 2026-11-15, no VM running, release builds, the runtime on 4 tokio workers
+# before: commit 3571010 (the in-node extension), the DA5 block replaced; after: the devices' driver (bulkhead-modbus)
+# updates: the points pool's cast callbacks (node counters); dropped: casts its full mailboxes dropped; CPU: this process (with the fake devices) and its children
+# load: the 1-minute average at each start, mostly the rounds' own (64 devices polled every millisecond) and a build just before
+
+| devices | registers | poll ms | pool | polls asked/s | updates/s | stored | dropped/s | points/s | CPU µs/update |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+== before round 1 (16 100 10 4 10) load 5.44 6.79 5.12
+| 16 | 100 | 10 | 4 | 1600 | 1600 | 100% | 0 | 159985 | 615 |
+== after round 1 (16 100 10 4 10) load 5.46 6.75 5.12
+| 16 | 100 | 10 | 4 | 1600 | 1600 | 100% | 0 | 159953 | 651 |
+== before round 1 (64 125 1 4 10) load 5.57 6.71 5.14
+| 64 | 125 | 1 | 4 | 64000 | 1022 | 2% | 28028 | 127719 | 4090 |
+== after round 1 (64 125 1 4 10) load 5.87 6.74 5.16
+| 64 | 125 | 1 | 4 | 64000 | 9375 | 15% | 2962 | 1171816 | 559 |
+== before round 1 (64 125 1 8 10) load 6.43 6.83 5.21
+| 64 | 125 | 1 | 8 | 64000 | 1804 | 3% | 22089 | 225495 | 2396 |
+== after round 1 (64 125 1 8 10) load 6.71 6.87 5.25
+| 64 | 125 | 1 | 8 | 64000 | 9861 | 15% | 985 | 1232640 | 546 |
+== before round 2 (16 100 10 4 10) load 7.61 7.06 5.33
+| 16 | 100 | 10 | 4 | 1600 | 1600 | 100% | 0 | 160049 | 622 |
+== after round 2 (16 100 10 4 10) load 6.74 6.89 5.30
+| 16 | 100 | 10 | 4 | 1600 | 1600 | 100% | 0 | 159976 | 656 |
+== before round 2 (64 125 1 4 10) load 6.32 6.80 5.28
+| 64 | 125 | 1 | 4 | 64000 | 1037 | 2% | 28213 | 129598 | 4033 |
+== after round 2 (64 125 1 4 10) load 7.02 6.93 5.36
+| 64 | 125 | 1 | 4 | 64000 | 9592 | 15% | 2828 | 1198948 | 535 |
+== before round 2 (64 125 1 8 10) load 7.57 7.05 5.41
+| 64 | 125 | 1 | 8 | 64000 | 1801 | 3% | 22332 | 225170 | 2399 |
+== after round 2 (64 125 1 8 10) load 7.93 7.16 5.47
+| 64 | 125 | 1 | 8 | 64000 | 9738 | 15% | 199 | 1217242 | 546 |

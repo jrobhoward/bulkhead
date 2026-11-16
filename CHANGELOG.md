@@ -8,6 +8,12 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Modbus measured (ROADMAP DA5, step 5): `modbus_load`, the native
+  successor of the WebAssembly-era harness (`bulkhead-modbus`'s example),
+  counting updates from the node's counters; before (the in-node
+  extension) and after on the 16-core machine and the Pi
+  (`docs/BASELINE.md`, 2026-11-15).
+
 - Modbus on Linux and FreeBSD (ROADMAP DA5, step 4): the drivers' tests
   pass on both VMs; a helper test runs the devices' driver and the
   server's under users of their own, polling a device over the node's

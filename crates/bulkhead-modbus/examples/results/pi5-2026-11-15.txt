@@ -1,0 +1,31 @@
+# modbus_load, Raspberry Pi 5 (Cortex-A76 x4, Linux 7.0), 2026-11-15, release builds, the runtime on 4 tokio workers
+# before: commit 3571010 (the in-node extension), the DA5 block replaced; after: the devices' driver (bulkhead-modbus)
+# updates: the points pool's cast callbacks (node counters); dropped: casts its full mailboxes dropped; CPU: this process (with the fake devices) and its children
+# load: 0.6 at the start; later loads are the rounds' own
+
+| devices | registers | poll ms | pool | polls asked/s | updates/s | stored | dropped/s | points/s | CPU µs/update |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+== before round 1 (16 100 10 4 10) load 0.57 1.50 1.05
+| 16 | 100 | 10 | 4 | 1600 | 1601 | 100% | 0 | 160080 | 495 |
+== after round 1 (16 100 10 4 10) load 0.56 1.47 1.04
+| 16 | 100 | 10 | 4 | 1600 | 1600 | 100% | 0 | 160043 | 521 |
+== before round 1 (64 125 1 4 10) load 1.09 1.55 1.07
+| 64 | 125 | 1 | 4 | 64000 | 760 | 1% | 31084 | 95001 | 5228 |
+== after round 1 (64 125 1 4 10) load 2.15 1.76 1.15
+| 64 | 125 | 1 | 4 | 64000 | 3592 | 6% | 7799 | 449031 | 901 |
+== before round 1 (64 125 1 8 10) load 2.83 1.92 1.20
+| 64 | 125 | 1 | 8 | 64000 | 1425 | 2% | 22494 | 178107 | 2748 |
+== after round 1 (64 125 1 8 10) load 4.80 2.39 1.37
+| 64 | 125 | 1 | 8 | 64000 | 4540 | 7% | 1241 | 567520 | 810 |
+== before round 2 (16 100 10 4 10) load 5.44 2.61 1.45
+| 16 | 100 | 10 | 4 | 1600 | 1601 | 100% | 0 | 160096 | 486 |
+== after round 2 (16 100 10 4 10) load 4.23 2.48 1.43
+| 16 | 100 | 10 | 4 | 1600 | 1599 | 100% | 0 | 159942 | 518 |
+== before round 2 (64 125 1 4 10) load 3.65 2.42 1.42
+| 64 | 125 | 1 | 4 | 64000 | 760 | 1% | 31082 | 94971 | 5223 |
+== after round 2 (64 125 1 4 10) load 4.48 2.66 1.52
+| 64 | 125 | 1 | 4 | 64000 | 3665 | 6% | 7454 | 458124 | 892 |
+== before round 2 (64 125 1 8 10) load 4.47 2.72 1.55
+| 64 | 125 | 1 | 8 | 64000 | 1428 | 2% | 22374 | 178547 | 2747 |
+== after round 2 (64 125 1 8 10) load 5.56 3.04 1.67
+| 64 | 125 | 1 | 8 | 64000 | 4568 | 7% | 1194 | 570998 | 808 |
