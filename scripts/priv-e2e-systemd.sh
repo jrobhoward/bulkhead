@@ -3,14 +3,16 @@
 # as root, never on a development machine: bulkhead-priv under systemd
 # (examples/systemd/bulkhead-priv.service) starts the node, which deploys
 # the board example; the app must run under a user of its own, in its own
-# cgroup, PID namespace and minimal root. With Postgres installed
+# cgroup, PID namespace and minimal root, and the board is served on
+# port 80 too, bound by the helper for the node, which must hold no
+# capabilities (ROADMAP PS3b). With Postgres installed
 # (/usr/lib/postgresql/*/bin) it also deploys the tally example on a
 # datasource (ROADMAP DA3): a scratch cluster as `postgres`, reached first
 # over its Unix socket with peer authentication (the node connects, as
 # `bulkhead`), then, after a restart, over TCP by name with a password the
 # datasource's driver reads from its file. An app granted HTTP egress
 # (the SDK fixture, ROADMAP DA4) fetches the board's route through its
-# egress driver: the node must make the connection, not the driver. It
+# egress driver: the node must make the connection, not the driver.
 # A fake Modbus device is polled by the Modbus driver (ROADMAP DA5),
 # its updates going to the same app; the node must open the device's
 # connection, not the driver. It installs a `bulkhead` user,
@@ -122,6 +124,11 @@ policy = "/etc/bulkhead/policy.toml"
 [http.main]
 address = "127.0.0.1:8080"
 
+# A port below 1024: the node, holding no capabilities, has the helper
+# bind it (ROADMAP PS3b; port 80 in priv.conf's ports).
+[http.low]
+address = "127.0.0.1:80"
+
 [metrics]
 address = "127.0.0.1:9101"
 
@@ -161,6 +168,7 @@ state = /var/lib/bulkhead-priv
 binds = /var/lib/bulkhead, $K
 memory_max = 2GiB
 pids_max = 1024
+ports = 80
 cgroup = /sys/fs/cgroup/system.slice/bulkhead.service
 CONF
 chmod 0600 /etc/bulkhead/priv.conf
@@ -178,6 +186,12 @@ echo "== board"; curl -s http://127.0.0.1:8080/board; echo
 curl -s -X POST http://127.0.0.1:8080/board >/dev/null
 curl -s http://127.0.0.1:8080/board; echo
 echo "== metrics (bulkhead-metrics)"; curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_instances{app="board"}'
+echo "== port 80, bound by the helper (ROADMAP PS3b)"
+curl -sf http://127.0.0.1:80/board || { echo "FAILED: nothing served on port 80"; exit 1; }; echo
+NODE=$(pgrep -x bulkhead | head -1)
+CAPS=$(awk '/^CapEff/ {print $2}' /proc/$NODE/status)
+echo "the node's effective capabilities: $CAPS"
+[ "$CAPS" = 0000000000000000 ] || { echo "FAILED: the node holds capabilities"; exit 1; }
 echo "== remote admin (bulkhead-admin, signed requests)"
 /usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
 echo "== HTTP egress through the app's driver (ROADMAP DA4)"

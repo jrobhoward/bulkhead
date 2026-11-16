@@ -258,7 +258,7 @@ kind = "native-process"
 native = { program = "executable" }
 ```
 
-The bundle carries a release variant for the node's platform (`linux-x86_64`, `linux-aarch64`, `freebsd-x86_64`, `freebsd-aarch64`; a FreeBSD program is one its linker branded FreeBSD, `EI_OSABI` 9, and a Linux one is not); deploy writes it under `data_dir`, readable and executable by the node's user only. The node runs it through `bulkhead-runner` (node config `[native]`, below), on Linux and FreeBSD. With node config `[priv]` the privileged helper starts it, under a user of the app's own, in a cgroup, namespaces and a minimal root on Linux (OPERATIONS.md, "The privileged helper"); its program and `priv/` files are then readable by that user alone, and the files it makes in a read-write volume are its own. Bundles have Linux variants only so far, so a FreeBSD node cannot yet deploy one (ROADMAP FB6). On FreeBSD the runner fences the app with Capsicum (capability mode, rights per descriptor); executables only, a rustbridge plugin is refused there.
+The bundle carries a release variant for the node's platform (`linux-x86_64`, `linux-aarch64`, `freebsd-x86_64`, `freebsd-aarch64`; a FreeBSD program is one its linker branded FreeBSD, `EI_OSABI` 9, and a Linux one is not); deploy writes it under `data_dir`, readable and executable by the node's user only. The node runs it through `bulkhead-runner` (node config `[native]`, below), on Linux and FreeBSD. With node config `[priv]` the privileged helper starts it, under a user of the app's own, in a cgroup, namespaces and a minimal root on Linux (OPERATIONS.md, "The privileged helper"); its program and `priv/` files are then readable by that user alone, and the files it makes in a read-write volume are its own. On FreeBSD the runner fences the app with Capsicum (capability mode, rights per descriptor); executables only, a rustbridge plugin is refused there.
 
 Two shapes, by `native.program`:
 
@@ -398,7 +398,7 @@ nameservers = ["127.0.0.53"]           # "ip" (port 53) or "ip:port"; at most 8;
 hosts = "/etc/hosts"                   # answers the names it holds, before DNS; missing is empty
 reload_s = 5                           # read both again; the resolver restarts when either changed (0: SIGHUP, reload-tls only)
 
-[priv]                                 # native instances start through the privileged helper, bulkhead-priv, each app under a user of its own (OPERATIONS.md); the node must be started by it. Nothing to set: the helper's own configuration holds its checks; [native] runner names the helper's runner, beside which the node finds its own drivers. Not with [native] cgroup
+[priv]                                 # native instances start through the privileged helper, bulkhead-priv, each app under a user of its own (OPERATIONS.md); the node must be started by it. Nothing to set: the helper's own configuration holds its checks; [native] runner names the helper's runner, beside which the node finds its own drivers. A TCP port below 1024 here is bound by the helper if its `ports` lists it (ROADMAP PS3b); a UDP one is refused. Not with [native] cgroup
 
 [metrics]
 address = "127.0.0.1:9100"             # GET /metrics for Prometheus, served by the bulkhead-metrics driver; unauthenticated, keep it off public networks

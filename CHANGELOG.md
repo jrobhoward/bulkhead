@@ -8,6 +8,23 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Under the privileged helper the node binds its low TCP ports through
+  the helper (ROADMAP PS3b), so it holds no capabilities. Every TCP
+  listener the node opens (`[http]`, `[admin]`, `[metrics]`,
+  `[listeners]`, `[drivers.<app>.listeners]`, the Modbus server, an app's
+  listener under `bulkhead:sockets`) goes through `bulkhead_host::bind_tcp`:
+  the node binds it itself and, when the system refuses it the port and
+  a helper started it, asks the helper (`PrivHelper::bind`, the existing
+  `Request::Bind`), which binds only the ports in its `ports`; the node
+  checks that what comes back is a TCP listener on that address. UDP
+  stays the node's own bind: below 1024 under the helper it is refused,
+  and `bind_udp` says the helper binds TCP ports only. The node warns at
+  start if it holds capabilities under the helper (Linux). Checked as
+  root on Ubuntu 26.04 and FreeBSD 15: two new root tests, and the e2e
+  scripts serving on port 80, the systemd one checking the node's
+  `CapEff` is zero. MANIFEST.md loses a sentence FB6 left stale
+  (FreeBSD nodes deploy bundles since then).
+
 - The privileged helper installs a seccomp allow-list of its own on
   Linux (ROADMAP PS1b), after `no_new_privs` and its capabilities, once
   the node runs (`bulkhead_priv::seccomp`, built with `seccompiler`, now

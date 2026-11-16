@@ -2,8 +2,9 @@
 # The privileged helper's rc.d script on a FreeBSD test machine (ROADMAP
 # PS1), as root, never on a development machine: rc starts bulkhead-priv
 # (examples/freebsd/bulkhead), which starts the node; status, reload and
-# stop go through it. No app is deployed: bundles carry no FreeBSD program
-# yet (ROADMAP FB6). Two datasources (ROADMAP DA3) start a driver each,
+# stop go through it. No app is deployed here (tests/priv.rs runs apps
+# under the helper). The metrics driver listens on port 80, which the
+# helper binds for the node (ROADMAP PS3b). Two datasources (ROADMAP DA3) start a driver each,
 # jailed under a user of its own, one with a password file shared with it;
 # no statement runs without an app (tests/priv.rs logs one in), and no
 # egress driver starts without one (tests/priv.rs runs one). It
@@ -47,8 +48,10 @@ cat > /usr/local/etc/bulkhead/node.toml <<TOML
 node = 1
 data_dir = "/var/db/bulkhead"
 
+# A port below 1024: the node, not root, has the helper bind it (ROADMAP
+# PS3b; port 80 in priv.conf's ports).
 [metrics]
-address = "127.0.0.1:9101"
+address = "127.0.0.1:80"
 
 [admin]
 address = "127.0.0.1:7443"
@@ -89,6 +92,7 @@ state = /var/db/bulkhead-priv
 binds = /var/db/bulkhead, $K
 memory_max = 2GiB
 pids_max = 1024
+ports = 80
 CONF
 chmod 0600 /usr/local/etc/bulkhead/priv.conf
 install -m 0555 $SRC/examples/freebsd/bulkhead /usr/local/etc/rc.d/bulkhead
@@ -116,7 +120,10 @@ for p in $D/state.json $D/kv $D/bundles $D/creation; do
 done
 echo "== admin as the node's user"
 su -m bulkhead -c "/usr/local/bin/bulkhead --socket /var/db/bulkhead/admin.sock list" || true
-echo "== metrics (bulkhead-metrics)"; fetch -qo - http://127.0.0.1:9101/metrics | head -3
+echo "== metrics (bulkhead-metrics) on port 80, bound by the helper (ROADMAP PS3b)"
+fetch -qo - http://127.0.0.1:80/metrics | head -3
+fetch -qo /dev/null http://127.0.0.1:80/metrics || { echo "FAILED: nothing served on port 80"; exit 1; }
+echo "the node's user: $(ps -o uid= -p "$(pgrep -x bulkhead | head -1)" | tr -d ' ') (not 0)"
 echo "== remote admin (bulkhead-admin, signed requests)"
 /usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
 echo "== reload"; service bulkhead reload; sleep 1

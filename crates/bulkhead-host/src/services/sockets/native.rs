@@ -51,6 +51,8 @@ pub(super) struct Native {
     policy: Option<Policy>,
     /// Host names to addresses: the node's resolver driver.
     names: crate::names::Names,
+    /// The node's native settings, for binds through the helper.
+    config: std::sync::Arc<crate::config::NativeConfig>,
     handle: InstanceHandle,
     sockets: BTreeMap<u32, Socket>,
     next: u32,
@@ -99,10 +101,12 @@ impl Native {
         policy: Option<Policy>,
         handle: &InstanceHandle,
         names: crate::names::Names,
+        config: std::sync::Arc<crate::config::NativeConfig>,
     ) -> Self {
         Self {
             policy,
             names,
+            config,
             handle: handle.clone(),
             sockets: BTreeMap::new(),
             next: 0,
@@ -288,7 +292,7 @@ impl Instance {
         self.check(addr, SocketAddrUse::TcpBind)?;
         self.check(addr, SocketAddrUse::TcpListen)?;
         let held = self.held()?;
-        let listener = TcpListener::bind(addr).map_err(|e| other(&e))?;
+        let listener = crate::bind_tcp(addr, &self.native.config).map_err(|e| other(&e))?;
         listener.set_nonblocking(true).map_err(|e| other(&e))?;
         let local = listener.local_addr().map_err(|e| other(&e))?;
         let socket = self.keep_native(Kind::Listener(listener), Share::Sockets(held));
@@ -319,7 +323,7 @@ impl Instance {
     fn udp_bind(&mut self, addr: SocketAddr) -> Result<Reply, p::NetError> {
         self.check(addr, SocketAddrUse::UdpBind)?;
         let held = self.held()?;
-        let udp = UdpSocket::bind(addr).map_err(|e| other(&e))?;
+        let udp = crate::bind_udp(addr, &self.native.config).map_err(|e| other(&e))?;
         udp.set_nonblocking(true).map_err(|e| other(&e))?;
         let local = udp.local_addr().map_err(|e| other(&e))?;
         let socket = self.keep_native(Kind::Udp(udp), Share::Sockets(held));

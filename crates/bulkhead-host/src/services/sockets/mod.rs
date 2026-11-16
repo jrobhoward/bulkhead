@@ -52,13 +52,18 @@ pub(crate) struct Shared {
     /// Host names for `connect_host`.
     #[cfg_attr(not(unix), allow(dead_code))]
     names: crate::names::Names,
+    /// The node's native settings: the privileged helper, which binds
+    /// the TCP ports the node may not (ROADMAP PS3b).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    native: Arc<crate::config::NativeConfig>,
 }
 
 impl Shared {
-    pub(crate) fn new(names: &crate::names::Names) -> Self {
+    pub(crate) fn new(names: &crate::names::Names, native: &crate::config::NativeConfig) -> Self {
         Self {
             limits: Mutex::default(),
             names: names.clone(),
+            native: Arc::new(native.clone()),
         }
     }
 }
@@ -106,8 +111,8 @@ impl Service for Sockets {
         }
     }
 
-    fn shared(_config: &RuntimeConfig) -> Result<Shared, HostError> {
-        Ok(Shared::new(&crate::names::Names::default()))
+    fn shared(config: &RuntimeConfig) -> Result<Shared, HostError> {
+        Ok(Shared::new(&crate::names::Names::default(), &config.native))
     }
 
     fn instance(shared: &Arc<Shared>, spec: &SocketsSpec, info: &InstanceInfo<'_>) -> Instance {
@@ -134,6 +139,7 @@ impl Service for Sockets {
                 spec.scope.as_ref().filter(|_| granted).map(Policy::new),
                 info.handle,
                 shared.names.clone(),
+                shared.native.clone(),
             ),
         }
     }

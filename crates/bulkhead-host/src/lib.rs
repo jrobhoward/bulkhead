@@ -24,6 +24,7 @@
 
 pub mod acl;
 mod apps;
+mod bind;
 mod config;
 mod credit;
 mod delivery;
@@ -63,6 +64,7 @@ mod upgrade;
 pub use apps::{
     AppDeployment, AppHandle, AppStatus, Apps, NewSideInfo, UpgradeOptions, UpgradeReport,
 };
+pub use bind::{bind_tcp, bind_udp};
 pub use bulkhead_bundle::manifest::{RestartType, Strategy};
 /// Address networks (`10.0.0.0/24`), for extensions' node configuration.
 pub use bulkhead_bundle::manifest::{cidr_contains, parse_cidr};

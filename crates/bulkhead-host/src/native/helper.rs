@@ -10,6 +10,11 @@
 //! task hands to that instance's port. If the socket closes, the helper
 //! has gone: every instance it started has been killed, and each port
 //! hears so.
+//!
+//! A TCP port the node may not bind itself (below 1024, since the node
+//! holds no capabilities under the helper) comes bound from the helper
+//! ([`PrivHelper::bind`], ROADMAP PS3b), if its configuration's `ports`
+//! lists it.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{IoSlice, IoSliceMut};
@@ -87,6 +92,8 @@ enum Job {
         bulkhead_priv_wire::Bind,
         oneshot::Sender<Result<(), String>>,
     ),
+    /// A `std` channel: [`PrivHelper::bind`] blocks its caller.
+    Bind(String, std::sync::mpsc::Sender<Result<OwnedFd, String>>),
 }
 
 /// What the task waits for, in the order the helper answers.
@@ -94,6 +101,7 @@ enum Pending {
     Spawn(oneshot::Sender<Result<Spawned, String>>),
     Signal(u64),
     Share(oneshot::Sender<Result<(), String>>),
+    Bind(std::sync::mpsc::Sender<Result<OwnedFd, String>>),
 }
 
 impl PrivHelper {
@@ -210,6 +218,40 @@ impl PrivHelper {
             .unwrap_or_else(|_| Err("the privileged helper has gone".into()))
     }
 
+    /// Ask the helper to bind a TCP listener on `addr` (ROADMAP PS3b), for
+    /// a port the node may not bind itself; the helper binds only the
+    /// ports its own configuration lists. Blocks the calling thread for
+    /// one round trip: the helper's socket is served on a thread and
+    /// runtime of its own, so a caller on any runtime's worker cannot
+    /// hold it up.
+    ///
+    /// # Errors
+    ///
+    /// The helper refused (its reason in the message) or has gone, or
+    /// what it passed back is not a TCP listener on `addr`.
+    pub fn bind(&self, addr: std::net::SocketAddr) -> std::io::Result<std::net::TcpListener> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.0
+            .jobs
+            .send(Job::Bind(addr.to_string(), tx))
+            .map_err(|_| std::io::Error::other("the privileged helper has gone"))?;
+        let fd = rx
+            .recv()
+            .unwrap_or_else(|_| Err("the privileged helper has gone".into()))
+            .map_err(std::io::Error::other)?;
+        let listener = std::net::TcpListener::from(fd);
+        let listening = rustix::net::sockopt::socket_acceptconn(&listener)?;
+        let stream =
+            rustix::net::sockopt::socket_type(&listener)? == rustix::net::SocketType::STREAM;
+        let local = listener.local_addr()?;
+        if !listening || !stream || local != addr {
+            return Err(std::io::Error::other(format!(
+                "the privileged helper passed back no TCP listener on {addr}"
+            )));
+        }
+        Ok(listener)
+    }
+
     /// Ask the helper to send `signal` to instance `id`; its refusal is
     /// logged.
     pub(crate) fn signal(&self, id: u64, signal: i32) {
@@ -258,6 +300,9 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                     Job::Share(app, bind, tx) => {
                         (Request::Share { app, bind }.encode(), Vec::new(), Pending::Share(tx))
                     }
+                    Job::Bind(address, tx) => {
+                        (Request::Bind { address }.encode(), Vec::new(), Pending::Bind(tx))
+                    }
                 };
                 match send(&sock, &bytes, &fds).await {
                     Ok(()) => pending.push_back(waiting),
@@ -268,6 +313,9 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                         Pending::Share(tx) => {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
+                        Pending::Bind(tx) => {
+                            let _ = tx.send(Err(format!("the privileged helper: {e}")));
+                        }
                         Pending::Signal(_) => {}
                     },
                 }
@@ -276,7 +324,7 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                 let Ok(mut guard) = ready else { break };
                 loop {
                     match recv(sock.get_ref().as_fd(), &mut buf) {
-                        Ok(Some(reply)) => deliver(reply, &mut pending, &mut exits),
+                        Ok(Some((reply, fds))) => deliver(reply, fds, &mut pending, &mut exits),
                         Ok(None) => {
                             gone(&mut pending, &mut exits);
                             return;
@@ -298,9 +346,11 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
     gone(&mut pending, &mut exits);
 }
 
-/// Hand a reply to whoever waits for it.
+/// Hand a reply to whoever waits for it, with the descriptors that came
+/// beside it (a listener, for `Bound`; any other is closed).
 fn deliver(
     reply: Reply,
+    fds: Vec<OwnedFd>,
     pending: &mut VecDeque<Pending>,
     exits: &mut HashMap<u64, watch::Sender<Option<(ExitStatus, bool)>>>,
 ) {
@@ -351,6 +401,16 @@ fn deliver(
         (Some(Pending::Share(tx)), Reply::Refused { reason }) => {
             let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
         }
+        (Some(Pending::Bind(tx)), Reply::Bound) => {
+            let listener = fds
+                .into_iter()
+                .next()
+                .ok_or_else(|| "the privileged helper sent no listener".to_string());
+            let _ = tx.send(listener);
+        }
+        (Some(Pending::Bind(tx)), Reply::Refused { reason }) => {
+            let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
+        }
         (Some(Pending::Signal(id)), Reply::Refused { reason }) => {
             tracing::warn!(id, reason, "the privileged helper refused a signal");
         }
@@ -365,6 +425,9 @@ fn deliver(
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
                 Some(Pending::Share(tx)) => {
+                    let _ = tx.send(Err("the privileged helper answered out of order".into()));
+                }
+                Some(Pending::Bind(tx)) => {
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
                 _ => {}
@@ -385,6 +448,9 @@ fn gone(
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
             Pending::Share(tx) => {
+                let _ = tx.send(Err("the privileged helper has gone".into()));
+            }
+            Pending::Bind(tx) => {
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
             Pending::Signal(_) => {}
@@ -418,8 +484,9 @@ async fn send(sock: &AsyncFd<OwnedFd>, bytes: &[u8], fds: &[OwnedFd]) -> std::io
     }
 }
 
-/// One reply, `None` at end of file; `WouldBlock` when there is none.
-fn recv(sock: BorrowedFd<'_>, buf: &mut [u8]) -> std::io::Result<Option<Reply>> {
+/// One reply and the descriptors beside it, `None` at end of file;
+/// `WouldBlock` when there is none.
+fn recv(sock: BorrowedFd<'_>, buf: &mut [u8]) -> std::io::Result<Option<(Reply, Vec<OwnedFd>)>> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAX_FDS))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
     let msg = rustix::net::recvmsg(
@@ -428,17 +495,17 @@ fn recv(sock: BorrowedFd<'_>, buf: &mut [u8]) -> std::io::Result<Option<Reply>> 
         &mut control,
         RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
     )?;
-    // A listener from `Bind` would come here; none is asked for yet, so
-    // any descriptor is closed.
+    // A listener from `Bind`; `deliver` closes any other.
+    let mut fds = Vec::new();
     for message in control.drain() {
         if let RecvAncillaryMessage::ScmRights(received) = message {
-            drop(received.collect::<Vec<_>>());
+            fds.extend(received);
         }
     }
     if msg.bytes == 0 {
         return Ok(None);
     }
     Reply::decode(&buf[..msg.bytes])
-        .map(Some)
+        .map(|reply| Some((reply, fds)))
         .ok_or_else(|| std::io::Error::other("a malformed reply from the privileged helper"))
 }

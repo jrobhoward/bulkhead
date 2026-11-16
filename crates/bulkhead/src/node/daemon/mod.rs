@@ -166,7 +166,7 @@ impl Node {
         }
         let creation = store.next_creation()?;
         let native = native_config(&config)?;
-        let (drivers, ingress_args, modbus) = builtin_drivers(&config)?;
+        let (drivers, ingress_args, modbus) = builtin_drivers(&config, &native)?;
         #[cfg(not(feature = "sql"))]
         if let Some(name) = config.datasources.keys().next() {
             return Err(NodeError::Invalid(format!(
@@ -596,6 +596,7 @@ fn runtime_datasource(
 /// them for its life, so a driver's restart or upgrade keeps its ports.
 fn bind_drivers(
     config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
 ) -> Result<std::collections::BTreeMap<String, bulkhead_host::DriverProfile>, NodeError> {
     config
         .drivers
@@ -605,7 +606,7 @@ fn bind_drivers(
                 .listeners
                 .iter()
                 .map(|(name, address)| {
-                    let socket = std::net::TcpListener::bind(address).map_err(|e| {
+                    let socket = bulkhead_host::bind_tcp(*address, native).map_err(|e| {
                         NodeError::Invalid(format!(
                             "node config: drivers.{app}.listeners.{name}: bind {address}: {e}"
                         ))
@@ -643,6 +644,7 @@ fn bind_drivers(
 #[allow(clippy::type_complexity)] // Three results, each used once.
 fn builtin_drivers(
     config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
 ) -> Result<
     (
         std::collections::BTreeMap<String, bulkhead_host::DriverProfile>,
@@ -651,20 +653,40 @@ fn builtin_drivers(
     ),
     NodeError,
 > {
-    let mut drivers = bind_drivers(config)?;
-    if let Some(profile) = metrics::bind(config)? {
+    let mut drivers = bind_drivers(config, native)?;
+    if let Some(profile) = metrics::bind(config, native)? {
         drivers.insert(crate::node::config::METRICS_APP.to_string(), profile);
     }
     #[cfg(feature = "tls")]
-    if let Some(profile) = remote::bind(config)? {
+    if let Some(profile) = remote::bind(config, native)? {
         drivers.insert(crate::node::config::ADMIN_APP.to_string(), profile);
     }
-    let ingress_args = ingress::bind(config)?.map(|(profile, args)| {
+    let ingress_args = ingress::bind(config, native)?.map(|(profile, args)| {
         drivers.insert(crate::node::config::INGRESS_APP.to_string(), profile);
         args
     });
-    let modbus = modbus::bind(config, &mut drivers)?;
+    let modbus = modbus::bind(config, native, &mut drivers)?;
     Ok((drivers, ingress_args, modbus))
+}
+
+/// Under the helper the node should hold no capabilities (ROADMAP PS3b):
+/// the helper starts it under its user with none and binds its low ports.
+/// Say so if it holds some (an ambient set from whatever started the
+/// helper).
+#[cfg(target_os = "linux")]
+fn warn_capabilities() {
+    match rustix::thread::capabilities(None) {
+        Ok(sets) if !sets.effective.is_empty() || !sets.permitted.is_empty() => {
+            tracing::warn!(
+                effective = ?sets.effective,
+                permitted = ?sets.permitted,
+                "the node holds capabilities under the privileged helper, which binds its \
+                 low ports; it needs none"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "cannot read the node's capabilities"),
+    }
 }
 
 fn native_config(config: &NodeConfig) -> Result<bulkhead_host::NativeConfig, NodeError> {
@@ -693,6 +715,8 @@ fn native_config(config: &NodeConfig) -> Result<bulkhead_host::NativeConfig, Nod
                 native.helper = bulkhead_host::PrivHelper::inherited()
                     .map_err(|e| NodeError::Invalid(format!("the privileged helper: {e}")))?;
                 tracing::info!("native instances start through the privileged helper");
+                #[cfg(target_os = "linux")]
+                warn_capabilities();
             }
             #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
             return Err(NodeError::Invalid(

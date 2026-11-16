@@ -100,6 +100,39 @@ async fn helper____two_apps____each_under_a_user_of_its_own() {
     assert_eq!(reason, ExitReason::Shutdown);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____bind_a_listed_port____a_listener_that_accepts() {
+    let Some(started) = helper("helper____bind_a_listed_port") else {
+        return;
+    };
+    let addr: std::net::SocketAddr = "127.0.0.1:81".parse().unwrap();
+
+    let listener = started.helper.bind(addr).unwrap();
+    let client = std::net::TcpStream::connect(addr).unwrap();
+    let (_, peer) = listener.accept().unwrap();
+
+    assert_eq!(listener.local_addr().unwrap(), addr);
+    assert_eq!(peer, client.local_addr().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____bind_an_unlisted_port____refused_with_the_helpers_reason() {
+    let Some(started) = helper("helper____bind_an_unlisted_port") else {
+        return;
+    };
+
+    let refused = started
+        .helper
+        .bind("127.0.0.1:82".parse().unwrap())
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        refused.contains("port 82 is not one the helper binds"),
+        "{refused}"
+    );
+}
+
 /// A line of `/proc/<pid>/status`, its value trimmed.
 #[cfg(target_os = "linux")]
 fn proc_status(pid: u32, key: &str) -> String {

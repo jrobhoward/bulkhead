@@ -77,6 +77,7 @@ pub(super) struct SavedRoutes(#[cfg(feature = "http")] Option<Vec<HttpRoute>>);
 #[cfg(feature = "http")]
 pub(super) fn bind(
     config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
 ) -> Result<Option<(bulkhead_host::DriverProfile, serde_json::Value)>, NodeError> {
     if config.http.is_empty() {
         return Ok(None);
@@ -87,7 +88,7 @@ pub(super) fn bind(
     let mut forward = false;
     let mut threads = 1;
     for (name, binding) in &config.http {
-        let socket = std::net::TcpListener::bind(binding.address).map_err(|e| {
+        let socket = bulkhead_host::bind_tcp(binding.address, native).map_err(|e| {
             NodeError::Invalid(format!("http.{name}: bind {}: {e}", binding.address))
         })?;
         listeners.push(bulkhead_host::DriverListener {
@@ -156,6 +157,7 @@ pub(super) fn bind(
 #[allow(clippy::unnecessary_wraps)] // The same signature as with `http`.
 pub(super) fn bind(
     _config: &NodeConfig,
+    _native: &bulkhead_host::NativeConfig,
 ) -> Result<Option<(bulkhead_host::DriverProfile, serde_json::Value)>, NodeError> {
     Ok(None)
 }

@@ -22,11 +22,14 @@ use crate::node::error::NodeError;
 /// # Errors
 ///
 /// The address cannot be bound.
-pub(super) fn bind(config: &NodeConfig) -> Result<Option<DriverProfile>, NodeError> {
+pub(super) fn bind(
+    config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
+) -> Result<Option<DriverProfile>, NodeError> {
     let Some(binding) = &config.metrics else {
         return Ok(None);
     };
-    let socket = std::net::TcpListener::bind(binding.address)
+    let socket = bulkhead_host::bind_tcp(binding.address, native)
         .map_err(|e| NodeError::Invalid(format!("metrics: {}: {e}", binding.address)))?;
     Ok(Some(DriverProfile {
         listeners: vec![DriverListener {

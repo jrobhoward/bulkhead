@@ -173,14 +173,10 @@ pub(crate) fn listen_native(
     bind(rt, spec, app)
 }
 
-fn bind(
-    _rt: &Arc<RuntimeInner>,
-    spec: ListenerSpec,
-    app: AppHandle,
-) -> Result<Listener, HostError> {
+fn bind(rt: &Arc<RuntimeInner>, spec: ListenerSpec, app: AppHandle) -> Result<Listener, HostError> {
     let bind =
         |e: std::io::Error| HostError::Listen(format!("{} ({}): {e}", spec.name, spec.address));
-    let std_listener = std::net::TcpListener::bind(spec.address).map_err(bind)?;
+    let std_listener = crate::bind_tcp(spec.address, rt.native_config()).map_err(bind)?;
     std_listener.set_nonblocking(true).map_err(bind)?;
     let local_addr = std_listener.local_addr().map_err(bind)?;
     let listener = Arc::new(TcpListener::from_std(std_listener).map_err(bind)?);

@@ -102,6 +102,7 @@ fn delivered<'a>(apps: impl Iterator<Item = &'a Option<String>>) -> Vec<String> 
 /// cannot be bound.
 pub(super) fn bind(
     config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
     profiles: &mut BTreeMap<String, DriverProfile>,
 ) -> Result<Option<Bound>, NodeError> {
     let Some(section) = config.extensions.get(MODBUS_PACKAGE) else {
@@ -168,7 +169,7 @@ pub(super) fn bind(
     if let Some(raw) = section.get("server").filter(|s| !s.is_null()) {
         let server: Server =
             serde_json::from_value(raw.clone()).map_err(|e| invalid(format!("server: {e}")))?;
-        let socket = std::net::TcpListener::bind(server.listen)
+        let socket = bulkhead_host::bind_tcp(server.listen, native)
             .map_err(|e| invalid(format!("server: cannot listen on {}: {e}", server.listen)))?;
         profiles.insert(
             MODBUS_SERVER_APP.to_string(),

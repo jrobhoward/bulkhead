@@ -91,7 +91,10 @@ fn public_of(path: &Path) -> Result<PublicKey, NodeError> {
 ///
 /// No `[admin] key`, the key the cluster's, the two files of one name, or
 /// the address not bound.
-pub(super) fn bind(config: &NodeConfig) -> Result<Option<DriverProfile>, NodeError> {
+pub(super) fn bind(
+    config: &NodeConfig,
+    native: &bulkhead_host::NativeConfig,
+) -> Result<Option<DriverProfile>, NodeError> {
     let Some(admin) = &config.admin else {
         return Ok(None);
     };
@@ -112,7 +115,7 @@ pub(super) fn bind(config: &NodeConfig) -> Result<Option<DriverProfile>, NodeErr
                 .into(),
         ));
     }
-    let socket = std::net::TcpListener::bind(admin.address)
+    let socket = bulkhead_host::bind_tcp(admin.address, native)
         .map_err(|e| NodeError::Invalid(format!("admin: {}: {e}", admin.address)))?;
     Ok(Some(DriverProfile {
         listeners: vec![DriverListener {

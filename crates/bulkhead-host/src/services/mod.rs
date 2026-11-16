@@ -247,7 +247,7 @@ impl Shared {
             secrets: Arc::new(secrets::Secrets::shared(config)?),
             metrics: Arc::new(metrics::MetricsService::shared(config)?),
             sql: Arc::new(sql::Shared::new(config)),
-            sockets: Arc::new(sockets::Shared::new(&names)),
+            sockets: Arc::new(sockets::Shared::new(&names, &config.native)),
             blobs,
             modbus: config.modbus.clone(),
             names,
