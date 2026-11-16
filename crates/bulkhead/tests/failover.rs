@@ -660,11 +660,15 @@ async fn gate____held_singleton_with_a_missing_dependency____deploy_and_upgrade_
 
 /// A singleton that cannot start at promotion (its dependency was stopped
 /// while it was held) starts once the dependency is back, without another
-/// promotion.
+/// promotion. The node's witness starts only once `base` is stopped, so it
+/// cannot promote before then however slow the machine is (a fixed
+/// window failed under load and on the Raspberry Pi 5).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gate____start_fails_at_promotion____tried_again_until_it_starts() {
-    // Long enough for both deploys, a debug program each, to come first.
-    let (_dir, mut n) = alone_for("paths", 10_000).await;
+    let dir = tempfile::tempdir().unwrap();
+    let peers = keys(dir.path());
+    let (a1, a3) = (free_udp(), free_udp());
+    let mut n = TestNode::start(&member(1, dir.path(), &peers, &a1, &a3)).await;
     n.client
         .deploy(app_bundle(
             &n.key,
@@ -684,12 +688,10 @@ async fn gate____start_fails_at_promotion____tried_again_until_it_starts() {
         .await
         .unwrap();
     n.client.stop("base").await.unwrap();
-    assert!(
-        !standing(&n).await.may_run,
-        "promoted too early for the test"
-    );
+    let before_witness = standing(&n).await.may_run;
 
-    until("node 1 primary alone", || async {
+    let mut w = TestNode::start(&witness(dir.path(), &peers, &a3)).await;
+    until("node 1 primary through the witness", || async {
         standing(&n).await.may_run
     })
     .await;
@@ -701,8 +703,10 @@ async fn gate____start_fails_at_promotion____tried_again_until_it_starts() {
     })
     .await;
 
+    assert!(!before_witness);
     assert_eq!(while_base_stopped, "standby");
     n.shutdown().await;
+    w.shutdown().await;
 }
 
 /// The pair's serial line: two ptys joined by a relay the test

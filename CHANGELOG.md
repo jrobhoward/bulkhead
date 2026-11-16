@@ -8,6 +8,12 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `gate____start_fails_at_promotion____tried_again_until_it_starts`
+  (`tests/failover.rs`) holds the node's promotion back until its
+  witness starts, after `base` is stopped, instead of a 10-second
+  window: under load on the 16-core machine and on every run on the
+  Raspberry Pi 5 the node promoted first and `stop("base")` was refused.
+
 - The `Extension` trait's removal documented (ROADMAP DA8, step 3):
   DESIGN.md (no service from outside the node; what stays of
   extensions), MANIFEST.md (`extensions` and `[extensions]` take Modbus's
