@@ -33,7 +33,6 @@ members = [
     "examples/ping-pong",
     "examples/chaos",
     "examples/greeter/app",
-    "examples/greeter/node",
     "examples/greeter/service",
     "examples/http-counter",
     "examples/ledger",

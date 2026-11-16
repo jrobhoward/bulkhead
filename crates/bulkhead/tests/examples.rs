@@ -61,6 +61,8 @@ async fn examples____bundled_with_the_cli____run_upgrade_and_fail_as_designed() 
             "example-chaos",
             "example-line-server",
             "example-ledger",
+            "example-greeter-service",
+            "example-greeter-app",
         ],
         &[],
         "plain",
@@ -144,6 +146,37 @@ async fn examples____bundled_with_the_cli____run_upgrade_and_fail_as_designed() 
         ex.join("ping-pong/ping.toml"),
         ping_pong.clone(),
         "ping.rbp",
+    )
+    .await;
+    let greeter = bundle(
+        ex.join("greeter/service/bulkhead.toml"),
+        built.of("example-greeter-service"),
+        "greeter.rbp",
+    )
+    .await;
+    let greeted = bundle(
+        ex.join("greeter/app/bulkhead.toml"),
+        built.of("example-greeter-app"),
+        "greeted.rbp",
+    )
+    .await;
+    let stranger = bundle(
+        ex.join("greeter/app/stranger.toml"),
+        built.of("example-greeter-app"),
+        "stranger.rbp",
+    )
+    .await;
+    let packaged_manifest = dir.path().join("packaged.toml");
+    std::fs::write(
+        &packaged_manifest,
+        "[app]\nname = \"packaged\"\nversion = \"1.0.0\"\n\
+         [appserver.capabilities.extensions.\"example:greeting\"]\nsalutation = \"Howdy\"\n",
+    )
+    .unwrap();
+    let packaged = bundle(
+        packaged_manifest,
+        built.of("example-greeter-app"),
+        "packaged.rbp",
     )
     .await;
     let failing_manifest = dir.path().join("chaos-fail.toml");
@@ -232,6 +265,29 @@ async fn examples____bundled_with_the_cli____run_upgrade_and_fail_as_designed() 
     assert_eq!(first.stdout, "pong 42");
     assert_eq!(downs, "1");
     assert_eq!(again, "pong 2");
+
+    // greeter: a service as an app, called through its client module, the
+    // ACLs on both sides; a package other than Modbus's is refused
+    // (ROADMAP DA8).
+    for b in [&greeter, &greeted, &stranger] {
+        let deployed = bulkhead(&socket, &["deploy", s(b)]).await;
+        assert!(deployed.ok, "{}", deployed.stderr);
+    }
+    let hello = bulkhead(&socket, &["call", "greeted", "hello:Ann"]).await;
+    let count = bulkhead(&socket, &["call", "greeted", "count"]).await;
+    let refused = bulkhead(&socket, &["call", "stranger", "hello:Bob"]).await;
+    let package = bulkhead(&socket, &["deploy", s(&packaged)]).await;
+    assert_eq!(hello.stdout, "Howdy, Ann");
+    assert_eq!(count.stdout, "1");
+    assert_eq!(refused.stdout, "err:access-denied");
+    assert!(!package.ok);
+    assert!(
+        package
+            .stderr
+            .contains("capabilities.extensions.\"example:greeting\": no such package"),
+        "{}",
+        package.stderr
+    );
 
     // counter: snapshot upgrade through #[derive(Snapshot)] migration.
     assert!(bulkhead(&socket, &["deploy", s(&c1)]).await.ok);

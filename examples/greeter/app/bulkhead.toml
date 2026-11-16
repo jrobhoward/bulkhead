@@ -1,12 +1,16 @@
 # Bundle with:
 #   cargo build -p example-greeter-app --release
 #   bulkhead bundle examples/greeter/app/bulkhead.toml target/release/example-greeter-app --key bulkhead.key
-# Run on a node built with the greeter service (examples/greeter/node).
+# Deploy the greeter (examples/greeter/service) first.
 [app]
 name = "greeted"
 version = "1.0.0"
-description = "Calls the greeter extension (bulkhead example)"
+description = "Calls the greeter app (bulkhead example)"
 license = "MIT OR Apache-2.0"
 
-[appserver.capabilities.extensions."example:greeting"]
-salutation = "Howdy"
+[[appserver.dependencies]]
+app = "greeter"
+version = "^1"
+
+[appserver.messaging_acl]
+may_call = ["greeter"]

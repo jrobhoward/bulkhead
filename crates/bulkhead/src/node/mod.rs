@@ -30,7 +30,7 @@ pub use config::{
 pub use daemon::{Node, Traffic};
 pub use error::NodeError;
 pub use logring::{LogRing, RingLayer};
-pub use run::{builtin_extensions, run};
+pub use run::run;
 pub use server::{MAX_BODY, serve};
 /// The snapshot reader behind `bulkhead state`, for the fuzz targets in
 /// `fuzz/` only.

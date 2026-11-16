@@ -21,8 +21,8 @@
 //!   bound in node configuration, so an app does not name host paths or
 //!   addresses.
 //!
-//! Services from outside this crate are [`Extension`]s ([`extension`]):
-//! the same shape behind an object-safe trait, registered at runtime.
+//! No service comes from outside this crate (ROADMAP DA8): a package an
+//! app calls by name is a built-in one ([`extension`]).
 //!
 //! Adding a service is a new module here and one line in each of the
 //! registries below ([`ServiceSpecs`], `Shared`, `States` and its
@@ -42,10 +42,7 @@ pub mod secrets;
 pub mod sockets;
 pub mod sql;
 
-pub use extension::{
-    Extension, ExtensionApp, ExtensionNode, ExtensionSpec, NativeCall, NativeCallError,
-    NativeReply, StartedExtensions, StoreData, extension_ctx, reply,
-};
+pub use extension::ExtensionSpec;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -320,7 +317,6 @@ pub(crate) struct States {
     pub(crate) sql: sql::Instance,
     pub(crate) sockets: sockets::Instance,
     pub(crate) blobs: blobs::Instance,
-    pub(crate) extensions: extension::ExtensionStates,
 }
 
 /// The services a native app's sender channel uses (ROADMAP AP1), held by
@@ -384,40 +380,21 @@ impl States {
         events
     }
 
-    /// # Errors
-    ///
-    /// The message of an extension that refused the instance's scope.
     pub(crate) fn new(
         shared: &Shared,
         spec: &InstanceSpec,
-        extensions: &[Arc<dyn Extension>],
         handle: &InstanceHandle,
         host_objects: HostObjects,
         metrics: &crate::metrics::Metrics,
-    ) -> Result<Self, String> {
+    ) -> Self {
         let info = |capability: Capability| InstanceInfo {
             granted: spec.granted.contains(&capability),
             handle,
             host_objects,
             metrics,
         };
-        let null = serde_json::Value::Null;
-        let mut states = extension::ExtensionStates::default();
-        for ext in extensions {
-            let declared = spec.services.extensions.get(ext.package());
-            let app = ExtensionApp {
-                app: &spec.app,
-                version: &spec.version,
-                scope: declared.map_or(&null, |d| &d.scope),
-                granted: declared.is_some_and(|d| d.granted),
-            };
-            let state = ext
-                .instance(&app)
-                .map_err(|e| format!("extension {}: {e}", ext.package()))?;
-            states.push(state);
-        }
         let services = &spec.services;
-        Ok(Self {
+        Self {
             config: config::Config::instance(
                 &shared.config,
                 &services.config,
@@ -464,7 +441,6 @@ impl States {
                 &services.blobs,
                 &info(blobs::Blobs::CAPABILITY),
             ),
-            extensions: states,
-        })
+        }
     }
 }

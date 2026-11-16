@@ -1,7 +1,7 @@
 [package]
 name = "example-greeter-service"
 version.workspace = true
-description = "Bulkhead example: a host service (extension) built against bulkhead-host alone"
+description = "Bulkhead example: a service as an app (the greeter), with a client module for its callers"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-bulkhead-host = { workspace = true }
+bulkhead-sdk = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

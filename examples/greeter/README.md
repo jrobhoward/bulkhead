@@ -1,39 +1,31 @@
-# Greeter: a host service from outside Bulkhead
+# Greeter: a service as an app
 
-An extension is a host service built into a node by its operator, serving one package that apps call through the node. This example has three parts:
+A service an app offers other apps is itself an app: it answers calls, and its manifest says whom it serves. Until ROADMAP DA8 (2026-11-15) this example was an extension, host code built into the node; no code from outside Bulkhead runs in the node any more, so the greeter runs sandboxed like any app.
 
-- `service/`: the extension, the `example:greeting` package, with `hello(name)` and `count()`. It depends on `bulkhead-host` alone.
-- `app/`: an app that calls it, written with `bulkhead-sdk` plus a client module for the package (`src/greeting.rs`). Its `bulkhead.toml` declares the extension.
-- `node/`: a node binary with the extension (`greeter-node`). Its test deploys the app twice, granted and not, and calls both.
+- `service/`: the app `greeter`. It answers `client::Request::Hello { name }` with its salutation (from `start_args`) and `Request::Count` with its count of greetings. Its `src/client.rs` is the client module: the messages and a typed function for each. Its `bulkhead.toml` serves `greeted` alone (`messaging_acl.accept_from`).
+- `app/`: the app `greeted`, which calls the greeter through `example_greeter_service::client` (`hello:<name>`, `count`). Its `bulkhead.toml` may call `greeter` (`messaging_acl.may_call`) and depends on it. `stranger.toml` is the same program under another name, which the greeter refuses.
+
+`crates/bulkhead/tests/examples.rs` bundles and deploys all three and calls them:
 
 ```sh
-cargo test -p example-greeter-node
+cargo test -p bulkhead --test examples
 ```
 
-## Writing an extension
+By hand, with a node running (GETTING_STARTED.md):
 
-1. Name the package in a namespace other than `bulkhead`. Give every function a `Result` whose error has an `AccessDenied` case, so an ungranted app gets an error value, not a crash.
-2. Implement `bulkhead_host::services::Extension`:
-   - `package()`: the package name, which is also the manifest key and the policy grant.
-   - `instance(app)`: per-instance state from the app's scope table (`app.scope`) and whether it was granted (`app.granted`). Every instance gets state, including apps that do not declare the extension.
-   - `start(node)`, optional: work on the extension's own schedule (polling devices, serving a port), started once the node's apps are up. It gets the node's `[extensions."<package>"]` table, a way to cast to apps by name, and whether this node runs singletons (on an HA pair, the primary). `crates/bulkhead-modbus` is an extension that does.
-   - `call(data, call)`: the package's functions. Match on `call.function()` (by convention `interface#function`, `greet#hello`), decode the parameters with `call.args()` as a tuple, take the instance's state from `extension_ctx::<State>(data)`, and return `reply(&result)`. `ctx.state()` is the instance's state; `ctx.app()` and `ctx.pid()` say who is calling. Time a function spends waiting does not count against the callback deadline; work it does without waiting does.
-3. Run a node with it: `bulkhead::node::run(&config, vec![Arc::new(MyService::default())])`.
-
-## Using it from an app
-
-```toml
-[appserver.capabilities.extensions."example:greeting"]
-salutation = "Howdy"
+```sh
+cargo build --release -p example-greeter-service -p example-greeter-app
+bulkhead bundle examples/greeter/service/bulkhead.toml target/release/example-greeter-service --key bulkhead.key -o greeter.rbp
+bulkhead bundle examples/greeter/app/bulkhead.toml target/release/example-greeter-app --key bulkhead.key -o greeted.rbp
+bulkhead deploy greeter.rbp
+bulkhead deploy greeted.rbp
+bulkhead call greeted hello:Ann     # Howdy, Ann
+bulkhead call greeted count         # 1
 ```
 
-The operator grants it in the node's policy, by package name:
+## Writing a service app
 
-```toml
-[apps.greeted]
-grant = ["example:greeting"]
-```
-
-A declared but ungranted app gets `AccessDenied`, as does an app on a node built without the extension.
-
-An app calls through the node with `bulkhead_sdk::extension::call("example:greeting", "greet#hello", &(name,))`, which returns the result decoded from CBOR. `app/src/greeting.rs` gives each function its name and types.
+1. **Messages:** define the requests and answers as serde types with a schema name (`client.rs`), and answer them in `handle_call`.
+2. **A client module:** a typed function per request, calling the app by name with `Ctx::call_app`, so the node picks the instance by the app's routing (a pool of greeters works unchanged). Map `CallError::AccessDenied` and `CallError::Noproc` to the client's own errors. Callers depend on the service's crate for this module.
+3. **Whom it serves:** list the calling apps in the service's `messaging_acl.accept_from`, and the service in each caller's `may_call`. The node checks both on the service's node, against the caller's app as its node stamps it; a refused call fails with `access-denied`. A caller that needs the service at start lists it under `dependencies`.
+4. **What it may use:** the service declares the capabilities it needs (buckets, SQL, egress) in its own manifest, and the operator grants them to it alone. Its callers need none of them.

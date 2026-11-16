@@ -1221,30 +1221,14 @@ name = "example-greeter-app"
 version = "0.3.0"
 dependencies = [
  "bulkhead-sdk",
- "serde",
-]
-
-[[package]]
-name = "example-greeter-node"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "bulkhead",
- "bulkhead-host",
  "example-greeter-service",
- "minisign",
- "rstest",
- "rustbridge-bundle",
- "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
 name = "example-greeter-service"
 version = "0.3.0"
 dependencies = [
- "bulkhead-host",
+ "bulkhead-sdk",
  "serde",
  "serde_json",
 ]

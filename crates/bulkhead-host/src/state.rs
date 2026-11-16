@@ -100,11 +100,10 @@ impl InstanceState {
         let services = States::new(
             &ctx.rt.services,
             spec,
-            &ctx.rt.extensions,
             &ctx.me,
             host_objects,
             &ctx.rt.metrics,
-        )?;
+        );
         Ok(Self {
             pid,
             tags,
@@ -141,12 +140,6 @@ impl InstanceState {
         self.lease
             .as_ref()
             .is_none_or(|l| l.borrow().allows(tokio::time::Instant::now()))
-    }
-
-    /// The context for an extension whose state is `S`, if one made it.
-    pub(crate) fn extension_ctx<S: 'static>(&mut self) -> Option<ServiceCtx<'_, S>> {
-        let state = self.services.extensions.get_mut::<S>()?;
-        Some(ServiceCtx::new(state, &self.tags))
     }
 
     /// The host events the services want this instance to see now.

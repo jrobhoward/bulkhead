@@ -174,10 +174,11 @@ pub struct NodeConfig {
     /// SQL datasources apps may use, by name (`bulkhead:sql`).
     #[serde(default)]
     pub datasources: BTreeMap<String, DatasourceBinding>,
-    /// Each extension's node configuration, by package
-    /// (`[extensions."bulkhead-modbus:modbus"]`), handed to the extension as
-    /// it starts. A table for an extension the node does not have refuses
-    /// the start.
+    /// The built-in packages' node configuration, by package: Modbus's
+    /// alone (`[extensions."bulkhead-modbus:modbus"]`, read by
+    /// `daemon/modbus.rs` to start its drivers). A table for any other
+    /// package refuses the start: no code from outside the node serves one
+    /// since ROADMAP DA8.
     #[serde(default)]
     pub extensions: BTreeMap<String, serde_json::Value>,
     /// Config overrides per app.
@@ -1478,6 +1479,17 @@ impl NodeConfig {
         Ok(())
     }
 
+    fn check_extensions(&self) -> Result<(), NodeError> {
+        let modbus = bulkhead_host::services::modbus::MODBUS_PACKAGE;
+        match self.extensions.keys().find(|p| p.as_str() != modbus) {
+            Some(package) => Err(NodeError::Invalid(format!(
+                "node config: extensions.\"{package}\": no such package (the one built-in \
+                 package is \"{modbus}\"; a service of its own runs as an app since ROADMAP DA8)"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     fn check_egress(&self) -> Result<(), NodeError> {
         let e = &self.egress;
         if let Some(allow) = &e.allow {
@@ -1555,6 +1567,7 @@ impl NodeConfig {
         config.check_failover()?;
         config.check_egress()?;
         config.check_blobs()?;
+        config.check_extensions()?;
         config.check_sockets()?;
         config.check_native()?;
         config.check_drivers()?;

@@ -27,7 +27,6 @@ use crate::api::Done;
 use bulkhead_bundle::OperatorPolicy;
 use bulkhead_bundle::manifest::Durability;
 use bulkhead_host::failover::FailoverHandle;
-use bulkhead_host::services::{Extension, StartedExtensions};
 use bulkhead_host::transport::quic::QuicTransport;
 use bulkhead_host::{Apps, HostObjects, Role, Runtime, RuntimeConfig, SecretSource, SharedBucket};
 use serde_json::json;
@@ -66,7 +65,6 @@ pub struct Node {
     /// await.
     native_listeners: std::sync::Mutex<HashMap<String, Vec<bulkhead_host::Listener>>>,
     /// Extensions' node-level work, stopped on shutdown.
-    extensions: std::sync::Mutex<Option<StartedExtensions>>,
     /// HTTP ingress, if node config has `[http]` addresses.
     ingress: Ingress,
     /// The resolver of host names (ROADMAP DA9), on a member.
@@ -145,23 +143,6 @@ impl Node {
     /// [`NodeError::Conflict`] if another node has `data_dir` open;
     /// [`NodeError::Internal`] if the store or runtime cannot start.
     pub async fn open(config: NodeConfig, logs: Arc<LogRing>) -> Result<Self, NodeError> {
-        Self::open_with(config, logs, Vec::new()).await
-    }
-
-    /// Like [`Node::open`], with host services from outside `bulkhead-host`
-    /// (`bulkhead_host::services::Extension`). Apps declare an extension by
-    /// its package under `capabilities.extensions`; the policy grants it by
-    /// the same name.
-    ///
-    /// # Errors
-    ///
-    /// As for [`Node::open`], and [`NodeError::Internal`] for an extension
-    /// the runtime refuses (a bad or duplicate package name).
-    pub async fn open_with(
-        config: NodeConfig,
-        logs: Arc<LogRing>,
-        extensions: Vec<Arc<dyn Extension>>,
-    ) -> Result<Self, NodeError> {
         // What the node makes is its own (ROADMAP PS2); what an app reads,
         // the privileged helper gives to the app's group.
         #[cfg(unix)]
@@ -197,86 +178,83 @@ impl Node {
             .iter()
             .map(|(name, d)| (name.clone(), runtime_datasource(&config, d)))
             .collect();
-        let rt = Runtime::with_extensions(
-            RuntimeConfig {
-                node: config.node,
-                max_instances: config.max_instances,
-                max_processes: config.max_processes,
-                data_dir: Some(store.kv_dir()),
-                heartbeat_interval: Duration::from_millis(config.cluster.heartbeat_interval_ms),
-                node_timeout: Duration::from_millis(config.cluster.node_timeout_ms),
-                creation,
-                role: match config.cluster.role {
-                    ClusterRole::Member => Role::Member,
-                    ClusterRole::Witness => Role::Witness,
-                },
-                address: config
-                    .cluster
-                    .advertise
-                    .clone()
-                    .or_else(|| config.cluster.address.clone())
-                    .unwrap_or_default(),
-                host_objects: HostObjects {
-                    timers: config.limits.timers_max,
-                    monitors: config.limits.monitors_max,
-                    links: config.limits.links_max,
-                    pending_calls: config.limits.pending_calls_max,
-                    groups: config.limits.groups_max,
-                    watches: config.limits.watches_max,
-                    senders: config.limits.senders_max,
-                },
-                log_records_per_sec: config.limits.log_records_per_sec,
-                incoming_calls_per_peer: config.cluster.incoming_calls_max,
-                cast_credit: config.cluster.cast_credit,
-                cast_credit_bytes: config.cluster.cast_credit_bytes,
-                native,
-                drivers,
-                // A member's names go to its resolver driver (ROADMAP
-                // DA9); a witness resolves none.
-                resolver: match config.cluster.role {
-                    ClusterRole::Member => {
-                        bulkhead_host::Resolver::App(crate::node::config::RESOLVE_APP.to_string())
-                    }
-                    ClusterRole::Witness => bulkhead_host::Resolver::None,
-                },
-                secrets: config
-                    .secrets
-                    .iter()
-                    .filter_map(|(name, s)| {
-                        let source = match (&s.file, &s.env) {
-                            (Some(f), _) => SecretSource::File(f.clone()),
-                            (None, Some(v)) => SecretSource::Env(v.clone()),
-                            (None, None) => return None,
-                        };
-                        Some((name.clone(), source))
-                    })
-                    .collect(),
-                egress: config.egress.runtime(),
-                blobs: config.blobs.runtime(),
-                modbus: modbus::drivers(modbus.as_ref()),
-                datasources: datasources.clone(),
-                buckets: config
-                    .buckets
-                    .iter()
-                    .map(|(name, b)| {
-                        // A cluster bucket is on disk on both nodes,
-                        // replicated between them.
-                        let durability = match b.scope {
-                            BucketScope::Cluster => Durability::Replicated,
-                            BucketScope::Node => b.durability,
-                        };
-                        let bucket = SharedBucket {
-                            durability,
-                            quota: b.quota.map(|q| q.bytes()),
-                            read_concurrency: b.read_concurrency,
-                            publish: b.publish_ms.map(std::time::Duration::from_millis),
-                        };
-                        (name.clone(), bucket)
-                    })
-                    .collect(),
+        let rt = Runtime::new(RuntimeConfig {
+            node: config.node,
+            max_instances: config.max_instances,
+            max_processes: config.max_processes,
+            data_dir: Some(store.kv_dir()),
+            heartbeat_interval: Duration::from_millis(config.cluster.heartbeat_interval_ms),
+            node_timeout: Duration::from_millis(config.cluster.node_timeout_ms),
+            creation,
+            role: match config.cluster.role {
+                ClusterRole::Member => Role::Member,
+                ClusterRole::Witness => Role::Witness,
             },
-            extensions,
-        )
+            address: config
+                .cluster
+                .advertise
+                .clone()
+                .or_else(|| config.cluster.address.clone())
+                .unwrap_or_default(),
+            host_objects: HostObjects {
+                timers: config.limits.timers_max,
+                monitors: config.limits.monitors_max,
+                links: config.limits.links_max,
+                pending_calls: config.limits.pending_calls_max,
+                groups: config.limits.groups_max,
+                watches: config.limits.watches_max,
+                senders: config.limits.senders_max,
+            },
+            log_records_per_sec: config.limits.log_records_per_sec,
+            incoming_calls_per_peer: config.cluster.incoming_calls_max,
+            cast_credit: config.cluster.cast_credit,
+            cast_credit_bytes: config.cluster.cast_credit_bytes,
+            native,
+            drivers,
+            // A member's names go to its resolver driver (ROADMAP
+            // DA9); a witness resolves none.
+            resolver: match config.cluster.role {
+                ClusterRole::Member => {
+                    bulkhead_host::Resolver::App(crate::node::config::RESOLVE_APP.to_string())
+                }
+                ClusterRole::Witness => bulkhead_host::Resolver::None,
+            },
+            secrets: config
+                .secrets
+                .iter()
+                .filter_map(|(name, s)| {
+                    let source = match (&s.file, &s.env) {
+                        (Some(f), _) => SecretSource::File(f.clone()),
+                        (None, Some(v)) => SecretSource::Env(v.clone()),
+                        (None, None) => return None,
+                    };
+                    Some((name.clone(), source))
+                })
+                .collect(),
+            egress: config.egress.runtime(),
+            blobs: config.blobs.runtime(),
+            modbus: modbus::drivers(modbus.as_ref()),
+            datasources: datasources.clone(),
+            buckets: config
+                .buckets
+                .iter()
+                .map(|(name, b)| {
+                    // A cluster bucket is on disk on both nodes,
+                    // replicated between them.
+                    let durability = match b.scope {
+                        BucketScope::Cluster => Durability::Replicated,
+                        BucketScope::Node => b.durability,
+                    };
+                    let bucket = SharedBucket {
+                        durability,
+                        quota: b.quota.map(|q| q.bytes()),
+                        read_concurrency: b.read_concurrency,
+                        publish: b.publish_ms.map(std::time::Duration::from_millis),
+                    };
+                    (name.clone(), bucket)
+                })
+                .collect(),
+        })
         .map_err(internal)?;
         rt.check_formats()
             .await
@@ -313,7 +291,6 @@ impl Node {
                 ..NodeState::default()
             }),
             native_listeners: std::sync::Mutex::default(),
-            extensions: std::sync::Mutex::default(),
             ingress,
             resolver,
             stop,
@@ -352,20 +329,6 @@ impl Node {
         node.restore().await;
         let desired = node.st().desired.clone();
         node.store.prune_compiled(&desired);
-        let started = match node
-            .rt
-            .start_extensions(&node.apps, &extension_configs(&node.config))
-        {
-            Ok(started) => started,
-            Err(e) => {
-                node.shutdown().await;
-                return Err(NodeError::Invalid(e.to_string()));
-            }
-        };
-        *node
-            .extensions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(started);
         if let Err(e) = node.start_cluster().and_then(|()| node.start_failover()) {
             node.shutdown().await;
             return Err(e);
@@ -375,12 +338,6 @@ impl Node {
 
     /// Stop every app, in reverse start order.
     pub async fn shutdown(&self) {
-        let started = self
-            .extensions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        drop(started);
         self.stop.send_replace(true);
         if let Some(gate) = &self.gate {
             gate.close().await;
@@ -708,14 +665,6 @@ fn builtin_drivers(
     });
     let modbus = modbus::bind(config, &mut drivers)?;
     Ok((drivers, ingress_args, modbus))
-}
-
-/// The extensions' configurations, less the Modbus drivers' section,
-/// which the node reads itself (ROADMAP DA5).
-fn extension_configs(config: &NodeConfig) -> std::collections::BTreeMap<String, serde_json::Value> {
-    let mut configs = config.extensions.clone();
-    configs.remove(bulkhead_host::services::modbus::MODBUS_PACKAGE);
-    configs
 }
 
 fn native_config(config: &NodeConfig) -> Result<bulkhead_host::NativeConfig, NodeError> {

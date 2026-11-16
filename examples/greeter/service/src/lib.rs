@@ -1,99 +1,69 @@
-//! A host service from outside Bulkhead: the `example:greeting` extension.
-//!
-//! It depends on `bulkhead-host` alone. Apps declare it in their manifest
-//! with a scope the service reads:
-//!
-//! ```toml
-//! [appserver.capabilities.extensions."example:greeting"]
-//! salutation = "Howdy"
-//! ```
-//!
-//! and the operator grants it by package name (`grant =
-//! ["example:greeting"]`). A node runs it with
-//! `bulkhead::node::run(&config, vec![Arc::new(Greeter::default())])`.
-//!
-//! Apps call its functions through the node ([`Extension::call`]), named `greet#hello` and `greet#count`, with
-//! arguments and results in CBOR.
+//! The greeter: a service of its own as an ordinary app (ROADMAP DA8
+//! replaced host extensions with this). It answers [`client::Request`]s
+//! with the salutation its `start_args` give, and counts its greetings.
+//! Other apps call it through [`client`]; its manifest's
+//! `messaging_acl.accept_from` names the apps it serves.
 
-use std::any::Any;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use bulkhead_sdk::{App, CallRef, Ctx, Envelope, Reply};
+use serde::Deserialize;
 
-use bulkhead_host::services::{
-    Extension, ExtensionApp, NativeCall, NativeReply, StoreData, extension_ctx, reply,
-};
-use serde::{Deserialize, Serialize};
+pub mod client;
 
-/// Why a greeting was refused, in CBOR to apps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-enum Error {
-    /// The operator did not grant the package.
-    AccessDenied,
-}
+use client::{Request, Response, SCHEMA};
 
-/// The greeter service. One per node: its count covers every app.
-#[derive(Debug, Default)]
-pub struct Greeter {
-    greetings: Arc<AtomicU64>,
-}
-
-/// The greeter's state for one instance.
-#[derive(Debug)]
-struct State {
+#[derive(Deserialize)]
+struct Args {
+    #[serde(default = "default_salutation")]
     salutation: String,
-    granted: bool,
-    greetings: Arc<AtomicU64>,
 }
 
-impl Extension for Greeter {
-    fn package(&self) -> &str {
-        "example:greeting"
-    }
+fn default_salutation() -> String {
+    "Hello".into()
+}
 
-    fn instance(&self, app: &ExtensionApp<'_>) -> Result<Box<dyn Any + Send>, String> {
-        let salutation = match app.scope.get("salutation") {
-            None => "Hello".to_string(),
-            Some(serde_json::Value::String(s)) => s.clone(),
-            Some(_) => return Err("salutation must be a string".into()),
-        };
-        Ok(Box::new(State {
-            salutation,
-            granted: app.granted,
-            greetings: self.greetings.clone(),
-        }))
-    }
+/// One greeter instance.
+struct Greeter {
+    salutation: String,
+    greetings: u64,
+}
 
-    /// `greet#hello` and `greet#count`.
-    fn call<'a>(&'a self, data: &'a mut StoreData, call: NativeCall) -> NativeReply<'a> {
-        Box::pin(async move {
-            let mut ctx = extension_ctx::<State>(data);
-            let app = ctx.app().to_string();
-            let state = ctx.state();
-            match call.function() {
-                "greet#hello" => {
-                    let (name,): (String,) = call.args()?;
-                    reply(&state.hello(&app, &name))
-                }
-                "greet#count" => reply(&state.count()),
-                _ => Err(call.no_such_function()),
+impl Greeter {
+    fn answer(&mut self, request: Request) -> Response {
+        match request {
+            Request::Hello { name } => {
+                self.greetings += 1;
+                Response::Greeting(format!("{}, {name}", self.salutation))
             }
+            Request::Count => Response::Count(self.greetings),
+        }
+    }
+}
+
+impl App for Greeter {
+    fn init(_ctx: &mut Ctx, args: &[u8]) -> Result<Self, String> {
+        let args: Args = if args.is_empty() {
+            Args {
+                salutation: default_salutation(),
+            }
+        } else {
+            serde_json::from_slice(args).map_err(|e| format!("start_args: {e}"))?
+        };
+        Ok(Self {
+            salutation: args.salutation,
+            greetings: 0,
+        })
+    }
+
+    fn handle_call(&mut self, _ctx: &mut Ctx, _call: CallRef, msg: Envelope) -> Reply {
+        let answer = msg
+            .decode::<Request>()
+            .map_err(|e| e.to_string())
+            .and_then(|request| Envelope::cbor(&self.answer(request)).map_err(|e| e.to_string()));
+        Reply::Now(match answer {
+            Ok(env) => env.with_schema(SCHEMA),
+            Err(why) => Envelope::text(format!("expected a greeter request: {why}")),
         })
     }
 }
 
-impl State {
-    fn hello(&self, app: &str, name: &str) -> Result<String, Error> {
-        if !self.granted {
-            return Err(Error::AccessDenied);
-        }
-        self.greetings.fetch_add(1, Ordering::Relaxed);
-        Ok(format!("{}, {name} (from {app})", self.salutation))
-    }
-
-    fn count(&self) -> Result<u64, Error> {
-        if !self.granted {
-            return Err(Error::AccessDenied);
-        }
-        Ok(self.greetings.load(Ordering::Relaxed))
-    }
-}
+bulkhead_sdk::app!(Greeter);

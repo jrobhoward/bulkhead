@@ -1,0 +1,10 @@
+# The greeted program under another name, which the greeter's accept_from
+# does not list: its calls fail with access-denied (tests/examples.rs).
+[app]
+name = "stranger"
+version = "1.0.0"
+description = "Calls the greeter, which does not serve it (bulkhead example)"
+license = "MIT OR Apache-2.0"
+
+[appserver.messaging_acl]
+may_call = ["greeter"]

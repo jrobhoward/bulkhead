@@ -424,7 +424,7 @@ fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
     #[cfg(feature = "node")]
     if let Command::Node { config } = &args.command {
-        return bulkhead::node::run(config, bulkhead::node::builtin_extensions());
+        return bulkhead::node::run(config);
     }
     if let Command::Shell { contacts } = &args.command {
         return cli::shell::run(&args, contacts.as_deref());

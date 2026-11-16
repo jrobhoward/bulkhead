@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bulkhead::node::{LogRing, Node, builtin_extensions};
+use bulkhead::node::{LogRing, Node};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -286,13 +286,9 @@ async fn scada____device_pool_hmi_and_control____polled_watched_alarmed_upgraded
         common::runner_config(),
     );
     let node = Arc::new(
-        Node::open_with(
-            common::node_config(&toml),
-            LogRing::new(100),
-            builtin_extensions(),
-        )
-        .await
-        .unwrap(),
+        Node::open(common::node_config(&toml), LogRing::new(100))
+            .await
+            .unwrap(),
     );
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn({

@@ -1,41 +1,23 @@
-//! Running a node as a process: what `bulkhead node` does, and what a node
-//! binary built with extra host services calls.
-//!
-//! ```no_run
-//! # fn greeter() -> std::sync::Arc<dyn bulkhead_host::services::Extension> { unimplemented!() }
-//! fn main() -> anyhow::Result<()> {
-//!     let config = std::path::PathBuf::from("node.toml");
-//!     bulkhead::node::run(&config, vec![greeter()])
-//! }
-//! ```
+//! Running a node as a process: what `bulkhead node` does.
 
 use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
-use bulkhead_host::services::Extension;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use super::{LogFormat, LogRing, Node, NodeConfig, RingLayer};
 
-/// The extensions `bulkhead node` runs with: none since Modbus moved to
-/// drivers (ROADMAP DA5); the `Extension` trait goes with DA8.
-#[must_use]
-pub fn builtin_extensions() -> Vec<Arc<dyn Extension>> {
-    Vec::new()
-}
-
-/// Run a node from its configuration file, with `extensions` (none for a
-/// plain node), until SIGTERM or Ctrl-C. Logs go to stderr, filtered by
+/// Run a node from its configuration file until SIGTERM or Ctrl-C. Logs go to stderr, filtered by
 /// `RUST_LOG` (default `info`).
 ///
 /// # Errors
 ///
-/// A bad configuration, a node that cannot open (see [`Node::open_with`]),
+/// A bad configuration, a node that cannot open (see [`Node::open`]),
 /// or an admin socket that cannot be served.
-pub fn run(config: &Path, extensions: Vec<Arc<dyn Extension>>) -> anyhow::Result<()> {
+pub fn run(config: &Path) -> anyhow::Result<()> {
     let config = NodeConfig::from_file(config)?;
     fence(config.debuggable)?;
     let ring = LogRing::new(10_000);
@@ -71,7 +53,7 @@ pub fn run(config: &Path, extensions: Vec<Arc<dyn Extension>>) -> anyhow::Result
         .enable_all()
         .build()
         .context("cannot start the async runtime")?
-        .block_on(serve(config, ring, extensions))
+        .block_on(serve(config, ring))
 }
 
 /// Fence the node's own process before it starts a thread or reads a
@@ -115,12 +97,8 @@ fn fence(_debuggable: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn serve(
-    config: NodeConfig,
-    ring: Arc<LogRing>,
-    extensions: Vec<Arc<dyn Extension>>,
-) -> anyhow::Result<()> {
-    let node = Arc::new(Node::open_with(config, ring, extensions).await?);
+async fn serve(config: NodeConfig, ring: Arc<LogRing>) -> anyhow::Result<()> {
+    let node = Arc::new(Node::open(config, ring).await?);
     node.start_remote_admin().await?;
     #[cfg(unix)]
     reload_on_hangup(node.clone());

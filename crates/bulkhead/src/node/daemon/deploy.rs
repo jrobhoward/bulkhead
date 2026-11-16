@@ -29,6 +29,28 @@ pub(super) fn check_names(st: &NodeState, app: &str, names: &[String]) -> Result
     Ok(())
 }
 
+/// Refuse a new deploy or upgrade declaring a package under
+/// `capabilities.extensions` other than the built-in Modbus one: no code
+/// from outside the node serves one since ROADMAP DA8. Apps already stored
+/// still load (their calls answer `NoSuchExtension`), so a node's restart
+/// keeps running what ran before.
+pub(super) fn check_packages(manifest: &AppManifest) -> Result<(), NodeError> {
+    let modbus = bulkhead_host::services::modbus::MODBUS_PACKAGE;
+    match manifest
+        .spec
+        .capabilities
+        .extensions
+        .keys()
+        .find(|p| p.as_str() != modbus)
+    {
+        Some(package) => Err(NodeError::Refused(format!(
+            "capabilities.extensions.\"{package}\": no such package (the one built-in package \
+             is \"{modbus}\"; call a service app instead, ROADMAP DA8)"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// A verified bundle, its program written out, ready to run.
 pub(super) struct Built {
     pub(super) bundle: VerifiedBundle,
@@ -487,6 +509,7 @@ impl Node {
             )));
         }
         check_names(&self.st(), &name, &built.info.names)?;
+        check_packages(built.manifest())?;
         self.install(&built).await?;
         self.store.keep_upload(upload, &name, &version)?;
         let info = built.info.clone();

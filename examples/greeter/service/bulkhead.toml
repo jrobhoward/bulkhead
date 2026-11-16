@@ -1,0 +1,15 @@
+# Bundle with:
+#   cargo build -p example-greeter-service --release
+#   bulkhead bundle examples/greeter/service/bulkhead.toml target/release/example-greeter-service --key bulkhead.key
+[app]
+name = "greeter"
+version = "1.0.0"
+description = "Greets the apps it serves (bulkhead example: a service as an app)"
+license = "MIT OR Apache-2.0"
+
+[appserver.lifecycle]
+start_args = { salutation = "Howdy" }
+
+# The apps it serves; any other app's call fails with access-denied.
+[appserver.messaging_acl]
+accept_from = ["greeted"]

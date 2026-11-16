@@ -1,27 +1,14 @@
-//! Extensions: calls to the host services a node is built with from
-//! outside Bulkhead.
+//! Calls to the node's built-in packages, by name: since ROADMAP DA8 the
+//! one package is Modbus's (`bulkhead-modbus:modbus`), whose client is
+//! `bulkhead-modbus-client`. Any other package answers
+//! [`Error::NoSuchExtension`]; a service of an app's own is an app called
+//! with `Ctx::call_app` (`examples/greeter`).
 //!
 //! [`call`] names the package and the function (by convention
-//! `interface#function`, `greet#hello`), and carries the arguments and the
-//! result in CBOR (an array of the parameters in order; the result as serde
-//! encodes it). The app declares the extension in its manifest and the
-//! operator grants it.
-//!
-//! A small client module gives an extension's functions their names and
-//! types:
-//!
-//! ```ignore
-//! #[derive(serde::Serialize, serde::Deserialize)]
-//! pub enum Error {
-//!     AccessDenied,
-//!     Other(String),
-//! }
-//!
-//! pub fn hello(name: &str) -> Result<String, Error> {
-//!     bulkhead_sdk::extension::call("example:greeting", "greet#hello", &(name,))
-//!         .unwrap_or_else(|e| Err(Error::Other(e.to_string())))
-//! }
-//! ```
+//! `interface#function`, `client#read-holding`), and carries the arguments
+//! and the result in CBOR (an array of the parameters in order; the result
+//! as serde encodes it). The app declares the package in its manifest and
+//! the operator grants it.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;

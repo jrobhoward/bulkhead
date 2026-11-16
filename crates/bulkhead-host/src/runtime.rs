@@ -19,7 +19,7 @@ use crate::native::{NativeCode, Program};
 use crate::pid::Pid;
 use crate::pool::Pool;
 use crate::registry::Registry;
-use crate::services::{self, Extension};
+use crate::services;
 use crate::spec::InstanceSpec;
 use crate::supervisor::{self, SupervisorHandle, SupervisorSpec};
 use crate::table::ProcessTable;
@@ -104,7 +104,6 @@ pub(crate) struct RuntimeInner {
     /// Who renders the metrics a driver reads, held weakly.
     metrics_text: RwLock<Option<WeakMetricsText>>,
 
-    pub(crate) extensions: Vec<Arc<dyn Extension>>,
     transport: std::sync::OnceLock<Arc<dyn Transport>>,
     pub(crate) pending_calls: PendingCalls,
     pub(crate) incoming_calls: IncomingCalls,
@@ -320,21 +319,7 @@ impl Runtime {
     ///
     /// [`HostError::NativeCgroup`] if
     /// `native.cgroup` is set but the node cannot move itself into it.
-    pub fn new(config: RuntimeConfig) -> Result<Self, HostError> {
-        Self::with_extensions(config, Vec::new())
-    }
-
-    /// Like [`Runtime::new`], with host services from outside this crate
-    /// ([`services::extension`]).
-    ///
-    /// # Errors
-    ///
-    /// As for [`Runtime::new`], and [`HostError::Engine`] for an extension
-    /// whose package is not a valid extension key or is served twice.
-    pub fn with_extensions(
-        mut config: RuntimeConfig,
-        extensions: Vec<Arc<dyn Extension>>,
-    ) -> Result<Self, HostError> {
+    pub fn new(mut config: RuntimeConfig) -> Result<Self, HostError> {
         // Each datasource's driver gets its connection and files (ROADMAP
         // DA3), unless the configuration gives it a profile itself.
         for (name, ds) in &config.datasources {
@@ -361,20 +346,6 @@ impl Runtime {
             crate::native::cgroup::prepare(root)
                 .map_err(|e| HostError::NativeCgroup(format!("{}: {e}", root.display())))?;
         }
-        let mut packages = std::collections::BTreeSet::new();
-        for ext in &extensions {
-            let package = ext.package();
-            if !bulkhead_bundle::manifest::is_extension_key(package) {
-                return Err(HostError::Engine(format!(
-                    "extension package '{package}' must be `namespace:package` outside bulkhead"
-                )));
-            }
-            if !packages.insert(package.to_string()) {
-                return Err(HostError::Engine(format!(
-                    "extension package '{package}' is served twice"
-                )));
-            }
-        }
         let services = services::Shared::new(&config)?;
         let inner = Arc::new(RuntimeInner {
             table: ProcessTable::default(),
@@ -390,7 +361,6 @@ impl Runtime {
             #[cfg(unix)]
             admin_streams: RwLock::default(),
             metrics_text: RwLock::default(),
-            extensions,
             transport: std::sync::OnceLock::new(),
             pending_calls: PendingCalls::default(),
             incoming_calls: IncomingCalls::new(config.incoming_calls_per_peer),
@@ -530,24 +500,6 @@ impl Runtime {
     /// child naming an app that is not deployed.
     pub async fn start_apps(&self, deployments: Vec<AppDeployment>) -> Result<Apps, HostError> {
         apps::start(self, deployments).await
-    }
-
-    /// Start every extension's node-level work
-    /// ([`Extension::start`](services::Extension::start)) against `apps`,
-    /// each with its entry in `configs` (by package; null if none). Keep the
-    /// result: stopping or dropping it ends their tasks.
-    ///
-    /// # Errors
-    ///
-    /// [`HostError::InvalidApps`] for configuration naming an extension this
-    /// runtime does not have, or one an extension refuses.
-    pub fn start_extensions(
-        &self,
-        apps: &Apps,
-        configs: &std::collections::BTreeMap<String, serde_json::Value>,
-    ) -> Result<services::StartedExtensions, HostError> {
-        let lease = self.inner.failover.run_until();
-        services::extension::start(&self.inner.extensions, apps, &lease, configs)
     }
 
     /// Override the log level of every instance of `app` from now on, or

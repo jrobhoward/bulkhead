@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The `Extension` trait removed (ROADMAP DA8, steps 1 and 2): no code from
+  outside Bulkhead runs in the node. Gone: `bulkhead_host::services`'
+  `Extension`, `ExtensionApp`, `ExtensionNode`, `NativeCall`,
+  `NativeCallError`, `NativeReply`, `StoreData`, `extension_ctx`,
+  `reply` and `StartedExtensions`; `Runtime::with_extensions` and
+  `start_extensions`; `Node::open_with` and `builtin_extensions`.
+  `bulkhead::node::run` takes the configuration path alone.
+  `capabilities.extensions."<package>"` and
+  `bulkhead_sdk::extension::call` stay for the built-in Modbus package;
+  a deploy or upgrade declaring any other package is refused (apps
+  already deployed still load, and their calls answer
+  `NoSuchExtension`), and node config's `[extensions]` takes Modbus's
+  table alone. `examples/greeter` is now a service as an app: the
+  `greeter` app with a client module, called by `greeted` under
+  messaging ACLs (`tests/examples.rs`); its node binary is gone.
+
 - Modbus outside the node, documented (ROADMAP DA5, step 6): DESIGN.md
   (Modbus as drivers; protocols from outside all moved), SECURITY.md
   (the drivers' trust row, the Modbus boundary, the parser row moved),

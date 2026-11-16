@@ -929,3 +929,25 @@ fn blobs____inconsistent____refused(#[case] section: &str) {
     let err = found.unwrap_err().to_string();
     assert!(err.contains("blobs."), "{err}");
 }
+
+#[test]
+fn extensions____modbus____accepted() {
+    let found = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[extensions.\"bulkhead-modbus:modbus\".devices.pump]\naddress = \"127.0.0.1:502\"\n",
+    );
+
+    assert!(found.is_ok(), "{found:?}");
+}
+
+#[test]
+fn extensions____any_other_package____refused() {
+    let found = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[extensions.\"example:greeting\"]\nsalutation = \"Howdy\"\n",
+    );
+
+    let err = found.unwrap_err().to_string();
+    assert!(
+        err.contains("extensions.\"example:greeting\": no such package"),
+        "{err}"
+    );
+}

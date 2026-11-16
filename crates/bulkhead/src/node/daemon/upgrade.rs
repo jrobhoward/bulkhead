@@ -9,7 +9,7 @@ use bulkhead_host::{AppDeployment, UpgradeError, UpgradeOptions, UpgradeReport};
 use serde_json::json;
 
 use super::Node;
-use super::deploy::check_names;
+use super::deploy::{check_names, check_packages};
 use crate::node::error::{NodeError, internal};
 
 pub(super) fn upgrade_error(e: UpgradeError) -> NodeError {
@@ -131,6 +131,7 @@ impl Node {
             )));
         }
         check_names(&self.st(), name, &built.info.names)?;
+        check_packages(&built.run.manifest)?;
         // A native app's listeners stay bound across its upgrades, as they
         // were declared.
         if let Some(running) = self.apps.app(name)

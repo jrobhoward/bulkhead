@@ -44,6 +44,7 @@ use crate::native::port::{Incoming, KvCall, Port};
 use crate::output::{CapturedOutput, Tags};
 use crate::probe;
 use crate::runtime::{LoadedApp, RuntimeInner};
+use crate::services::HostState;
 use crate::services::blobs::{self, Blobs};
 use crate::services::config::Config;
 use crate::services::egress::Egress;
@@ -57,7 +58,6 @@ use crate::services::secrets::Secrets;
 #[cfg(unix)]
 use crate::services::sockets::{NativeReply, Sockets};
 use crate::services::sql::Sql;
-use crate::services::{HostState, NativeCall, NativeCallError};
 use crate::spec::InstanceSpec;
 use crate::state::{InstanceState, ProcessContext};
 use crate::upgrade::UpgradeError;
@@ -473,8 +473,9 @@ async fn service_answer(state: &mut InstanceState, request: Request) -> Result<A
     })
 }
 
-/// Call `function` of the extension serving `package` (ROADMAP Z8h). An
-/// extension's crash is the instance's.
+/// Call `function` of the built-in package `package`: Modbus's, checked
+/// here and forwarded to its drivers; any other is `NoSuchExtension` (no
+/// code from outside the node serves a package since ROADMAP DA8).
 async fn extension_call(
     state: &mut InstanceState,
     package: &str,
@@ -488,24 +489,7 @@ async fn extension_call(
         let rt = state.ctx.rt.clone();
         return Ok(modbus_call(&rt, scope.as_ref(), granted, &drivers, &function, args).await);
     }
-    let Some(ext) = state
-        .ctx
-        .rt
-        .extensions
-        .iter()
-        .find(|e| e.package() == package)
-        .cloned()
-    else {
-        return Ok(Err(p::ExtensionError::NoSuchExtension));
-    };
-    match ext.call(state, NativeCall::new(function, args)).await {
-        Ok(result) => Ok(Ok(p::Bytes(result))),
-        Err(NativeCallError::NoSuchFunction(name)) => {
-            Ok(Err(p::ExtensionError::NoSuchFunction(name)))
-        }
-        Err(NativeCallError::BadArguments(why)) => Ok(Err(p::ExtensionError::BadArguments(why))),
-        Err(NativeCallError::Crash(why)) => Err(format!("extension {package}: {why}")),
-    }
+    Ok(Err(p::ExtensionError::NoSuchExtension))
 }
 
 /// A `bulkhead-modbus:modbus` call (ROADMAP DA5): the node's checks, then
