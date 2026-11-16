@@ -16,15 +16,23 @@ fn elf(class: u8, data: u8, machine: u16) -> Vec<u8> {
     header
 }
 
+/// [`elf`] with `EI_OSABI` set to `osabi`.
+fn branded(machine: u16, osabi: u8) -> Vec<u8> {
+    let mut header = elf(2, 1, machine);
+    header[7] = osabi;
+    header
+}
+
 #[rstest]
-#[case(Platform::LinuxX86_64, EM_X86_64)]
-#[case(Platform::LinuxAarch64, EM_AARCH64)]
+#[case(Platform::LinuxX86_64, branded(EM_X86_64, 0))]
+#[case(Platform::LinuxX86_64, branded(EM_X86_64, 3))]
+#[case(Platform::LinuxAarch64, branded(EM_AARCH64, 0))]
+#[case(Platform::FreebsdX86_64, branded(EM_X86_64, ELFOSABI_FREEBSD))]
+#[case(Platform::FreebsdAarch64, branded(EM_AARCH64, ELFOSABI_FREEBSD))]
 fn check_program____elf_for_the_platform____accepted(
     #[case] platform: Platform,
-    #[case] machine: u16,
+    #[case] program: Vec<u8>,
 ) {
-    let program = elf(2, 1, machine);
-
     let result = check_program(platform, &program);
 
     assert!(result.is_ok(), "{result:?}");
@@ -42,6 +50,21 @@ fn check_program____elf_for_the_platform____accepted(
 #[case(Platform::LinuxX86_64, elf(2, 2, EM_X86_64), "a big-endian ELF file")]
 #[case(Platform::LinuxX86_64, b"#!/bin/sh\necho hi\n".to_vec(), "not an ELF file")]
 #[case(Platform::LinuxX86_64, b"\x7fELF".to_vec(), "not an ELF file")]
+#[case(
+    Platform::LinuxX86_64,
+    branded(EM_X86_64, ELFOSABI_FREEBSD),
+    "a FreeBSD ELF file for x86_64"
+)]
+#[case(
+    Platform::FreebsdX86_64,
+    branded(EM_X86_64, 0),
+    "an ELF file for x86_64 not branded for FreeBSD (EI_OSABI 0): a Linux program?"
+)]
+#[case(
+    Platform::FreebsdAarch64,
+    branded(EM_X86_64, ELFOSABI_FREEBSD),
+    "a FreeBSD ELF file for x86_64"
+)]
 fn check_program____not_for_the_platform____refused_with_what_it_is(
     #[case] platform: Platform,
     #[case] program: Vec<u8>,

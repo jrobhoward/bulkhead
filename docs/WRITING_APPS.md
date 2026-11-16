@@ -404,7 +404,7 @@ Limits: `callback_deadline_ms` bounds each callback's wall time (less time spent
 `bulkhead bundle bulkhead.toml <program> --key signer.key` writes a signed `.rbp`:
 
 - The program is the `.so` or executable built for this machine's platform.
-- A native-process app may instead carry a program per platform. Pass `--program linux-x86_64=PATH --program linux-aarch64=PATH` in place of the argument, for a cluster of both architectures or for nodes of another one. Each program must be an ELF file for its platform's architecture. A node runs the program for its own platform, and refuses a bundle without one with a message naming the platforms the bundle has.
+- A native-process app may instead carry a program per platform. Pass `--program linux-x86_64=PATH --program linux-aarch64=PATH` (and `freebsd-x86_64`, `freebsd-aarch64`) in place of the argument, for a cluster of several systems or architectures, or for nodes of another one. Each program must be an ELF file for its platform's architecture and system: a FreeBSD program is branded FreeBSD by its linker (`EI_OSABI` 9), so a Linux program filed under a FreeBSD platform, or the reverse, is refused. Build a FreeBSD program on FreeBSD (or with a FreeBSD sysroot). A node runs the program for its own platform, and refuses a bundle without one with a message naming the platforms the bundle has.
 - Cross-building for a Raspberry Pi from an x86-64 machine needs the target and a cross linker:
   - `rustup target add aarch64-unknown-linux-gnu`;
   - a cross linker, such as Ubuntu's `gcc-aarch64-linux-gnu`;

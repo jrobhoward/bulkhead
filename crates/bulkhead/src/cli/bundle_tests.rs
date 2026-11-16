@@ -134,9 +134,10 @@ fn bundle____key_readable_by_others____refused() {
 
 const NATIVE_APP: &str = "[app]\nname = \"vendor\"\nversion = \"1.0.0\"\n\n[appserver]\nkind = \"native-process\"\n\n[appserver.native]\nprogram = \"executable\"\n";
 
-/// The start of an ELF file for `platform`'s architecture.
+/// The start of an ELF file for `platform`'s architecture and system
+/// (FreeBSD's brand, `EI_OSABI` 9, for a FreeBSD platform).
 fn elf(platform: Platform) -> Vec<u8> {
-    let machine: u16 = if platform == Platform::LinuxAarch64 {
+    let machine: u16 = if matches!(platform, Platform::LinuxAarch64 | Platform::FreebsdAarch64) {
         183
     } else {
         62
@@ -145,6 +146,9 @@ fn elf(platform: Platform) -> Vec<u8> {
     header[..4].copy_from_slice(b"\x7fELF");
     header[4] = 2;
     header[5] = 1;
+    if matches!(platform, Platform::FreebsdX86_64 | Platform::FreebsdAarch64) {
+        header[7] = 9;
+    }
     header[18..20].copy_from_slice(&machine.to_le_bytes());
     header
 }
@@ -207,22 +211,21 @@ fn bundle____native_process_app____program_as_this_platforms_variant() {
 }
 
 #[test]
-fn bundle____program_per_platform____both_variants_and_the_node_runs_its_own() {
+fn bundle____program_per_platform____every_variant_and_the_node_runs_its_own() {
     let s = Setup::new(NATIVE_APP);
-    let programs = [
-        (
-            Platform::LinuxX86_64,
-            s.program("app-x86_64", Platform::LinuxX86_64),
-        ),
-        (
-            Platform::LinuxAarch64,
-            s.program("app-aarch64", Platform::LinuxAarch64),
-        ),
-    ];
+    let programs = bulkhead_bundle::NATIVE_PLATFORMS.map(|p| (p, s.program(p.as_str(), p)));
 
     let out = s.bundle_programs(None, &programs).unwrap();
 
-    assert_eq!(out.platforms, ["linux-x86_64", "linux-aarch64"]);
+    assert_eq!(
+        out.platforms,
+        [
+            "linux-x86_64",
+            "linux-aarch64",
+            "freebsd-x86_64",
+            "freebsd-aarch64"
+        ]
+    );
     assert_eq!(s.open(&out).program, elf(this_platform()));
 }
 
@@ -258,6 +261,23 @@ fn bundle____program_for_another_architecture____refused_naming_the_file() {
             "the program for {} is an ELF file for",
             this_platform().as_str()
         )),
+        "{error}"
+    );
+    assert!(!s.path("out.rbp").exists());
+}
+
+#[test]
+fn bundle____linux_program_filed_as_freebsd____refused_as_not_branded() {
+    let s = Setup::new(NATIVE_APP);
+    let linux = s.program("app", Platform::LinuxX86_64);
+
+    let result = s.bundle_programs(None, &[(Platform::FreebsdX86_64, linux)]);
+
+    let error = format!("{:#}", result.err().unwrap());
+    assert!(
+        error.contains(
+            "the program for freebsd-x86_64 is an ELF file for x86_64 not branded for FreeBSD"
+        ),
         "{error}"
     );
     assert!(!s.path("out.rbp").exists());
@@ -316,6 +336,8 @@ fn bundle____same_platform_twice____refused() {
 #[rstest]
 #[case("linux-x86_64=target/app", Platform::LinuxX86_64, "target/app")]
 #[case("linux-aarch64=/a=b", Platform::LinuxAarch64, "/a=b")]
+#[case("freebsd-x86_64=app", Platform::FreebsdX86_64, "app")]
+#[case("freebsd-aarch64=app", Platform::FreebsdAarch64, "app")]
 fn parse_program____platform_and_path____parsed(
     #[case] value: &str,
     #[case] platform: Platform,

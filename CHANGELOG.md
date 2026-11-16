@@ -8,6 +8,17 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Bundles for FreeBSD (ROADMAP FB6): `freebsd-x86_64` and
+  `freebsd-aarch64` are native-process platforms (rustbridge's
+  `experiment/wasm` branch at 356f700, `bulkhead_bundle::NATIVE_PLATFORMS`),
+  so a FreeBSD node deploys bundles. A program's ELF `EI_OSABI` must match
+  its platform's system (9, FreeBSD's brand, for FreeBSD; not 9 for
+  Linux), so a Linux program filed under a FreeBSD platform, or the
+  reverse, is refused by `bulkhead bundle` and at deploy. `bulkhead
+  bundle --program` takes the FreeBSD platforms, and its messages and
+  `NotNativePlatform`'s list all four. Checked on FreeBSD 15: a counter
+  built there bundled, deployed to `bulkhead node` and called.
+
 - `gate____start_fails_at_promotion____tried_again_until_it_starts`
   (`tests/failover.rs`) holds the node's promotion back until its
   witness starts, after `base` is stopped, instead of a 10-second

@@ -1180,7 +1180,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2414,7 +2414,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2607,7 +2607,7 @@ dependencies = [
 [[package]]
 name = "rustbridge"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "async-trait",
  "rustbridge-core",
@@ -2622,7 +2622,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-bundle"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "hex",
  "minisign",
@@ -2636,7 +2636,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-consumer"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "libloading",
  "rustbridge-bundle",
@@ -2651,7 +2651,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-core"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "async-trait",
  "serde",
@@ -2662,7 +2662,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-ffi"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "dashmap",
  "once_cell",
@@ -2681,7 +2681,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-logging"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "once_cell",
  "parking_lot",
@@ -2693,7 +2693,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-macros"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -2704,7 +2704,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-runtime"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "parking_lot",
  "rustbridge-core",
@@ -2716,7 +2716,7 @@ dependencies = [
 [[package]]
 name = "rustbridge-transport"
 version = "1.0.1"
-source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#8f4c343b7c288d434c941788420e61b95a202fbd"
+source = "git+https://github.com/jrobhoward/rustbridge?branch=experiment%2Fwasm#356f700c2f35f8fc79bcb72ee8d98ff95993aa11"
 dependencies = [
  "rustbridge-core",
  "serde",
@@ -2758,7 +2758,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3235,7 +3235,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3910,7 +3910,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

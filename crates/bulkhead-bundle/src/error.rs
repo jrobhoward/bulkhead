@@ -43,7 +43,7 @@ pub enum BundleError {
     },
 
     /// A native program is not an ELF file for its platform's
-    /// architecture.
+    /// architecture and system.
     #[error("the program for {platform} is {found}")]
     WrongProgram {
         /// The platform the program is filed under.
@@ -54,7 +54,9 @@ pub enum BundleError {
 
     /// A native program for a platform `native-process` apps do not run
     /// on.
-    #[error("native-process apps run on linux-x86_64 and linux-aarch64, not {0}")]
+    #[error(
+        "native-process apps run on linux-x86_64, linux-aarch64, freebsd-x86_64 and freebsd-aarch64, not {0}"
+    )]
     NotNativePlatform(String),
 
     /// The bundle has no `appserver` section.

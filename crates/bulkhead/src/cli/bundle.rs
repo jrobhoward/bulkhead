@@ -152,7 +152,7 @@ pub fn parse_program(value: &str) -> Result<(Platform, PathBuf), String> {
     let platform = Platform::parse(name)
         .filter(|p| NATIVE_PLATFORMS.contains(p))
         .ok_or_else(|| {
-            format!("unknown platform '{name}' (native-process apps run on linux-x86_64 and linux-aarch64)")
+            format!("unknown platform '{name}' (native-process apps run on linux-x86_64, linux-aarch64, freebsd-x86_64 and freebsd-aarch64)")
         })?;
     Ok((platform, PathBuf::from(path)))
 }
@@ -172,7 +172,7 @@ fn native_programs<'a>(req: &BundleRequest<'a>) -> anyhow::Result<Vec<(Platform,
                 .filter(|p| NATIVE_PLATFORMS.contains(p))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "native-process apps run on linux-x86_64 and linux-aarch64, not this machine ({}-{}); name the program's platform with --program",
+                        "native-process apps run on linux-x86_64, linux-aarch64, freebsd-x86_64 and freebsd-aarch64, not this machine ({}-{}); name the program's platform with --program",
                         std::env::consts::OS,
                         std::env::consts::ARCH
                     )

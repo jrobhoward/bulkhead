@@ -12,9 +12,10 @@ use rustbridge_bundle::{BundleBuilder, Manifest, Platform};
 use serde_json::json;
 use tempfile::TempDir;
 
-/// The start of an ELF file for `platform`'s architecture.
+/// The start of an ELF file for `platform`'s architecture and system
+/// (FreeBSD's brand, `EI_OSABI` 9, for a FreeBSD platform).
 pub fn elf(platform: Platform) -> Vec<u8> {
-    let machine: u16 = if platform == Platform::LinuxAarch64 {
+    let machine: u16 = if matches!(platform, Platform::LinuxAarch64 | Platform::FreebsdAarch64) {
         183
     } else {
         62
@@ -23,6 +24,9 @@ pub fn elf(platform: Platform) -> Vec<u8> {
     header[..4].copy_from_slice(b"\x7fELF");
     header[4] = 2;
     header[5] = 1;
+    if matches!(platform, Platform::FreebsdX86_64 | Platform::FreebsdAarch64) {
+        header[7] = 9;
+    }
     header[18..20].copy_from_slice(&machine.to_le_bytes());
     header
 }
