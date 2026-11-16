@@ -160,6 +160,9 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 # `TCP_INFO` and `sysctl`, which rustix does not read: a native listener's idle
 # timeout and process memory on FreeBSD (bulkhead-host, Linux and FreeBSD).
 libc = "0.2"
+# Seccomp filters, Linux only: the runner's for an app (bulkhead-native) and
+# the privileged helper's own (bulkhead-priv).
+seccompiler = "0.5"
 tempfile = "3"
 wat = "1.259"
 # Same major as rustbridge-bundle's, so tests add no second copy.

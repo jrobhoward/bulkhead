@@ -10,6 +10,8 @@
 //! - A signal handler that writes the signal's number to a pipe, so the
 //!   helper's one `poll` sees signals too.
 //! - `close_range`, for a child before it executes.
+//! - Linux: the `SIGSYS` report for the helper's seccomp filter, naming
+//!   the refused call before the helper exits.
 //!
 //! A child after `fork` may only make system calls: the functions here
 //! that a child calls ([`exec`], [`exit_now`], [`close_from`]) allocate
@@ -397,6 +399,88 @@ pub fn signal_pipe(signals: &[i32]) -> io::Result<OwnedFd> {
         }
     }
     Ok(read)
+}
+
+/// The exit status the helper ends with when its seccomp filter refuses
+/// a call: 128 plus `SIGSYS`, as a shell reports a death by that signal.
+#[cfg(target_os = "linux")]
+pub const SIGSYS_EXIT: i32 = 128 + libc::SIGSYS;
+
+/// Write `bulkhead-priv: system call N refused by the helper's seccomp
+/// filter` to stderr and end the process with [`SIGSYS_EXIT`]: the
+/// `SIGSYS` handler, with no allocation (it runs in a signal handler, and
+/// in a child between `clone3` and `execve`).
+#[cfg(target_os = "linux")]
+extern "C" fn on_sigsys(
+    _signal: libc::c_int,
+    info: *mut libc::siginfo_t,
+    _context: *mut libc::c_void,
+) {
+    // For `SIGSYS` the kernel's `siginfo_t` holds, after its three leading
+    // ints padded to a pointer's alignment, the address of the call and
+    // then its number (`_sigsys` in `siginfo.h`); the `libc` crate has no
+    // accessor for it (as `bulkhead_native::app`'s handler reads it).
+    let offset = (3 * size_of::<libc::c_int>()).next_multiple_of(align_of::<*mut libc::c_void>())
+        + size_of::<*mut libc::c_void>();
+    // SAFETY: the kernel passes a valid `siginfo_t`, which is larger than
+    // `offset` plus an int; the read is unaligned-safe.
+    let number = unsafe {
+        info.cast::<u8>()
+            .add(offset)
+            .cast::<libc::c_int>()
+            .read_unaligned()
+    };
+    let mut line = [0u8; 96];
+    let mut len = 0;
+    let mut put = |bytes: &[u8]| {
+        for &b in bytes {
+            if let Some(slot) = line.get_mut(len) {
+                *slot = b;
+                len += 1;
+            }
+        }
+    };
+    put(b"bulkhead-priv: system call ");
+    let mut digits = [0u8; 10];
+    let mut n = number.unsigned_abs();
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        if let Some(d) = digits.get_mut(start) {
+            // A digit: `n % 10` is below 10.
+            *d = b'0' + u8::try_from(n % 10).unwrap_or(0);
+        }
+        n /= 10;
+        if n == 0 || start == 0 {
+            break;
+        }
+    }
+    put(digits.get(start..).unwrap_or_default());
+    put(b" refused by the helper's seccomp filter\n");
+    write_raw(libc::STDERR_FILENO, line.get(..len).unwrap_or_default());
+    exit_now(SIGSYS_EXIT);
+}
+
+/// Handle `SIGSYS` with the report above. `execve` puts it back to the
+/// default action, so neither the node nor an instance keeps it.
+///
+/// # Errors
+///
+/// The kernel refused the handler.
+#[cfg(target_os = "linux")]
+pub fn report_sigsys() -> io::Result<()> {
+    // SAFETY: a zeroed `sigaction` is valid; the handler makes only
+    // async-signal-safe calls (`write`, `_exit`) and allocates nothing.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_sigsys as *const () as usize;
+        action.sa_flags = libc::SA_SIGINFO;
+        libc::sigemptyset(&raw mut action.sa_mask);
+        if libc::sigaction(libc::SIGSYS, &raw const action, std::ptr::null_mut()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// Put `signal` back to its default action, in a child before it

@@ -610,8 +610,10 @@ pub fn wait_node(node: &Node) -> Option<(Option<i32>, Option<i32>)> {
     Some((status.exit_status(), status.terminating_signal()))
 }
 
-/// The helper's own fence, once the node runs: `no_new_privs`, and only
-/// the capabilities its requests need, in every set and the bounding set.
+/// The helper's own fence, once the node runs: `no_new_privs`, only
+/// the capabilities its requests need, in every set and the bounding set,
+/// and last its seccomp allow-list ([`crate::seccomp`]), while it has one
+/// thread.
 ///
 /// # Errors
 ///
@@ -647,7 +649,8 @@ pub fn fence_self() -> Result<(), String> {
             inheritable: C::empty(),
         },
     )
-    .map_err(|e| format!("capabilities: {e}"))
+    .map_err(|e| format!("capabilities: {e}"))?;
+    crate::seccomp::install().map_err(|e| format!("seccomp: {e}"))
 }
 
 /// Kill every instance's processes at once (the node has gone).

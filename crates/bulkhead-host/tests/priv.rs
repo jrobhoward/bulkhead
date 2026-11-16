@@ -100,6 +100,47 @@ async fn helper____two_apps____each_under_a_user_of_its_own() {
     assert_eq!(reason, ExitReason::Shutdown);
 }
 
+/// A line of `/proc/<pid>/status`, its value trimmed.
+#[cfg(target_os = "linux")]
+fn proc_status(pid: u32, key: &str) -> String {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____seccomp____its_filter_and_the_runners_on_an_instance() {
+    let Some(started) = helper("helper____seccomp") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, spec("alpha")).unwrap();
+    let echo = ask(&i, "echo hello").await;
+
+    let helper = (
+        proc_status(started.pid(), "Seccomp"),
+        proc_status(started.pid(), "Seccomp_filters"),
+    );
+    let children =
+        std::fs::read_to_string(format!("/proc/{0}/task/{0}/children", started.pid())).unwrap();
+    let instances: Vec<String> = children
+        .split_whitespace()
+        .map(|pid| proc_status(pid.parse().unwrap(), "Seccomp_filters"))
+        .collect();
+
+    assert_eq!(echo, "hello");
+    // Mode 2, filtering: the helper's one filter.
+    assert_eq!(helper, ("2".to_string(), "1".to_string()));
+    // The helper's, inherited, and the runner's three.
+    assert_eq!(instances, ["4"]);
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn helper____minimal_root____the_system_hidden() {

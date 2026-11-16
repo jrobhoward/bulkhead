@@ -49,7 +49,7 @@ tokio = { workspace = true, optional = true, features = ["rt", "net", "sync"] }
 # The runner's sandbox, which is Linux only.
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { version = "0.4.7", optional = true }
-seccompiler = { version = "0.5", optional = true }
+seccompiler = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 
 # FreeBSD: `_umtx_op` for the channel's one wait on shared memory, which

@@ -570,10 +570,12 @@ dependencies = [
 name = "bulkhead-priv"
 version = "0.3.0"
 dependencies = [
+ "bulkhead-native",
  "bulkhead-priv-wire",
  "libc",
  "rstest",
  "rustix",
+ "seccompiler",
  "tempfile",
 ]
 

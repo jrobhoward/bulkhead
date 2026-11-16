@@ -16,6 +16,9 @@
 //! ROADMAP FB2). The instance's directories are shared with the app's
 //! group alone ([`share`]).
 //!
+//! Once the node runs the helper fences itself: `no_new_privs`, and on
+//! Linux nine capabilities and a seccomp allow-list ([`seccomp`]).
+//!
 //! The helper is synchronous and single-threaded, with no async runtime.
 //! Its `unsafe` code is in one module of system calls, `sys`, with safe
 //! functions over it; the rest of the crate denies `unsafe`. The wire
@@ -33,6 +36,8 @@ mod platform;
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
 mod platform;
+#[cfg(target_os = "linux")]
+pub mod seccomp;
 mod serve;
 pub mod share;
 mod socket;

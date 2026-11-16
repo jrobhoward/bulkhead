@@ -64,6 +64,13 @@ pub struct Started {
     cgroup: Option<PathBuf>,
 }
 
+impl Started {
+    /// The helper's process id.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+}
+
 impl Drop for Started {
     fn drop(&mut self) {
         // `SIGTERM` first: the helper ends its instances and removes what

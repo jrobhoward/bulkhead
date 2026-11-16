@@ -10,16 +10,25 @@ repository.workspace = true
 publish = false
 
 # Root code: synchronous, no async runtime, and nothing beyond the wire
-# format, rustix (safe system calls) and libc (the few rustix lacks: fork,
-# clone3, pdfork, execve, rctl, kqueue on process descriptors).
+# format, rustix (safe system calls), libc (the few rustix lacks: fork,
+# clone3, pdfork, execve, rctl, kqueue on process descriptors) and, on
+# Linux, seccompiler (the helper's own seccomp filter, built as the
+# runner's is).
 [dependencies]
 bulkhead-priv-wire = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true, features = ["fs", "net", "pipe", "event", "system", "thread", "param", "mount"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = { workspace = true }
+
 [dev-dependencies]
 rstest.workspace = true
 tempfile.workspace = true
+
+# The runner's seccomp list, which the helper's must cover (seccomp_tests).
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+bulkhead-native = { workspace = true, features = ["runner"] }
 
 [lints]
 workspace = true

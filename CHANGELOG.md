@@ -8,6 +8,21 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The privileged helper installs a seccomp allow-list of its own on
+  Linux (ROADMAP PS1b), after `no_new_privs` and its capabilities, once
+  the node runs (`bulkhead_priv::seccomp`, built with `seccompiler`, now
+  a workspace dependency). Instances inherit it, so it covers the
+  runner's list too (a unit test checks the runner's stays inside it);
+  it refuses the rest, among them `open_by_handle_at`, `bpf`, kernel
+  modules, `kexec`, the key calls, `perf_event_open`, `userfaultfd`, the
+  new mount API, `setns` and `unshare`. A refused call ends the helper
+  with `bulkhead-priv: system call N refused by the helper's seccomp
+  filter` and status 159; `BULKHEAD_PRIV_SECCOMP_LOG=1` logs such calls
+  and allows them, for a test machine. Checked as root on Ubuntu 26.04
+  (x86-64): the helper's tests (a new one reads the filters from
+  `/proc`), the conformance suite under the helper and
+  `scripts/priv-e2e-systemd.sh`. Not yet checked on aarch64.
+
 - CI runs the test suite on FreeBSD 15 (ROADMAP FB3, step 3): a
   `test (freebsd-15)` job runs `scripts/check.sh test` in a FreeBSD VM on
   GitHub's Linux runner (`vmactions/freebsd-vm` 1.6.0, pinned by commit),

@@ -205,7 +205,11 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   its app's, in a cgroup, namespaces and a minimal root (Linux) or a
   jail with `rctl` rules (FreeBSD). Synchronous, no tokio; all
   its `unsafe` in `sys` (the crate denies it elsewhere); every check from
-  its own configuration, never the node's. `crates/bulkhead-priv-wire`
+  its own configuration, never the node's. On Linux its own seccomp
+  allow-list (`seccomp.rs`, PS1b) is inherited by every instance, so it
+  covers the runner's list (`bulkhead-native`'s `runner/seccomp.rs`):
+  a call added there goes in the helper's `INSTANCE` too, or
+  `seccomp_tests` fails. `crates/bulkhead-priv-wire`
   is the message format it shares with the node (`forbid(unsafe_code)`,
   fuzzed as `priv_request`); `bulkhead-host`'s `src/native/helper.rs` is
   the node's side. Its tests that start real processes run as root on
