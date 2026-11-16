@@ -80,7 +80,7 @@ flowchart LR
 ```
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
-- **Next:** Phase 6's items: FB3 (the node tests on FreeBSD, which FB6's bundles made possible on 2026-11-15), PS1b and PS3b; PS1c and the ARM baselines wait for the Raspberry Pi 5's drive (it logged read errors on 2026-11-15). Phase 7's moves are done (DA8, 2026-11-15, removed the last way for code from outside to run in the node); its threads (DA2b, DA3b, DA4b, DA5b) wait for a need. DA3b or DA4b's threads first if a datasource needs more than about 20,000 statements a second on 16 cores (5,000 on the Pi), or an app more than about 40,000 HTTP requests a second (15,000 on the Pi).
+- **Next:** Phase 6's items: PS1b and PS3b (FB3 put the test suite on FreeBSD and in CI there on 2026-11-16); PS1c and the ARM baselines wait for the Raspberry Pi 5's drive (it logged read errors on 2026-11-15). Phase 7's moves are done (DA8, 2026-11-15, removed the last way for code from outside to run in the node); its threads (DA2b, DA3b, DA4b, DA5b) wait for a need. DA3b or DA4b's threads first if a datasource needs more than about 20,000 statements a second on 16 cores (5,000 on the Pi), or an app more than about 40,000 HTTP requests a second (15,000 on the Pi).
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
 - **Disaster recovery in parallel** with Phases 6 and 7: it touches replication, failover and the transport, which they do not. Its model (S38) comes first, under V1. Shipping volumes (DR6) waits for ZFS volumes.
@@ -93,7 +93,7 @@ flowchart LR
 
 ## Phase 6: a hardened core
 
-Exit: on Linux and FreeBSD, every app's instances run under a user of their own, started by the privileged helper, with the node unprivileged, holding no capabilities and not dumpable; Linux apps run under a seccomp allow-list (done 2026-11-11) and FreeBSD apps in a jail in capability mode; an app past the misbehaviour policy is killed and then quarantined; CPU is limited per app; the board, scada and failover node tests pass on both systems in CI, and the scada soak passes an hour on the 16-core machine, the Raspberry Pi 5 and a FreeBSD machine.
+Exit: on Linux and FreeBSD, every app's instances run under a user of their own, started by the privileged helper, with the node unprivileged, holding no capabilities and not dumpable; Linux apps run under a seccomp allow-list (done 2026-11-11) and FreeBSD apps in a jail in capability mode; an app past the misbehaviour policy is killed and then quarantined; CPU is limited per app; the board, scada and failover node tests pass on both systems in CI (the whole suite since FB3, 2026-11-16; CI's first FreeBSD run comes with that push), and the scada soak passes an hour on the 16-core machine, the Raspberry Pi 5 and a FreeBSD machine.
 
 ### 6a: privilege separation
 
@@ -112,7 +112,7 @@ Items:
 
 ### 6b: FreeBSD
 
-Since FB1 (2026-11-11) the node runs native apps on FreeBSD: the port, the rings and published snapshots (sealed memfds, which FreeBSD makes as anonymous shared memory objects), the parent-death signal, the lease watchdog, the node's fence and the listener's idle timeout, with what differs in `native/os`. Checked on the FreeBSD 15 VM: the native conformance suite (42 cases), the listener tests, and every other `bulkhead-host` integration test once its gate is widened, but the six that test the runner's sandbox. What is still Linux-only: cgroups, bundle platforms, rustbridge plugins, the test gates and CI. Since FB2's first half (2026-11-12) the runner fences an app with Capsicum there (SECURITY.md, "FreeBSD"). PB5 ran apps in jails with Capsicum on FreeBSD 15 (2026-10-31) and found:
+Since FB1 (2026-11-11) the node runs native apps on FreeBSD: the port, the rings and published snapshots (sealed memfds, which FreeBSD makes as anonymous shared memory objects), the parent-death signal, the lease watchdog, the node's fence and the listener's idle timeout, with what differs in `native/os`. Checked on the FreeBSD 15 VM: the native conformance suite (42 cases), the listener tests, and every other `bulkhead-host` integration test once its gate is widened, but the six that test the runner's sandbox. What is still Linux-only: cgroups (under the helper a jail's `rctl` rules stand in) and rustbridge plugins; bundles for FreeBSD came with FB6 (2026-11-15), and the test gates and CI with FB3 (2026-11-16: the whole suite passes on FreeBSD 15, and CI runs it there on every push, in place of macOS). Since FB2's first half (2026-11-12) the runner fences an app with Capsicum there (SECURITY.md, "FreeBSD"). PB5 ran apps in jails with Capsicum on FreeBSD 15 (2026-10-31) and found:
 - Capsicum rights survive an fdescfs reopen.
 - Jails that share a root path share POSIX shared memory, so each app needs a root of its own.
 - kvmclock needs `/dev/pvclock`, or clock reads become system calls.
@@ -121,7 +121,6 @@ Since FB1 (2026-11-11) the node runs native apps on FreeBSD: the port, the rings
 
 Items:
 
-- [ ] **FB3 Tests and CI on FreeBSD** (M). The Linux gates reviewed: most become "a system with a runner" (FB1 widened `conformance.rs` and `listener.rs`; FB2 widened `native.rs`, `native_sockets.rs`, `services.rs` and `drivers.rs`, which pass on the FreeBSD VM with per-system assertions); CI gains a FreeBSD job (a FreeBSD VM on GitHub's runners) running `scripts/check.sh test`, and drops macOS from the matrix. Areas: tests, CI.
 - [ ] **FB4 A FreeBSD machine for benchmarks and soaks** (S; hardware). The VM shares the 16-core machine's cores and is for function checks only. First-class needs an idle bare-metal FreeBSD machine (amd64; whether FreeBSD runs well enough on a Raspberry Pi 5 to be the aarch64 one, to be checked) for BASELINE.md and the hour-long soaks.
 - [ ] **FB5 The rest on FreeBSD** (S). The serial heartbeat (the tty layer is on `rustix`), probes through DTrace (anyprobe's USDT), a cluster mixing a Linux and a FreeBSD node, the tutorial's scripts. Areas: tests, docs.
 

@@ -1,4 +1,4 @@
-//! The SDK examples end to end (Linux): built, keyed and bundled with the
+//! The SDK examples end to end (Linux and FreeBSD): built, keyed and bundled with the
 //! `bulkhead` binary, deployed to a node, and driven through the CLI.
 
 #![cfg(unix)]

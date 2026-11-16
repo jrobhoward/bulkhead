@@ -18,8 +18,8 @@ a restricted native process, with Erlang/OTP-style semantics:
 
 - **Apps** implement a `gen_server`-style set of callbacks and receive
   messages one at a time. Each instance is one long-lived OS process
-  (Linux), started through `bulkhead-runner`, which fences it with
-  Landlock and seccomp before the app's code runs; it talks to its node
+  (Linux or FreeBSD), started through `bulkhead-runner`, which fences it
+  with Landlock and seccomp (Capsicum on FreeBSD) before the app's code runs; it talks to its node
   through rings in shared memory, each side spinning briefly before it
   sleeps, so a request to the node costs 4 to 5 µs and a call between
   instances 13 µs. Instances are meant to live long and pass messages and
@@ -104,7 +104,7 @@ is released.
 ## Building
 
 Rust 1.99.0 or newer. A node runs native apps through `bulkhead-runner`
-(Linux), by default the one beside the `bulkhead` executable, so build the
+(Linux and FreeBSD), by default the one beside the `bulkhead` executable, so build the
 two together:
 
 ```sh
@@ -126,8 +126,9 @@ driver, built beside it), HTTPS and the remote admin API
 
 ## Running a node
 
-A node runs apps on Linux (and FreeBSD, without the runner's sandbox
-there yet): each is a process started through `bulkhead-runner`. The
+A node runs apps on Linux and FreeBSD, each a process started through
+`bulkhead-runner` (Landlock and seccomp on Linux, Capsicum on FreeBSD);
+CI runs the test suite on both. The
 CLI runs anywhere, and reaches a node's remote admin API (`[admin]` in node
 config) with `--remote`. A minimal `node.toml`:
 

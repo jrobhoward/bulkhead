@@ -2,6 +2,10 @@
 
 Where a node keeps its files, what it reads from the environment, what to back up, and how to run it as a service. Node configuration keys are in [MANIFEST.md](MANIFEST.md); the build features are in the [README](../README.md#building).
 
+## Systems
+
+A node runs on Linux, on x86-64 and aarch64, and on FreeBSD 15 on x86-64 (`freebsd-aarch64` is a bundle platform, not yet tested). Apps run under `bulkhead-runner` on both: Landlock and a seccomp allow-list on Linux, Capsicum on FreeBSD, and under the privileged helper a user of their own, in a cgroup and namespaces or a jail. CI runs the whole test suite on Linux (x86-64 and aarch64) and on FreeBSD 15 (x86-64, in a virtual machine); the helper's root tests run on test machines of both systems. What differs on FreeBSD: `memory_max` counts an instance's whole address space, so it needs room for the 17 MiB or so an app reserves at start ([MANIFEST.md](MANIFEST.md)); rustbridge plugins are refused (an app is an executable); rc.d starts the node under the helper with [`examples/freebsd/bulkhead`](../examples/freebsd/bulkhead). The CLI also builds elsewhere, with no node.
+
 ## Paths
 
 A node reads its configuration, keys and policy from wherever its config file names them (`/etc/bulkhead` by convention), and writes only under `data_dir` (`/var/lib/bulkhead` by convention). Logs go to stderr; there are no log files.

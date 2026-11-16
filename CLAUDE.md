@@ -38,7 +38,8 @@ logins or addresses from it into tracked files or commit messages.
 ```bash
 # Every check below as one command, one line of result per check; logs in
 # target/check/. `--quick` runs fmt, clippy, conventions and the tests; named
-# checks run alone (`--list`). CI calls the same script.
+# checks run alone (`--list`). CI calls the same script, `test` on Linux
+# (x86-64, aarch64) and in a FreeBSD 15 VM.
 scripts/check.sh
 scripts/check.sh --quick
 scripts/check.sh clippy conventions
@@ -440,6 +441,16 @@ integrity, not authorship (S6). Use `verify_manifest_signature_trusted` and
 one build, so each feature combination (counter v1/v2/v3, services with and
 without `denied`) builds into its own `target/fixtures/<name>` directory, and
 test binaries that build the same set share a directory.
+
+**Tests run wherever native apps run.** A test that starts a native app is
+gated `#![cfg(any(target_os = "linux", target_os = "freebsd"))]`, or skips at
+run time saying "not Linux or FreeBSD"; one gated to a single system says why
+beside its gate (rustbridge plugins, `/proc`, seccomp and Landlock). Where
+FreeBSD answers differently (capability mode's refusals, `memory_max` as the
+whole address space, no `/proc`), the test asserts per system rather than
+narrowing its gate. CI's FreeBSD job catches a regression after a push; run
+the changed test files on the FreeBSD test machine (`CLAUDE.local.md`)
+before staging a change to the runner, the channel or `native/os`.
 
 **Unix socket paths are short.** About 107 bytes on Linux and 103 on macOS;
 the node refuses a longer `admin_socket` with a message saying so, and tests

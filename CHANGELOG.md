@@ -8,6 +8,16 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- CI runs the test suite on FreeBSD 15 (ROADMAP FB3, step 3): a
+  `test (freebsd-15)` job runs `scripts/check.sh test` in a FreeBSD VM on
+  GitHub's Linux runner (`vmactions/freebsd-vm` 1.6.0, pinned by commit),
+  as an unprivileged user with Postgres installed; macOS leaves the test
+  matrix, as it runs no native app. `scripts/check.sh test` runs the
+  native conformance suite on FreeBSD too. The docs say where the suite
+  runs (README.md, OPERATIONS.md's new "Systems", DESIGN.md, SECURITY.md),
+  and CLAUDE.md the rule for test gates: a test that starts a native app
+  runs on Linux and FreeBSD, asserting per system where they differ.
+
 - Tests that start `bulkhead node` as a process (`board.rs` and others
   through `tests/common`'s `runner_config`) build `bulkhead-resolve`
   themselves: they relied on another test binary having built it, and

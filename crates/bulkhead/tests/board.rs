@@ -3,7 +3,7 @@
 //! bucket; a crash restarts the instance and the count survives it, the
 //! watcher logs each change, and the count survives a node restart.
 //!
-//! The tests run on Linux, and pass with a note elsewhere.
+//! The tests run on Linux and FreeBSD, and pass with a note elsewhere.
 
 #![cfg(unix)]
 #![allow(non_snake_case)]

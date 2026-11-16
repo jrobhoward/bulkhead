@@ -12,7 +12,7 @@
 //! standby's table comes from it, and `control`'s replicated alarms keep
 //! an acknowledgement through a planned switchover.
 //!
-//! Both run the apps as native programs, so on Linux only.
+//! Both run the apps as native programs, so on Linux and FreeBSD only.
 
 #![cfg(unix)]
 #![allow(non_snake_case)]
@@ -45,7 +45,7 @@ const APPS: [&str; 3] = [
     "example-scada-control",
 ];
 
-/// Whether the apps run here: on Linux only.
+/// Whether the apps run here: on Linux and FreeBSD.
 fn runs() -> bool {
     let runs = cfg!(any(target_os = "linux", target_os = "freebsd"));
     if !runs {
