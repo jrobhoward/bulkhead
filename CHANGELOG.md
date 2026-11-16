@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The `Extension` trait's removal documented (ROADMAP DA8, step 3):
+  DESIGN.md (no service from outside the node; what stays of
+  extensions), MANIFEST.md (`extensions` and `[extensions]` take Modbus's
+  package alone), WRITING_APPS.md ("A service as an app"), SECURITY.md
+  (the extension trust row and parser row), ARCHITECTURE.md,
+  GLOSSARY.md, README.md and CLAUDE.md; ROADMAP: DA8 done, Next FB6.
+
 - The `Extension` trait removed (ROADMAP DA8, steps 1 and 2): no code from
   outside Bulkhead runs in the node. Gone: `bulkhead_host::services`'
   `Extension`, `ExtensionApp`, `ExtensionNode`, `NativeCall`,

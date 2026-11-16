@@ -278,9 +278,11 @@ The SDK's cargo features turn each wrapper on: `config`, `keyvalue`, `watch`, `g
 
 Always available without a declaration: clocks, random, stdout and stderr (captured as log records), `bulkhead:runtime/process`, and `bulkhead:io` (readiness of pollables).
 
-### Extensions
+### A service as an app
 
-An extension is a host service an operator builds into a node from outside Bulkhead ([`examples/greeter`](../examples/greeter/README.md)), serving one package. Declare it under `capabilities.extensions."<package>"` with the table it reads; the operator grants it by package name. An app calls its functions through the node with `bulkhead_sdk::extension::call(package, "greet#hello", &(name,))`: the function by name, the parameters as a tuple, and the result decoded from CBOR. A client module gives the functions their names and types; `examples/greeter/app/src/greeting.rs` is one, and `bulkhead-modbus-client` is Modbus's (`bulkhead_modbus_client::client::write_holding(...)`), whose calls the node checks and forwards to the Modbus drivers.
+A service one app offers others is itself an app ([`examples/greeter`](../examples/greeter/README.md)): it answers typed calls, and a client module in its crate gives callers a function per request, which calls the app by name with `ctx.call_app("greeter", msg, timeout)`, so the node picks the instance by the app's routing. The service lists its callers in `messaging_acl.accept_from` and each caller lists the service in `may_call`; a refused call fails with `access-denied`. The service declares the capabilities it uses, and the operator grants them to it alone. Until ROADMAP DA8 such a service could be an extension built into the node; no code from outside Bulkhead runs in the node now.
+
+Modbus is the one package an app calls through the node by name (`capabilities.extensions."bulkhead-modbus:modbus"`): `bulkhead-modbus-client` gives its functions their names and types (`bulkhead_modbus_client::client::write_holding(...)`), and the node checks each call and forwards it to the Modbus drivers.
 
 ### Replicated buckets
 

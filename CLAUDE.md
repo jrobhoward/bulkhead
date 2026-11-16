@@ -130,10 +130,10 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   conformance suite's native mode runs it.
 - `examples/`: apps written with the SDK, each with a `bulkhead.toml`.
   `bulkhead`'s `tests/examples.rs` builds, bundles, deploys and drives them.
-  `examples/greeter/` is an extension (a host service from outside
-  Bulkhead): `service` depends on `bulkhead-host` alone, `app` calls it
-  (through its client module `src/greeting.rs`), and
-  `node` is a node binary with it, whose test runs all three.
+  `examples/greeter/` is a service as an app (ROADMAP DA8 removed host
+  extensions): `service` is the `greeter` app with its client module
+  (`src/client.rs`), `app` is `greeted`, calling it under messaging ACLs
+  (`stranger.toml`, refused); `tests/examples.rs` runs them.
   `examples/board` is the tutorial's app (a counter on a shared disk
   bucket over HTTP; `bulkhead.toml`, `watch.toml` and `hot-standby.toml`, one
   program), run by `crates/bulkhead/tests/board.rs`.

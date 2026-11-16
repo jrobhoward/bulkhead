@@ -13,7 +13,6 @@ flowchart TD
     host["bulkhead-host<br/>runtime, process core, services, supervisors,<br/>transport, failover, replication, routes, listeners, native"]
     bundle["bulkhead-bundle<br/>manifest, .rbp, verify, policy, grant"]
     native["bulkhead-native<br/>protocol, channel, snapshot, app, bulkhead-runner"]
-    ext["extensions<br/>greeter service"]
     guests["apps (programs)<br/>bulkhead-sdk, fixtures, examples"]
     napps["native apps<br/>rustbridge plugins, executables<br/>on bulkhead-native's app API"]
     helper["bulkhead-priv (bin, root)<br/>starts the node and each instance"]
@@ -27,7 +26,6 @@ flowchart TD
     bulkhead --> bundle
     host --> bundle
     host -->|"protocol, channel, snapshot"| native
-    ext -->|"Extension trait"| host
     guests -.->|"frames on a channel"| host
     napps -.->|"run by bulkhead-runner"| native
     host -->|"[priv]"| wire
@@ -67,7 +65,7 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-sdk`, `bulkhead-sdk-macros` | app libraries | The Rust SDK: the `App` trait, envelopes, snapshots, service wrappers by feature. Its functions go over `bulkhead-native`'s protocol, and `app!` generates `bulkhead_main()`. |
 | `bulkhead-fixture-*` | test apps | Programs on the SDK (counter in three versions, sdk, conn, net, conformance, kvbench, msgbench), an executable on the app API (`native`) and a rustbridge plugin (`plugin`). |
 | `bulkhead-soak` | binary | Fault injection against `bulkhead node` processes (`scripts/soak.sh`): failover, replication and the SCADA release cycle. |
-| `examples/*` | apps and scripts | SDK examples, the tutorial's apps, the SCADA reference app, the greeter extension, the failover demo, systemd units. |
+| `examples/*` | apps and scripts | SDK examples, the tutorial's apps, the SCADA reference app, the greeter (a service as an app), the failover demo, systemd units. |
 
 Code areas and their interfaces are listed in ROADMAP.md, "Code areas".
 

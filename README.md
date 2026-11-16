@@ -172,8 +172,8 @@ set `admin_socket` if `data_dir` is long.
 
 Apps are written with `bulkhead-sdk` and built as native programs; see [`examples/`](examples/): `counter` and `ping-pong` to start, `http-counter`,
 `board` (state in a shared disk bucket), `ledger` (a replicated bucket),
-`tally` (Postgres), `line-server` (a connection handler), `greeter` (a host
-extension built into a node) and `scada`, the reference app.
+`tally` (Postgres), `line-server` (a connection handler), `greeter` (a
+service as an app, with a client module) and `scada`, the reference app.
 
 ```rust
 use bulkhead_sdk::{App, CallRef, Ctx, Envelope, Reply};
