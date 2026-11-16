@@ -183,6 +183,16 @@ Since ROADMAP DA4 (2026-11-15) the node sends no app's HTTP request itself: for 
 - **Metrics:** `bulkhead_egress_connections_total` from the driver, labelled `for` (OBSERVABILITY.md), beside the node's `bulkhead_egress_requests_total`.
 - **Cost.** A request through the driver takes 20 to 50 µs longer on 16 cores and 80 to 90 µs on a Raspberry Pi 5 than through the node's own pool did; 16 instances of one app at once get four fifths of the requests a second on 16 cores and two fifths on the Pi (about 15,000), since the driver runs every connection on one thread; a 1 MiB response takes 1.6 to 2.8 ms more (BASELINE.md, 2026-11-15; ROADMAP DA4b).
 
+## Modbus
+
+Since ROADMAP DA5 (2026-11-15) the node parses no Modbus: from `[extensions."bulkhead-modbus:modbus"]`, unchanged (MANIFEST.md), it starts drivers that poll the devices and serve masters (DESIGN.md, "Host services"; SECURITY.md, "Modbus"). Apps, manifests and `bulkhead-modbus-client` are unchanged.
+
+- **Install** `bulkhead-modbus` and `bulkhead-modbus-server` beside `bulkhead-runner` (`cargo build --release -p bulkhead-modbus`), or name them in `[native] modbus` and `modbus_server`. A node with Modbus devices or a server and no such programs refuses to start. The node's `modbus` cargo feature is gone: `bulkhead` no longer needs building with it.
+- **Which drivers run:** `bulkhead-modbus` for the devices, `bulkhead-modbus-primary` (a singleton: on an HA pair, the primary alone while its lease holds) for `primary_only` devices, `bulkhead-modbus-server` for the server; each one instance, restarted when it exits, listed by `bulkhead ps`, its log lines under its name. A witness starts none. The names are reserved for bundles and `[drivers.<app>]`.
+- **Connections and ports:** each driver opens nothing itself. The node connects the devices' driver to each device's `address`, and binds the server's `listen` and passes it, so the port stays open while its driver restarts. Under the privileged helper each driver runs as a user of its own.
+- **Logs:** a device going offline or back is logged by its driver. The node's old "modbus polling paused/resumed" lines are gone: whether `primary_only` devices are polled follows whether the singleton runs (`bulkhead ps`).
+- **Cost:** 5 to 7% more CPU per update where the receiving pool keeps up, and far more updates stored where it does not (BASELINE.md, 2026-11-15).
+
 ## Blobs
 
 Since ROADMAP BL1 (2026-11-15) apps granted `bulkhead:blobs` pass data to each other as blobs: memory the node makes, one app fills and apps it shares it with read (DESIGN.md, "Blobs"; MANIFEST.md).

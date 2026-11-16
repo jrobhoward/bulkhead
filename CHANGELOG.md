@@ -8,6 +8,15 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Modbus outside the node, documented (ROADMAP DA5, step 6): DESIGN.md
+  (Modbus as drivers; protocols from outside all moved), SECURITY.md
+  (the drivers' trust row, the Modbus boundary, the parser row moved),
+  OPERATIONS.md ("Modbus": installing the drivers, the singleton, the
+  server's port, the `modbus` feature gone), MANIFEST.md,
+  GUEST_FORMATS.md, WRITING_APPS.md, ARCHITECTURE.md, GLOSSARY.md,
+  README.md and CLAUDE.md; ROADMAP: DA5 done, DA5b for what it left,
+  CR1's Modbus part done, Phase 7's exit met, Next DA8.
+
 - Modbus measured (ROADMAP DA5, step 5): `modbus_load`, the native
   successor of the WebAssembly-era harness (`bulkhead-modbus`'s example),
   counting updates from the node's counters; before (the in-node

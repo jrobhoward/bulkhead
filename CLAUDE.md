@@ -57,7 +57,7 @@ cargo llvm-cov --workspace --no-fail-fast --summary-only
 # Debug and test builds carry line tables only (backtraces keep file and
 # line); `CARGO_PROFILE_DEV_DEBUG=true` for a debugger's variables.
 # Build and test the main workspace. `bulkhead`'s features: `node`, `http`,
-# `tls`, `sql`, `egress` and `probes` by default; `modbus` off. Each optional
+# `tls`, `sql`, `egress` and `probes` by default. Each optional
 # one compiles out (`scripts/check.sh features`).
 cargo build --workspace --all-targets
 cargo test --workspace --all-features
@@ -271,10 +271,16 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   redb file; `mod.rs` the task around them. The rules are S20's R1 to R7
   and R13 in `docs/tla/VERIFICATION.md`; `tests/simulation/replication.rs`
   checks that no acknowledged write is lost under single faults.
-- `crates/bulkhead-modbus`: the Modbus TCP extension (`bulkhead-modbus:modbus`),
-  depending on `bulkhead-host` alone; linked into
-  `bulkhead node` by `bulkhead`'s `modbus` feature (off by default). Device tasks,
-  change detection and the update format (`points`), the server.
+- `crates/bulkhead-modbus`: Modbus TCP as drivers (ROADMAP DA5), the
+  binaries `bulkhead-modbus` (devices; also run as the singleton
+  `bulkhead-modbus-primary` for `primary_only` ones) and
+  `bulkhead-modbus-server`, started by
+  `crates/bulkhead/src/node/daemon/modbus.rs` from
+  `[extensions."bulkhead-modbus:modbus"]`; apps' calls are checked and
+  forwarded by `crates/bulkhead-host/src/services/modbus.rs`. Device tasks,
+  change detection and the update format (`points`), the server, the
+  forwarded calls (`calls`); `tests/drivers.rs` runs both drivers on a
+  host runtime, `examples/modbus_load.rs` measures them.
   `examples/scada` is its demo and Phase 3's reference app (`points` pool,
   `hmi` HTTP pool, `control` singleton in two versions, `drill.sh`, the
   release drill on a pair and a witness); `crates/bulkhead/tests/scada.rs`

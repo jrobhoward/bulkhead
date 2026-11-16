@@ -24,7 +24,7 @@ Two words have more than one meaning:
 - **App set:** the apps on a node, started in dependency order.
 - **Placement:** where an app's instances run in a cluster: `any`, `singleton` (one instance in the cluster; on an HA pair, on the primary only), `all-nodes`, or `hot-standby` (on both pair nodes, each told its role). [MANIFEST.md](MANIFEST.md).
 - **Singleton:** an app with `placement.mode = "singleton"`.
-- **Extension:** a host service from a crate outside `bulkhead-host` (`bulkhead-modbus`, the greeter example), linked into a node binary. Apps call its functions through the node (`Extension::call`).
+- **Extension:** a host service from a crate outside `bulkhead-host` (the greeter example), linked into a node binary. Apps call its functions through the node (`Extension::call`).
 - **Hot standby:** an app with `placement.mode = "hot-standby"`: an instance on both nodes of an HA pair, each told its role (`failover-role` host event), for an app that keeps a warm copy and takes over itself.
 - **Driver app:** an app, deployed as any, that node config `[drivers.<app>]` gives listening sockets the node binds and keeps, files to read and the apps it may call, so it serves a protocol (HTTP first) in its own process instead of the node (ROADMAP Phase 7, DA1). [MANIFEST.md](MANIFEST.md), [SECURITY.md](SECURITY.md).
 - **Sender (sender channel):** a channel of its own through which one of a native app's threads asks the node at any time, not only the callback thread during a callback (`Ctx::sender`, ROADMAP AP1). Up to `limits.senders_max` per instance. [DESIGN.md](DESIGN.md), "App model"; [WRITING_APPS.md](WRITING_APPS.md).

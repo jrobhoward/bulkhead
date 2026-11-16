@@ -140,7 +140,7 @@ The JSON objects' keys come in any order.
 
 ## Modbus updates
 
-The Modbus extension (`bulkhead-modbus`, off by default) casts to the app its configuration names: content type `application/cbor`, no schema, a CBOR map:
+The Modbus devices' driver (`bulkhead-modbus`, ROADMAP DA5) casts to the app its configuration names (`Request::CastApp`, routed by the app's routing): content type `application/cbor`, no schema, a CBOR map:
 
 | Key | Type | What |
 | --- | --- | --- |

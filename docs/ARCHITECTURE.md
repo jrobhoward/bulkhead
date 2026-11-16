@@ -13,7 +13,7 @@ flowchart TD
     host["bulkhead-host<br/>runtime, process core, services, supervisors,<br/>transport, failover, replication, routes, listeners, native"]
     bundle["bulkhead-bundle<br/>manifest, .rbp, verify, policy, grant"]
     native["bulkhead-native<br/>protocol, channel, snapshot, app, bulkhead-runner"]
-    ext["extensions<br/>bulkhead-modbus, greeter service"]
+    ext["extensions<br/>greeter service"]
     guests["apps (programs)<br/>bulkhead-sdk, fixtures, examples"]
     napps["native apps<br/>rustbridge plugins, executables<br/>on bulkhead-native's app API"]
     helper["bulkhead-priv (bin, root)<br/>starts the node and each instance"]
@@ -22,9 +22,9 @@ flowchart TD
     resolve["bulkhead-resolve (bin)<br/>the resolver driver: hickory-resolver"]
     sql["bulkhead-sql (bin)<br/>a datasource's driver: tokio-postgres, deadpool"]
     egress["bulkhead-egress (bin)<br/>an app's egress driver: hyper-util, rustls"]
+    modbus["bulkhead-modbus (bins)<br/>the Modbus drivers: tokio-modbus"]
     bulkhead --> host
     bulkhead --> bundle
-    bulkhead -->|"modbus feature"| ext
     host --> bundle
     host -->|"protocol, channel, snapshot"| native
     ext -->|"Extension trait"| host
@@ -39,8 +39,10 @@ flowchart TD
     bulkhead -.->|"starts for [http]"| ingress
     sql -->|"SDK, sender_async"| guests
     egress -->|"SDK, sender_async"| guests
+    modbus -->|"SDK, sender_async"| guests
     bulkhead -.->|"starts per [datasources.name]"| sql
     bulkhead -.->|"starts per app granted http-egress"| egress
+    bulkhead -.->|"starts with Modbus configured"| modbus
 ```
 
 Solid arrows point from a crate to the crates it depends on; dotted arrows are what runs on the host, not Cargo dependencies.
@@ -60,8 +62,8 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-egress` | library and `bulkhead-egress` | An app's HTTP client as a driver (ROADMAP DA4): an SDK app the node starts as `bulkhead-egress-<app>` for each app granted `bulkhead:http-egress`; `config` (the node's init arguments: timeouts, the pool, the body cap, the roots as PEM), `request` (`EgressRequest`, the schema), `client` (hyper-util's pool with hyper-rustls over streams the node connects per destination, `Request::ConnectTo`; the timeouts, the body cap, error classes), `driver` (the callback thread handing calls to a worker thread with a tokio runtime and a sender channel, which answers each with `Request::Reply`). No node crate depends on it, and `bulkhead-host` has no HTTP client (`scripts/check.sh deps`). |
 | `bulkhead-keys` | library | Pinned Ed25519 keys (nodes', operators'), TLS 1.3 with raw public keys, the operators file, and the remote admin request signature; shared by the node, the CLI and the admin driver, no tokio. |
 | `bulkhead-metrics` | library and `bulkhead-metrics` | The metrics endpoint as a driver (DA7): hyper serving `GET /metrics`, the text asked of the node (`Request::MetricsText`). |
-| `bulkhead-modbus` | library | The Modbus TCP extension; depends on `bulkhead-host` alone. |
-| `bulkhead-modbus-client` | app library | Apps' client for the Modbus extension: calls through the node (`bulkhead_sdk::extension`). |
+| `bulkhead-modbus` | library, `bulkhead-modbus` and `bulkhead-modbus-server` | Modbus TCP as drivers (ROADMAP DA5): SDK apps the node starts from `[extensions."bulkhead-modbus:modbus"]`; `config`, `device` (a task per device over a stream the node connects, `Request::ConnectTo`), `points` (change detection, the update format), `server` (tokio-modbus's server on the listener the node passes), `calls` (the calls the node forwards), `driver` (`Devices`, `Server`: a worker thread with a tokio runtime and a sender channel; updates cast with `Request::CastApp`). No node crate depends on it (`scripts/check.sh deps`). |
+| `bulkhead-modbus-client` | app library | Apps' client for Modbus: calls through the node (`bulkhead_sdk::extension`), which checks them (`services::modbus`) and forwards them to the drivers. |
 | `bulkhead-sdk`, `bulkhead-sdk-macros` | app libraries | The Rust SDK: the `App` trait, envelopes, snapshots, service wrappers by feature. Its functions go over `bulkhead-native`'s protocol, and `app!` generates `bulkhead_main()`. |
 | `bulkhead-fixture-*` | test apps | Programs on the SDK (counter in three versions, sdk, conn, net, conformance, kvbench, msgbench), an executable on the app API (`native`) and a rustbridge plugin (`plugin`). |
 | `bulkhead-soak` | binary | Fault injection against `bulkhead node` processes (`scripts/soak.sh`): failover, replication and the SCADA release cycle. |
@@ -76,7 +78,7 @@ Code areas and their interfaces are listed in ROADMAP.md, "Code areas".
 | Engine | `runtime`, `config` | `Runtime` and its `RuntimeInner`: the configuration, the process table, the services and the transport |
 | Process core | `pid`, `table`, `registry`, `links`, `message`, `instance`, `instance_native`, `state`, `process`, `delivery`, `acl`, `lifecycle`, `output`, `health` | Instances, their mailboxes and callback loop, the per-instance host state and `process` functions, pid routing, messaging ACLs (checked on the target's node), links and monitors, health checks |
 | Orchestration | `apps`, `pool`, `supervisor`, `upgrade`, `spec` | App sets in dependency order, a root supervisor per app, pools with routing and a blue-green second side, snapshot, restart and blue-green upgrades |
-| Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, blobs, extension}`, `metrics`, `names` | What apps reach, on the `Service` pattern; extensions from other crates; `names` (`Names`, `RuntimeConfig::resolver`), host names to addresses for sockets, egress and SQL connections, through the resolver driver |
+| Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, blobs, modbus, extension}`, `metrics`, `names` | What apps reach, on the `Service` pattern; extensions from other crates; `names` (`Names`, `RuntimeConfig::resolver`), host names to addresses for sockets, egress and SQL connections, through the resolver driver |
 | I/O | `routes`, `listener` | The HTTP route table the ingress driver serves (set by the node, sent as the `routes` event, its owners the apps the driver may call), and listeners (connections passed to the app's instances, many each) |
 | Native apps | `native::{port, cgroup, memory, convert, os, helper}`, `in_process` (feature `test-apps`) | An instance's process through `bulkhead-runner`, its limits, memory reporting and the conversions to the protocol's types; `native::os`, what differs between Linux and FreeBSD (a module per system); `native::helper`, the node's connection to the privileged helper, which starts the process instead under `[priv]`; apps that run in the instance's task for tests |
 | Cluster | `transport::{liveness, membership, wire, quic, memory, lane}`, `failover::{node, witness}`, `replication::{core, log}`, `handover`, `formats` | Frames between nodes, heartbeats and sessions, joining, QUIC with pinned keys, the in-memory mesh for tests, the HA pair and witness, replicated buckets, singletons moved with their state, the pair's version for what is kept |
@@ -457,7 +459,7 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Resolver files' reload | 1 per member node with `[resolver] reload_s` | daemon (`resolve.rs`) | stop |
 | A datasource's driver (an OS process, `bulkhead-sql-<name>`): its callback thread, and a worker thread with a tokio runtime running the pool, a task per request and per connection | 1 per `[datasources.<name>]` on a member node | daemon (`sql.rs`), as a native instance, after a first instance started on its own | the node's stop |
 | Gate follower | 1 on a pair member | daemon | stop |
-| Modbus device, server | 1 per device; 1 per server | `bulkhead-modbus` | stop |
+| The Modbus drivers (OS processes, `bulkhead-modbus`, `bulkhead-modbus-primary` as a singleton, `bulkhead-modbus-server`): a callback thread, and a worker thread with a tokio runtime running a task per device or per master's connection | 1 each configured, on a member node | daemon (`modbus.rs`), as native instances, before the apps | the node's stop |
 
 ## Where state lives
 

@@ -210,7 +210,7 @@ if let Some(points) = batch::items::<Point>(&msg) {
 - A batch is one message: it counts once against the receiver's mailbox, and a full mailbox drops it whole, unless the app sends it with `cast_timeout`. Keep `max_bytes` well under the receiver's `limits.message_max_bytes`.
 - Batch per destination, not per app: with `instances.routing = "hash:..."`, keep items that must stay in order on one key in one batch to one instance.
 - Items buffered when the sender exits are lost, as unsent casts would be.
-- Protocol extensions already batch: the Modbus extension sends one update per device and scan with every point that changed.
+- Protocol drivers already batch: the Modbus driver sends one update per device and scan with every point that changed.
 - A pool writing into one shared bucket does not get faster with more instances. Writes to a bucket take turns, so past a few writers more instances add contention: with 64 devices polled every millisecond, a pool of 4 stored more updates than a pool of 8 on the same bucket (`modbus_load`, [BASELINE.md](BASELINE.md), 2026-10-16). Keep the writing pool small, batch each update into one write, or give groups of devices buckets of their own.
 
 ## State across upgrades
@@ -280,7 +280,7 @@ Always available without a declaration: clocks, random, stdout and stderr (captu
 
 ### Extensions
 
-An extension is a host service an operator builds into a node from outside Bulkhead (the Modbus extension, [`examples/greeter`](../examples/greeter/README.md)), serving one package. Declare it under `capabilities.extensions."<package>"` with the table it reads; the operator grants it by package name. An app calls its functions through the node with `bulkhead_sdk::extension::call(package, "greet#hello", &(name,))`: the function by name, the parameters as a tuple, and the result decoded from CBOR. A client module gives the functions their names and types; `examples/greeter/app/src/greeting.rs` is one, and `bulkhead-modbus-client` is the Modbus extension's (`bulkhead_modbus_client::client::write_holding(...)`).
+An extension is a host service an operator builds into a node from outside Bulkhead ([`examples/greeter`](../examples/greeter/README.md)), serving one package. Declare it under `capabilities.extensions."<package>"` with the table it reads; the operator grants it by package name. An app calls its functions through the node with `bulkhead_sdk::extension::call(package, "greet#hello", &(name,))`: the function by name, the parameters as a tuple, and the result decoded from CBOR. A client module gives the functions their names and types; `examples/greeter/app/src/greeting.rs` is one, and `bulkhead-modbus-client` is Modbus's (`bulkhead_modbus_client::client::write_holding(...)`), whose calls the node checks and forwards to the Modbus drivers.
 
 ### Replicated buckets
 

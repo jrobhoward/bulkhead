@@ -213,7 +213,8 @@ What each host service needs from the app, the node and the operator. Every capa
 | Sockets | `bulkhead:sockets` | `[sockets]` (optional ceiling) | | `net` | |
 | Blobs | `bulkhead:blobs` | `[blobs]` (optional; a ceiling and limits) | | `blob` | |
 | TCP connections (a connection handler) | `listeners` (not a capability) | `[listeners.<name>]` | | `connection` | |
-| An extension | `extensions."<package>"` | `[extensions."<package>"]` | the package in `grant` | the extension's own bindings | the extension (`modbus` for Modbus) |
+| Modbus TCP | `extensions."bulkhead-modbus:modbus"` (`read`, `write`, `serve`) | `[extensions."bulkhead-modbus:modbus"]` | the package in `grant` | `bulkhead-modbus-client` | none: the drivers are programs beside the node |
+| An extension | `extensions."<package>"` | `[extensions."<package>"]` | the package in `grant` | the extension's own bindings | the extension |
 
 Always available, with nothing to declare: `bulkhead:runtime/process` (calls, casts, links, monitors, names, timers), `bulkhead:io`, clocks, random, and stdout and stderr as log records.
 
@@ -396,6 +397,8 @@ admin = "/usr/local/bin/bulkhead-admin"      # the remote admin API's driver, wi
 metrics = "/usr/local/bin/bulkhead-metrics"  # the metrics endpoint's driver, with [metrics]; unset: beside the runner
 sql = "/usr/local/bin/bulkhead-sql"          # each datasource's driver, with [datasources]; unset: beside the runner
 egress = "/usr/local/bin/bulkhead-egress"    # each egress app's driver, with an app granted bulkhead:http-egress; unset: beside the runner
+modbus = "/usr/local/bin/bulkhead-modbus"    # the Modbus devices' drivers, with Modbus devices configured; unset: beside the runner
+modbus_server = "/usr/local/bin/bulkhead-modbus-server"  # the Modbus server's driver, with a server configured; unset: beside the runner
 
 [resolver]                             # host names (ROADMAP DA9), resolved by bulkhead-resolve; every key optional
 resolv_conf = "/etc/resolv.conf"       # search, domain, options ndots/timeout/attempts; and its nameservers, unless:
@@ -496,7 +499,7 @@ Bucket names here follow the manifest's rule: lowercase letters, digits, `-` and
 
 A `cluster` bucket is kept whole on both nodes of an HA pair: `durability = "disk"`, on a node with `[failover]` and `arbiter = "witness"`, configured alike on both nodes. A write from either node commits on the primary once the standby has it on disk (or, with the standby gone, once the witness has recorded it out of date) and returns then; reads and watches use the node's own copy, which may trail the primary slightly, and `bulkhead:watch`'s `get-linearizable` reads through the primary. Without a primary holding its lease, writes fail (`unavailable` from `bulkhead:watch`). A bucket that changes scope starts empty. `bulkhead failover` shows where the log stands.
 
-Extensions read their own node configuration from `[extensions."<package>"]`; a table for an extension the node was not built with refuses the start. `bulkhead node` built with the `modbus` cargo feature (off by default: `cargo build -p bulkhead --features modbus`) includes the Modbus TCP extension (`bulkhead-modbus:modbus`, `crates/bulkhead-modbus`):
+Extensions read their own node configuration from `[extensions."<package>"]`; a table for an extension the node was not built with refuses the start. One table is the node's own: `[extensions."bulkhead-modbus:modbus"]` configures Modbus TCP, which runs in drivers the node starts (ROADMAP DA5; `crates/bulkhead-modbus`, installed beside the runner or named by `[native] modbus` and `modbus_server`):
 
 ```toml
 [extensions."bulkhead-modbus:modbus".devices.pump-1]
@@ -510,7 +513,7 @@ primary_only = false                   # poll only while the node runs singleton
 holding = [{ start = 0, count = 10 }]  # also input, coils, discrete
 ```
 
-With `primary_only = true`, a device on an HA pair is polled by the primary alone, while its lease holds, and a `cluster` bucket carries the table to the standby. The standby closes its connection to the device; apps' reads and writes through the `client` interface still reach it from either node. The first poll after a node becomes primary sends every point. A node without `[failover]` always polls.
+Devices are polled by the driver `bulkhead-modbus`, over connections the node opens to each `address` alone. With `primary_only = true`, a device is polled instead by `bulkhead-modbus-primary`, run as a singleton: on an HA pair the primary alone runs it, while its lease holds, and a `cluster` bucket carries the table to the standby; apps' reads and writes through the `client` interface reach it through the primary's driver. The first poll after a node becomes primary sends every point. A node without `[failover]` always runs it.
 
 ```toml
 [extensions."bulkhead-modbus:modbus".server]
@@ -521,7 +524,7 @@ allow = ["10.20.0.0/24"]               # masters allowed (addresses or networks)
 max_connections = 32                   # default 32: masters connected at once; more are closed on accept
 ```
 
-Modbus has no authentication: any master that can connect reads and writes the served tables. A master whose address is not in `allow` is refused; list the SCADA network, and bind `listen` to the interface that reaches it.
+The server runs in the driver `bulkhead-modbus-server`, on the port the node binds. Modbus has no authentication: any master that can connect reads and writes the served tables. A master whose address is not in `allow` is refused; list the SCADA network, and bind `listen` to the interface that reaches it.
 
 Apps declare which devices they may read or write, and whether they set the served tables, and the operator grants the package:
 

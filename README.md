@@ -44,7 +44,8 @@ a restricted native process, with Erlang/OTP-style semantics:
   disk, or replicated across a pair), watches, process groups, config,
   secrets, logging, metrics, timers, HTTP ingress and allow-listed HTTP
   egress, Postgres datasources, sockets, blobs (large data passed between
-  apps as sealed memory), and a Modbus TCP extension. A
+  apps as sealed memory), and Modbus TCP (drivers polling devices and
+  serving masters). A
   shared bucket can be published: apps then read it from a snapshot mapped into their own memory, in 0.16 to
   0.39 µs a read, without asking the node.
 - **Connections**: a connection handler serves TCP connections on
@@ -118,7 +119,8 @@ cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-resolve -p bulk
 the node with its HTTP ingress (`http`; the node starts the `bulkhead-ingress`
 driver, built beside it), HTTPS and the remote admin API
 (`tls`), HTTP egress (`egress`; a `bulkhead-egress` driver per app using it), SQL datasources (`sql`; a `bulkhead-sql` driver per datasource) and probes
-(`probes`). The Modbus TCP extension is off by default (`--features modbus`).
+(`probes`). Modbus TCP runs in drivers the node starts when configured
+(`cargo build -p bulkhead-modbus`, installed beside the runner).
 `--no-default-features --features node` builds a node with none of them, and
 `--no-default-features` the CLI and bundle tooling alone.
 
