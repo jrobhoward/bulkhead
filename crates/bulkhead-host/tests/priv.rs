@@ -901,3 +901,192 @@ async fn helper____blob____written_by_one_user_read_by_another() {
     }
     apps.stop().await;
 }
+
+/// A Modbus TCP read of `count` holding registers from 0, as a master
+/// sends it (MBAP header, unit 1, function 3).
+fn modbus_read(count: u16) -> Vec<u8> {
+    let mut req = vec![0, 1, 0, 0, 0, 6, 1, 3, 0, 0];
+    req.extend(count.to_be_bytes());
+    req
+}
+
+/// Answer each read of holding registers on `listener` with `values`, as
+/// a device does; nothing else is served.
+fn fake_modbus_device(listener: std::net::TcpListener, values: Vec<u16>) {
+    use std::io::{Read, Write};
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let values = values.clone();
+            std::thread::spawn(move || {
+                let mut req = [0u8; 12];
+                while stream.read_exact(&mut req).is_ok() {
+                    let count = usize::from(u16::from_be_bytes([req[10], req[11]]));
+                    let data: Vec<u8> = values
+                        .iter()
+                        .cycle()
+                        .take(count)
+                        .flat_map(|v| v.to_be_bytes())
+                        .collect();
+                    let len = u16::try_from(3 + data.len()).unwrap();
+                    let mut reply = vec![req[0], req[1], 0, 0];
+                    reply.extend(len.to_be_bytes());
+                    reply.extend([req[6], 3, u8::try_from(data.len()).unwrap()]);
+                    reply.extend(data);
+                    if stream.write_all(&reply).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// The Modbus drivers under the helper (ROADMAP DA5): the devices' driver
+/// under a user of its own polls a device over the connection the node
+/// opens and answers an app's read through the node; the server's driver,
+/// under another, answers a master on the listener the node bound.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____modbus_drivers____poll_a_device_and_serve_a_master_under_their_users() {
+    use bulkhead_host::services::modbus::{MODBUS_DEVICES_APP, MODBUS_SERVER_APP};
+    use std::io::{Read, Write};
+    let Some(started) = helper("helper____modbus_drivers") else {
+        return;
+    };
+    let device_socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let device = device_socket.local_addr().unwrap();
+    fake_modbus_device(device_socket, vec![7, 8]);
+    let master_socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let master = master_socket.local_addr().unwrap();
+    let mut modbus = bulkhead_host::ModbusDrivers::default();
+    modbus.devices.insert("pump-1".into());
+    modbus.server = true;
+    modbus.timeout = Duration::from_secs(5);
+    let mut native = NativeConfig::default();
+    native.runner = Some(started.runner.clone());
+    native.helper = Some(started.helper.clone());
+    let profile = |p: bulkhead_host::DriverProfile| bulkhead_host::DriverProfile {
+        calls: vec!["scada".into()],
+        delivers: true,
+        ..p
+    };
+    let rt = Runtime::new(RuntimeConfig {
+        max_instances: 16,
+        native,
+        modbus: Some(modbus),
+        drivers: std::collections::BTreeMap::from([
+            (
+                MODBUS_DEVICES_APP.to_string(),
+                profile(bulkhead_host::DriverProfile {
+                    endpoints: vec![bulkhead_host::DriverEndpoint::Tcp {
+                        host: device.ip().to_string(),
+                        port: device.port(),
+                        timeout: Duration::from_secs(1),
+                    }],
+                    ..Default::default()
+                }),
+            ),
+            (
+                MODBUS_SERVER_APP.to_string(),
+                profile(bulkhead_host::DriverProfile {
+                    listeners: vec![bulkhead_host::DriverListener {
+                        name: "modbus".into(),
+                        socket: std::sync::Arc::new(master_socket),
+                    }],
+                    ..Default::default()
+                }),
+            ),
+        ]),
+        ..RuntimeConfig::default()
+    })
+    .unwrap();
+    let dir = privhelper::dir_owned(&started.dir.path().join("prog"), started.node_uid, 0o755);
+    let load = |path: &PathBuf| {
+        rt.load_native(NativeCode {
+            path: privhelper::copy_owned(path, &dir, started.node_uid),
+            kind: NativeProgram::Executable,
+        })
+    };
+    let (devices_program, server_program) = common::modbus_programs();
+    let driver = |name: &str, args: serde_json::Value| {
+        common::app_manifest(
+            name,
+            serde_json::json!({
+                "kind": "native-process",
+                "native": { "program": "executable" },
+                "lifecycle": { "start_args": args },
+                "limits": { "memory_max": "64MiB" },
+                "messaging_acl": { "accept_from": [name], "may_call": [name] },
+            }),
+        )
+    };
+    let scada = common::app_manifest(
+        "scada",
+        serde_json::json!({
+            "kind": "native-process",
+            "native": { "program": "executable" },
+            "capabilities": { "extensions": { "bulkhead-modbus:modbus": { "read": ["pump-1"] } } },
+            "limits": { "callback_deadline_ms": 5000, "memory_max": "64MiB" },
+        }),
+    );
+    let apps = rt
+        .start_apps(vec![
+            bulkhead_host::AppDeployment::new(scada, program(&started, &rt)),
+            bulkhead_host::AppDeployment::new(
+                driver(
+                    MODBUS_DEVICES_APP,
+                    serde_json::json!({ "devices": { "pump-1": {
+                        "address": device.to_string(), "poll_ms": 50, "deliver_to": "scada",
+                        "holding": [{ "start": 0, "count": 2 }],
+                    } } }),
+                ),
+                load(devices_program),
+            ),
+            bulkhead_host::AppDeployment::new(
+                driver(
+                    MODBUS_SERVER_APP,
+                    serde_json::json!({ "server": { "listen": master.to_string(), "holding": 4 } }),
+                ),
+                load(server_program),
+            ),
+        ])
+        .await
+        .unwrap();
+    let a = apps.app("scada").unwrap().instances().remove(0);
+
+    let read = ask(
+        &a,
+        r#"ext bulkhead-modbus:modbus client#read-holding ["pump-1", 0, 2]"#,
+    )
+    .await;
+    let mut polled = String::new();
+    for _ in 0..100 {
+        polled = ask(&a, "infos").await;
+        if polled.contains("pump-1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let served = tokio::task::spawn_blocking(move || {
+        let mut stream = std::net::TcpStream::connect(master).unwrap();
+        stream.write_all(&modbus_read(2)).unwrap();
+        let mut reply = [0u8; 13];
+        stream.read_exact(&mut reply).unwrap();
+        reply
+    })
+    .await
+    .unwrap();
+    let users = (
+        users_of("bulkhead-modbus"),
+        users_of("bulkhead-modbus-server"),
+    );
+
+    assert_eq!(read, r#"{"Ok":[7,8]}"#);
+    assert!(polled.contains("pump-1"), "{polled}");
+    assert_eq!(&served[7..9], &[3, 4], "function 3, four bytes: {served:?}");
+    assert_eq!(users.0.len(), 1, "{users:?}");
+    assert_eq!(users.1.len(), 1, "{users:?}");
+    assert!(users.0[0] >= started.first_uid && users.1[0] >= started.first_uid);
+    assert_ne!(users.0[0], users.1[0], "a user of its own each");
+    apps.stop().await;
+}

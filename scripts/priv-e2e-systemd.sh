@@ -11,7 +11,9 @@
 # datasource's driver reads from its file. An app granted HTTP egress
 # (the SDK fixture, ROADMAP DA4) fetches the board's route through its
 # egress driver: the node must make the connection, not the driver. It
-# installs a `bulkhead` user,
+# A fake Modbus device is polled by the Modbus driver (ROADMAP DA5),
+# its updates going to the same app; the node must open the device's
+# connection, not the driver. It installs a `bulkhead` user,
 # binaries under /usr/local, /etc/bulkhead and the unit, and removes them
 # all at the end unless KEEP=1.
 #
@@ -20,6 +22,7 @@
 #   cargo build -p bulkhead-resolve -p bulkhead-ingress -p bulkhead-admin -p bulkhead-metrics
 #   cargo build -p bulkhead-sql -p example-tally
 #   cargo build -p bulkhead-egress -p bulkhead-fixture-sdk
+#   cargo build -p bulkhead-modbus --bins --example fake_device
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
@@ -30,6 +33,10 @@ install -m 0755 $T/bulkhead-priv /usr/local/sbin/bulkhead-priv
 install -m 0755 $T/bulkhead /usr/local/bin/bulkhead
 install -d -m 0755 /usr/local/libexec/bulkhead
 install -m 0755 $T/bulkhead-runner /usr/local/libexec/bulkhead/bulkhead-runner
+install -m 0755 $T/bulkhead-modbus /usr/local/libexec/bulkhead/bulkhead-modbus
+install -m 0755 $T/bulkhead-modbus-server /usr/local/libexec/bulkhead/bulkhead-modbus-server
+# A fake Modbus device for the node's Modbus driver to poll.
+$T/examples/fake_device 127.0.0.1:5021 >/dev/null 2>&1 & FAKE=$!
 install -m 0755 $T/bulkhead-resolve /usr/local/libexec/bulkhead/bulkhead-resolve
 install -m 0755 $T/bulkhead-ingress /usr/local/libexec/bulkhead/bulkhead-ingress
 install -m 0755 $T/bulkhead-admin /usr/local/libexec/bulkhead/bulkhead-admin
@@ -130,6 +137,12 @@ durability = "disk"
 file = "$K/pg.password"
 
 $DATASOURCE
+[extensions."bulkhead-modbus:modbus".devices.pump-1]
+address = "127.0.0.1:5021"
+poll_ms = 200
+deliver_to = "fetcher"
+holding = [{ start = 0, count = 4 }]
+
 # The node's own drivers (bulkhead-resolve, bulkhead-ingress, ...) beside the
 # helper's runner, in every instance's root.
 [native]
@@ -183,6 +196,24 @@ echo "outside allow: $(cli call fetcher 'fetch GET http://127.0.0.1:9101/metrics
 if command -v strace >/dev/null; then
     sleep 0.3; kill $S1 $S2; wait $S1 $S2 2>/dev/null || true
     echo "connects to :8080 by the node: $(grep -c 'htons(8080)' $W/egress-node.strace), to :9101: $(grep -c 'htons(9101)' $W/egress-node.strace), by the driver: $(grep -c connect $W/egress-driver.strace)"
+fi
+echo "== Modbus through its driver (ROADMAP DA5)"
+ps -eo user:12,uid,pid,args | grep "libexec/bulkhead/bulkhead-modbus" | grep -v grep
+MOD=$(pgrep -f "libexec/bulkhead/bulkhead-modbus" | head -1)
+echo "the driver's view: uid $(awk '/^Uid/ {print $2}' /proc/$MOD/status), root $(ls /proc/$MOD/root/ | tr '\n' ' ')"
+# The fixture keeps a CBOR cast as `<binary>`.
+echo "updates received: $(cli call fetcher received | tr ',' '\n' | grep -c binary)"
+if command -v strace >/dev/null; then
+    strace -f -qq -e trace=connect -p $NODE -o $W/modbus-node.strace & S1=$!
+    strace -f -qq -e trace=connect -p $MOD -o $W/modbus-driver.strace & S2=$!
+    sleep 0.5
+    # The device goes away and comes back: the driver asks for a new
+    # connection.
+    kill $FAKE; sleep 0.5
+    $T/examples/fake_device 127.0.0.1:5021 >/dev/null 2>&1 & FAKE=$!
+    sleep 2
+    kill $S1 $S2; wait $S1 $S2 2>/dev/null || true
+    echo "connects to :5021 by the node: $(grep -c 'htons(5021)' $W/modbus-node.strace), by the driver: $(grep -c connect $W/modbus-driver.strace)"
 fi
 cli stop fetcher
 sleep 0.5
@@ -253,6 +284,7 @@ if [ "${KEEP:-0}" != 1 ]; then
     rm -f /etc/systemd/system/bulkhead.service && systemctl daemon-reload
     rm -f /usr/local/sbin/bulkhead-priv /usr/local/bin/bulkhead
     pg_down
+    kill $FAKE 2>/dev/null || true
     rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W $K $P
     userdel bulkhead
     echo "== removed"

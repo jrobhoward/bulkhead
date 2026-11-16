@@ -8,6 +8,14 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Modbus on Linux and FreeBSD (ROADMAP DA5, step 4): the drivers' tests
+  pass on both VMs; a helper test runs the devices' driver and the
+  server's under users of their own, polling a device over the node's
+  connection and answering a master on the node's listener;
+  `scripts/priv-e2e-systemd.sh` polls a fake device and checks with
+  `strace` that the node makes the device's connection and the driver
+  none.
+
 - Modbus runs outside the node (ROADMAP DA5, steps 2 and 3):
   `bulkhead-modbus` is now two driver programs the node starts from the
   unchanged `[extensions."bulkhead-modbus:modbus"]`: `bulkhead-modbus`

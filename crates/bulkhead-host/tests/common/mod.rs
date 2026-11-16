@@ -231,6 +231,31 @@ pub fn sql_program() -> &'static PathBuf {
     })
 }
 
+/// `bulkhead-modbus` and `bulkhead-modbus-server`, the Modbus drivers
+/// (ROADMAP DA5), built on first use where the native fixtures are: the
+/// devices' program and the server's.
+pub fn modbus_programs() -> &'static (PathBuf, PathBuf) {
+    static BUILT: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let root = workspace_root();
+        let target = root.join("target/fixtures/native");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let ok = Command::new(cargo)
+            .current_dir(&root)
+            .args(["build", "-p", "bulkhead-modbus", "--bins", "--target-dir"])
+            .arg(&target)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "building bulkhead-modbus failed");
+        let debug = target.join("debug");
+        (
+            debug.join("bulkhead-modbus"),
+            debug.join("bulkhead-modbus-server"),
+        )
+    })
+}
+
 /// `bulkhead-egress`, an app's egress driver (ROADMAP DA4), built on
 /// first use where the native fixtures are.
 pub fn egress_program() -> &'static PathBuf {
