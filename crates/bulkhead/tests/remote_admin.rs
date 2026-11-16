@@ -304,8 +304,8 @@ async fn remote_admin____signed_for_another_path____refused() {
     r.node.shutdown().await;
 }
 
-// A bundle carries Linux programs only until ROADMAP FB6.
-#[cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_admin____deploy_a_bundle____its_body_signed_and_the_app_runs() {
     let mut r = Remote::start().await;

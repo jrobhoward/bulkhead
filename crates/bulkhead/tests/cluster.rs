@@ -2,8 +2,8 @@
 //! address with pinned keys, a call from one node's admin API to an
 //! instance on the other, and a clean leave.
 
-// Native apps run on Linux only (ROADMAP Z9d).
-#![cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

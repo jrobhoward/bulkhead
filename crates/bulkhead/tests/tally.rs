@@ -40,8 +40,8 @@ fn node_extra() -> String {
 /// The tally built as a native program (its `native` feature), once per
 /// test binary; `None` off Linux, where native apps do not run.
 fn build_native() -> Option<PathBuf> {
-    if !cfg!(target_os = "linux") {
-        eprintln!("not Linux: the native tally's case is skipped");
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        eprintln!("not Linux or FreeBSD: the native tally's case is skipped");
         return None;
     }
     static BUILT: OnceLock<PathBuf> = OnceLock::new();

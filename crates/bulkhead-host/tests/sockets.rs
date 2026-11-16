@@ -3,8 +3,8 @@
 //! an app's instances, listening, and readiness delivered as host events
 //! (`bulkhead:io/ready`), on the fixture built as a native program.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+// The net fixture runs as a native program, on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

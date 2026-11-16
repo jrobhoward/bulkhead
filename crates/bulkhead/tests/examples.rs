@@ -47,8 +47,8 @@ fn s(p: &Path) -> &str {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn examples____bundled_with_the_cli____run_upgrade_and_fail_as_designed() {
-    if !cfg!(target_os = "linux") {
-        eprintln!("not Linux: skipped");
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        eprintln!("not Linux or FreeBSD: skipped");
         return;
     }
     let dir = TempDir::new().unwrap();

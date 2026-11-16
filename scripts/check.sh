@@ -31,8 +31,8 @@
 #   deps         what left the node for a driver stays out of its dependency
 #                tree (ROADMAP CR1): the node never links bulkhead-ingress,
 #                its HTTP ingress brings no TLS, bulkhead-host alone no HTTP
-#   test         cargo test --workspace --all-features, then on Linux the
-#                conformance suite against the reference app
+#   test         cargo test --workspace --all-features, then on Linux and
+#                FreeBSD the conformance suite against the reference app
 #   doc          rustdoc with warnings as errors
 #   deny         cargo-deny: licences, bans, sources, advisories
 #   msrv         cargo check on the workspace's rust-version, in its own
@@ -186,8 +186,9 @@ check_deps() {
 check_test() {
     local status=0
     cargo test --workspace --all-features --locked --no-fail-fast || status=1
-    # The conformance cases against the reference app (Linux only).
-    if [ "$(uname -s)" = Linux ]; then
+    # The conformance cases against the reference app, where native apps
+    # run (Linux and FreeBSD).
+    if [ "$(uname -s)" = Linux ] || [ "$(uname -s)" = FreeBSD ]; then
         BULKHEAD_CONFORMANCE_NATIVE=1 cargo test -p bulkhead-host --test conformance --locked || status=1
     fi
     return $status

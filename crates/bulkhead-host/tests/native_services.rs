@@ -1,7 +1,8 @@
 //! Groups, config, secrets and metrics for native-process apps: the
 //! fixture executable's commands through `bulkhead-runner`.
 
-#![cfg(target_os = "linux")]
+// The native fixture runs on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

@@ -2,8 +2,8 @@
 //! a running node and its admin API. `bulkhead-host` tests cover the same
 //! ground at the runtime level.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -181,11 +181,20 @@ async fn exit_criterion_3____handler_spins____killed_with_timeout_and_node_stays
 async fn exit_criterion_4____allocates_past_memory_max____crashes_and_others_unaffected() {
     let mut n = TestNode::start_native("").await;
     let chaos = native_conformance();
+    // Without the helper `memory_max` is `RLIMIT_DATA` on Linux and
+    // `RLIMIT_AS` on FreeBSD, which counts the whole address space: an app
+    // reserves about 17 MiB of it at start there (FreeBSD 15, 2026-11-15),
+    // so 16 MiB would not start it. Either way 64 MiB more is past it.
+    let memory_max = if cfg!(target_os = "freebsd") {
+        "48MiB"
+    } else {
+        "16MiB"
+    };
     deploy(
         &n,
         "hog",
         &chaos,
-        fast(json!({ "limits": { "memory_max": "16MiB" } })),
+        fast(json!({ "limits": { "memory_max": memory_max } })),
     )
     .await;
     deploy(&n, "bystander", &chaos, fast(json!({}))).await;
@@ -203,8 +212,7 @@ async fn exit_criterion_4____allocates_past_memory_max____crashes_and_others_una
     let status = n.client.status("bystander").await.unwrap();
 
     assert_eq!(small, "ok");
-    // Without a cgroup `memory_max` is `RLIMIT_DATA`: the failed allocation
-    // aborts the app (MANIFEST.md).
+    // Without a cgroup the failed allocation aborts the app (MANIFEST.md).
     assert!(big.to_string().contains("killed by signal 6"), "{big}");
     assert_eq!(bystander, "2", "bystander kept its state");
     assert_eq!(status.restarts, 0);

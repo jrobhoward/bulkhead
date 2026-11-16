@@ -8,6 +8,24 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Tests that start `bulkhead node` as a process (`board.rs` and others
+  through `tests/common`'s `runner_config`) build `bulkhead-resolve`
+  themselves: they relied on another test binary having built it, and
+  failed on a clean target directory (recorded as a flake in ROADMAP on
+  2026-11-15).
+
+- The test suite runs on FreeBSD (ROADMAP FB3, steps 1 and 2): the
+  native-app tests of `bulkhead-host`, `bulkhead-native` and `bulkhead`
+  that were gated to Linux run on FreeBSD too, and pass on FreeBSD 15
+  (`scripts/check.sh test`, the native conformance suite included).
+  Linux-only still: plugins (FreeBSD's runner refuses them) and the
+  node's `/proc` fence checks. Per-system assertions where FreeBSD
+  differs: capability mode's refusals, `pgrep -P` for a runner's child,
+  `memory_max` 48 MiB in exit criterion 4. MANIFEST.md notes that on
+  FreeBSD `memory_max` counts the whole address space, about 17 MiB of
+  which an app reserves at start, so a small one may keep an app from
+  starting.
+
 - Bundles for FreeBSD (ROADMAP FB6): `freebsd-x86_64` and
   `freebsd-aarch64` are native-process platforms (rustbridge's
   `experiment/wasm` branch at 356f700, `bulkhead_bundle::NATIVE_PLATFORMS`),

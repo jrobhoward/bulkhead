@@ -47,9 +47,9 @@ const APPS: [&str; 3] = [
 
 /// Whether the apps run here: on Linux only.
 fn runs() -> bool {
-    let runs = cfg!(target_os = "linux");
+    let runs = cfg!(any(target_os = "linux", target_os = "freebsd"));
     if !runs {
-        eprintln!("not Linux: skipped");
+        eprintln!("not Linux or FreeBSD: skipped");
     }
     runs
 }

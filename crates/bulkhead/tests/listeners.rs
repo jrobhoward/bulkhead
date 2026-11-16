@@ -116,8 +116,8 @@ async fn ask(port: u16, line: &str) -> Option<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_app____listener_not_bound____deploy_refused() {
-    if !cfg!(target_os = "linux") {
-        eprintln!("not Linux: native apps do not run here");
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        eprintln!("not Linux or FreeBSD: native apps do not run here");
         return;
     }
     let mut n = TestNode::start_native("").await;
@@ -149,8 +149,8 @@ async fn native_app____listener_not_bound____deploy_refused() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_app____lifecycle____served_upgraded_rolled_back_stopped_restored() {
-    if !cfg!(target_os = "linux") {
-        eprintln!("not Linux: native apps do not run here");
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        eprintln!("not Linux or FreeBSD: native apps do not run here");
         return;
     }
     let port = free_port();
@@ -231,8 +231,8 @@ async fn native_app____lifecycle____served_upgraded_rolled_back_stopped_restored
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_app____upgrade_changes_listeners____refused() {
-    if !cfg!(target_os = "linux") {
-        eprintln!("not Linux: native apps do not run here");
+    if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        eprintln!("not Linux or FreeBSD: native apps do not run here");
         return;
     }
     let port = free_port();

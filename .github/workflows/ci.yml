@@ -23,17 +23,17 @@ defaults:
     shell: bash
 
 jobs:
-  # The host touches per-OS behaviour (sockets, filesystem preopens,
-  # address-space limits, the serial tty layer), so each OS apps build on
-  # runs the whole suite, and Linux on arm64 too (the Raspberry Pi 5 and
-  # other arm64 nodes).
+  # The host touches per-OS behaviour (sockets, the runner's sandbox,
+  # address-space limits, the serial tty layer), so each system native apps
+  # run on runs the whole suite: Linux here, on x86_64 and arm64 (the
+  # Raspberry Pi 5 and other arm64 nodes), FreeBSD in `test-freebsd`.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +71,35 @@ jobs:
 
       - name: Test
         run: scripts/check.sh test
+
+  # The suite on FreeBSD 15 (ROADMAP FB3), in a VM on the Linux runner:
+  # jails, Capsicum and rctl in place of namespaces, Landlock, seccomp and
+  # cgroups. As an unprivileged user, as on Linux; the privileged helper's
+  # root tests (BULKHEAD_PRIV_TESTS) run on a test machine, not here. No
+  # cache: the VM's target directory does not survive the job.
+  test-freebsd:
+    name: test (freebsd-15)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test in a FreeBSD VM
+        # v1.6.0, pinned by commit.
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b
+        with:
+          release: "15.0"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          copyback: false
+          prepare: |
+            pkg install -y bash git curl postgresql17-server postgresql17-client
+            pw useradd ci -m -s /usr/local/bin/bash
+          run: |
+            chown -R ci "$PWD"
+            su -l ci -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+            su -l ci -c "cd '$PWD' && . ~/.cargo/env && rustc --version && scripts/check.sh test"
 
   # Guards `rust-version = "1.99.0"`, the stable rustc the dependencies resolve for.
   msrv:

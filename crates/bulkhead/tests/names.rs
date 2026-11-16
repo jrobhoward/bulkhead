@@ -4,8 +4,8 @@
 //! reload, and a node without the driver refusing to start. The driver's
 //! DNS is tested in `bulkhead-resolve`'s own tests.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

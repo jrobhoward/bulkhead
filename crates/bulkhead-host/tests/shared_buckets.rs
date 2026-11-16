@@ -2,8 +2,8 @@
 //! configuration and opened by several apps, read-only or read-write,
 //! through `bulkhead-sdk`'s `kv` wrapper and the SDK fixture.
 
-// The SDK fixture runs as a native program, Linux only (ROADMAP Z9d).
-#![cfg(target_os = "linux")]
+// The SDK fixture runs as a native program, on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

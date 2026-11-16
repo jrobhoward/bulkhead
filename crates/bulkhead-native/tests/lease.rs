@@ -1,9 +1,10 @@
 //! `bulkhead-runner --lease`: the watchdog kills the app once the last
 //! deadline on the lease pipe has passed, with or without the node, and
 //! otherwise gives the app's exit as the runner's. The app is
-//! `/usr/bin/cat` reading a pipe the test holds, which runs until told.
+//! `/bin/cat` (on both systems) reading a pipe the test holds, which runs until told.
 
-#![cfg(target_os = "linux")]
+// The runner's lease watchdog runs on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -31,7 +32,7 @@ impl Leased {
         rustix::io::write(&write, &first.to_le_bytes()).unwrap();
         let raw = read.as_raw_fd();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_bulkhead-runner"));
-        cmd.args(["--executable", "/usr/bin/cat", "--lease"])
+        cmd.args(["--executable", "/bin/cat", "--lease"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -89,8 +90,7 @@ impl Leased {
     fn app_pid(&self) -> i32 {
         let pid = self.runner.id();
         for _ in 0..200 {
-            let children =
-                std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap();
+            let children = children(pid);
             if let Some(child) = children.split_whitespace().next() {
                 return child.parse().unwrap();
             }
@@ -199,4 +199,21 @@ fn lease____runner_killed____app_dies_with_it() {
     }
 
     assert!(gone, "the app outlived the runner");
+}
+
+/// The pids of `pid`'s children, separated by white space.
+#[cfg(target_os = "linux")]
+fn children(pid: u32) -> String {
+    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap()
+}
+
+/// The pids of `pid`'s children, separated by white space (FreeBSD has no
+/// `/proc` by default).
+#[cfg(target_os = "freebsd")]
+fn children(pid: u32) -> String {
+    let out = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
 }

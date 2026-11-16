@@ -3,7 +3,8 @@
 //! tested in `drivers.rs`); a call of any other answers `NoSuchExtension`,
 //! declared and granted or not, and the app lives on.
 
-#![cfg(target_os = "linux")]
+// The native fixture runs on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]

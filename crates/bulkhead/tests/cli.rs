@@ -1,7 +1,7 @@
 //! The `bulkhead` binary against an in-process node.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -314,6 +314,7 @@ async fn shell____lines_on_stdin____each_runs_and_errors_do_not_end_the_session(
 /// Start `bulkhead node` on a config with `extra`, and answer what
 /// another process of the same user finds: whether it may read the node's
 /// environment, and the node's `NoNewPrivs` line.
+// Reads /proc/<pid>/environ and status: Linux's.
 #[cfg(target_os = "linux")]
 async fn node_process_fence(extra: &str) -> (bool, String) {
     let dir = TempDir::new().unwrap();

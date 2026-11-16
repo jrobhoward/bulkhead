@@ -1,7 +1,8 @@
 //! `bulkhead-runner` end to end, without a node: the test plays the node
 //! over the runner's channel, polling where the node would sleep.
 
-#![cfg(target_os = "linux")]
+// The runner runs on Linux and FreeBSD; plugins load on Linux only.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -372,22 +373,45 @@ fn executable____sandboxed____files_exec_sockets_and_signals_refused() {
     let signal_parent = port.command(&format!("kill {parent}"));
     let signal_group = port.command("kill 0");
 
-    assert!(hostname.contains("Permission denied"), "{hostname}");
-    assert_eq!(itself, "ok");
-    assert!(write.contains("Permission denied"), "{write}");
     assert!(!tmp.exists());
-    assert!(exec.contains("Permission denied"), "{exec}");
-    assert!(connect.contains("Operation not permitted"), "{connect}");
-    assert!(
-        signal_parent.contains("Operation not permitted"),
-        "{signal_parent}"
-    );
-    assert!(
-        signal_group.contains("Operation not permitted"),
-        "{signal_group}"
-    );
+    // Linux: Landlock (its own directory readable) and the seccomp
+    // allow-list; FreeBSD: capability mode, where no path opens at all
+    // (ROADMAP FB2).
+    if cfg!(target_os = "freebsd") {
+        for refused in [
+            &hostname,
+            &itself,
+            &write,
+            &exec,
+            &connect,
+            &signal_parent,
+            &signal_group,
+        ] {
+            assert!(
+                refused.contains("Not permitted in capability mode"),
+                "{refused}"
+            );
+        }
+    } else {
+        assert!(hostname.contains("Permission denied"), "{hostname}");
+        assert_eq!(itself, "ok");
+        assert!(write.contains("Permission denied"), "{write}");
+        assert!(exec.contains("Permission denied"), "{exec}");
+        assert!(connect.contains("Operation not permitted"), "{connect}");
+        assert!(
+            signal_parent.contains("Operation not permitted"),
+            "{signal_parent}"
+        );
+        assert!(
+            signal_group.contains("Operation not permitted"),
+            "{signal_group}"
+        );
+    }
 }
 
+// FreeBSD's runner refuses plugins: they load by path, which capability
+// mode forbids (`bulkhead-host`'s `native.rs` checks the refusal).
+#[cfg(target_os = "linux")]
 #[test]
 fn library____json_calls____plugin_answers_with_schema() {
     let mut port = Port::spawn("--library", &fixtures().1);

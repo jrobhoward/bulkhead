@@ -2,8 +2,8 @@
 //! rollback, stop/start/remove, restart restore, refusals, logs and the
 //! audit log. The Phase 1 exit criteria are in `exit_criteria.rs`.
 
-// Native apps run on Linux only.
-#![cfg(target_os = "linux")]
+// Native apps run on Linux and FreeBSD (`bulkhead-runner`).
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -638,7 +638,14 @@ async fn node____restarted____creation_raised_on_every_start() {
     n.restart().await;
     let second = std::fs::read_to_string(n.data().join("creation")).unwrap();
 
-    assert_eq!((first.as_str(), second.as_str()), ("1", "2"));
+    // Raised, not raised by exactly one: `restart` retries the open while
+    // the old runtime still holds the keyvalue database, and each try
+    // raises it (seen on FreeBSD, where the old runtime lets go later).
+    assert_eq!(first, "1");
+    assert!(
+        second.parse::<u32>().unwrap() > 1,
+        "creation {second} after a restart"
+    );
     n.shutdown().await;
 }
 
@@ -1328,8 +1335,7 @@ async fn blue_green____new_version_gives_up_mid_step____dropped_and_refused() {
     assert!(!n.dir.path().join("data/bundles/bg/2.0.0.rbp").exists());
 }
 
-// Native apps run on Linux only (`bulkhead-runner`).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[tokio::test]
 async fn native____bundle_for_both_platforms____runs_this_platforms_program() {
     use common::{native_bundle_for, native_fixtures, other_platform_elf};
@@ -1376,8 +1382,7 @@ async fn native____bundle_for_both_platforms____runs_this_platforms_program() {
     );
 }
 
-// Native apps run on Linux only (`bulkhead-runner`).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[tokio::test]
 async fn native____filesystem_declared_and_denied_by_policy____no_volume() {
     use common::{native_bundle, native_fixtures};
@@ -1425,7 +1430,7 @@ async fn native____filesystem_declared_and_denied_by_policy____no_volume() {
     assert!(refused.starts_with("err:"), "{refused}");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[tokio::test]
 async fn native____executable_deployed____answers_and_network_refused() {
     use common::{native_bundle, native_fixtures};
@@ -1455,7 +1460,13 @@ async fn native____executable_deployed____answers_and_network_refused() {
     let read = call(&n, "vendor", "read /etc/hostname").await;
 
     assert_eq!(echo, "native");
-    assert!(read.contains("Permission denied"), "{read}");
+    // Linux: Landlock; FreeBSD: capability mode (ROADMAP FB2).
+    let refused = if cfg!(target_os = "freebsd") {
+        "Not permitted in capability mode"
+    } else {
+        "Permission denied"
+    };
+    assert!(read.contains(refused), "{read}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

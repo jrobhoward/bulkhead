@@ -311,8 +311,8 @@ pub fn native_bundle(
     )
 }
 
-/// The other Linux platform than this machine's, and the start of an
-/// ELF file for it: enough to bundle, not to run.
+/// A Linux platform other than this machine's (on FreeBSD, either), and
+/// the start of an ELF file for it: enough to bundle, not to run.
 pub fn other_platform_elf() -> (Platform, Vec<u8>) {
     let (platform, machine) = if Platform::current() == Some(Platform::LinuxAarch64) {
         (Platform::LinuxX86_64, 62u16)
@@ -644,6 +644,9 @@ pub fn examples(packages: &[&str], features: &[&str], tag: &str) -> Built {
 
 /// Node config naming the runner, with the HTTP ingress driver beside it.
 pub fn runner_config() -> String {
+    // Every member node starts the resolver driver, found beside the
+    // runner: built here, not left to another test binary to have built.
+    resolve_built();
     ingress_built();
     // Beside the runner, for nodes started as processes with Modbus.
     modbus_built();

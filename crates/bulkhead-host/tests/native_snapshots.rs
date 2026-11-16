@@ -3,7 +3,8 @@
 //! instance's state, snapshot upgrades and moves, each into a
 //! new process; and a rustbridge plugin, which takes none.
 
-#![cfg(target_os = "linux")]
+// The native fixture runs on Linux and FreeBSD.
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 #![allow(non_snake_case)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -189,6 +190,9 @@ async fn native_move_out____then_add_moved____state_on_the_new_instance() {
     apps.stop().await;
 }
 
+// FreeBSD's runner refuses plugins before any snapshot could be: they
+// load by path, which capability mode refuses (`native.rs`).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn library____snapshot_and_upgrade____refused() {
     let rt = runtime();
