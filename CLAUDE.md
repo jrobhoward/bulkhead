@@ -39,7 +39,9 @@ logins or addresses from it into tracked files or commit messages.
 # Every check below as one command, one line of result per check; logs in
 # target/check/. `--quick` runs fmt, clippy, conventions and the tests; named
 # checks run alone (`--list`). CI calls the same script, `test` on Linux
-# (x86-64, aarch64) and in a FreeBSD 15 VM.
+# (x86-64, aarch64) and in a FreeBSD 15 VM; `cross` compiles for FreeBSD on
+# x86-64 and aarch64 (rustup target add x86_64-unknown-freebsd
+# aarch64-unknown-freebsd once).
 scripts/check.sh
 scripts/check.sh --quick
 scripts/check.sh clippy conventions

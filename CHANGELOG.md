@@ -8,6 +8,12 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `scripts/check.sh cross` (and a CI job of the same name) compiles the
+  workspace for FreeBSD on x86-64 and aarch64. With no bare-metal
+  FreeBSD machine (2026-11-16), FreeBSD is first-class in function and
+  not measured: its soaks run on its VM, BASELINE.md stays Linux, and
+  `freebsd-aarch64` is compiled but not run (ROADMAP Goals, FB4, FB5).
+
 - A fuzz target for the node's reader of a native app's ring
   (`ring_reader`, ROADMAP T1b): raw stores to the ring's positions and
   data against `Ring::read`, then the node's frame splitter, now a pure

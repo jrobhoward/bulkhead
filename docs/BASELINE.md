@@ -2,6 +2,8 @@
 
 Phase 1 reference figures for the host runtime. They are recorded, not gated: CI does not fail on them. Rerun after changes to the call path, the instance loop or the engine configuration, and add a dated section rather than overwriting this one.
 
+Machines: the 16-core x86-64 machine and the Raspberry Pi 5, both Linux. FreeBSD is not measured: there is no bare-metal FreeBSD machine, and its VM shares the 16-core machine's cores (ROADMAP Goals, 2026-11-16). A FreeBSD figure, when one is wanted, comes from its VM beside an Ubuntu VM on the same host, marked as VM numbers.
+
 ## How to run
 
 `scripts/bench.sh` runs every benchmark below, and the newer ones, one at a time on an idle machine, and writes a dated section to `target/bench/` (`--list` names them). The commands below run one by hand.

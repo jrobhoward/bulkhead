@@ -127,6 +127,34 @@ jobs:
       - name: Check
         run: scripts/check.sh msrv
 
+  # FreeBSD on x86-64 and aarch64, compiled but not run: aarch64 has no test
+  # machine (ROADMAP FB4), and x86-64's suite runs in `test-freebsd`.
+  cross:
+    name: cross (freebsd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-unknown-freebsd aarch64-unknown-freebsd
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cross-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cross-cargo-
+
+      - name: Check
+        run: scripts/check.sh cross
+
   # Every other job runs `--locked`, so nothing tests against newer
   # dependencies. This job resolves fresh in the runner (never committed) and
   # runs the suite. Scheduled or manual only, so it never blocks a PR; a

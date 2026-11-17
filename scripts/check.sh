@@ -37,6 +37,8 @@
 #   deny         cargo-deny: licences, bans, sources, advisories
 #   msrv         cargo check on the workspace's rust-version, in its own
 #                target directory (target/msrv)
+#   cross        cargo check for FreeBSD on x86-64 and aarch64; the latter
+#                has no test machine, so this is all it gets (ROADMAP FB4)
 #   secrets      scripts/check-secrets.sh (with --push when there is an upstream)
 #   conventions  what clippy does not check: test names
 #                (subject____condition____result), tests in *_tests.rs files
@@ -51,7 +53,7 @@ set -uo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
-all_checks="fmt clippy build cli-no-node features deps test doc deny msrv secrets conventions changelog"
+all_checks="fmt clippy build cli-no-node features deps test doc deny msrv cross secrets conventions changelog"
 quick_checks="fmt clippy conventions deps test"
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -213,6 +215,23 @@ check_msrv() {
     # build as stable, the two share artifact hashes in target/ and one reads
     # the other's stale metadata.
     CARGO_TARGET_DIR=target/msrv cargo "+$msrv" check --workspace --all-targets --all-features --locked
+}
+
+# The targets `cross` checks: the systems with a bundle platform that no
+# local or CI machine runs natively.
+cross_targets="x86_64-unknown-freebsd aarch64-unknown-freebsd"
+
+check_cross() {
+    local installed t missing=""
+    installed=$(rustup target list --installed)
+    for t in $cross_targets; do
+        echo "$installed" | has -x "$t" || missing="$missing $t"
+    done
+    [ -z "$missing" ] || { echo "missing targets:$missing (rustup target add$missing)"; return 1; }
+    for t in $cross_targets; do
+        echo "== $t"
+        cargo check --workspace --all-targets --all-features --locked --target "$t" || return 1
+    done
 }
 
 check_secrets() {
