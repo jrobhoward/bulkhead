@@ -8,6 +8,17 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Without the privileged helper, what a native instance forked ends
+  with it (ROADMAP PS7): the node writes the instance's own cgroup's
+  `cgroup.kill` with `[native] cgroup`, else sends `SIGKILL` to its
+  process group, on a kill and once more just after its own process
+  ends. On Linux the runner's seccomp filter keeps a child in the group
+  (`setsid` and `setpgid` are refused); on FreeBSD a child may call
+  `setsid` in capability mode and escape, a gap SECURITY.md records
+  (the helper's jail closes it). The native fixture's `forks` takes
+  `term-proof`, and `setsid-child` tries to leave the group;
+  `tests/native_processes.rs` covers both systems.
+
 - A misbehaviour policy and quarantine (ROADMAP PS5). The node counts,
   per native instance, the refusals it answers (`access-denied` and
   messaging-ACL refusals together, from callbacks and sender channels;

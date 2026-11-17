@@ -123,6 +123,13 @@ mod process {
         /// deadlines to the runner's watchdog ([`bulkhead_native::lease`]),
         /// ended with the port.
         lease: Option<Renewals>,
+        /// The process group of the node's own child, which the child
+        /// leads (`process_group(0)`): everything it forks is in it unless
+        /// it leaves (on Linux the runner's seccomp filter refuses `setsid`
+        /// and `setpgid`). `None` under the helper, which ends its own.
+        group: Option<rustix::process::Pid>,
+        /// The sweep once the instance's own process has ended is done.
+        swept: bool,
     }
 
     /// The task writing a leased port's deadlines; aborted on drop.
@@ -448,6 +455,12 @@ mod process {
                     (Proc::Direct(child), cgroup, true)
                 }
             };
+            let group = match &proc {
+                Proc::Direct(child) => child
+                    .id()
+                    .and_then(|id| rustix::process::Pid::from_raw(i32::try_from(id).ok()?)),
+                Proc::Helper(_) => None,
+            };
             let lease = lease
                 .zip(lease_write)
                 .map(|(rx, write)| Renewals(tokio::spawn(renew(rx, write))));
@@ -462,6 +475,8 @@ mod process {
                 cgroup,
                 own_cgroup,
                 lease,
+                group,
+                swept: false,
             })
         }
 
@@ -556,9 +571,40 @@ mod process {
             }
         }
 
-        /// Kill the process now.
+        /// Kill the process now, and everything it started.
         pub(crate) fn kill(&mut self) {
+            if self.proc.id().is_some() {
+                self.end_all();
+            }
             self.proc.start_kill();
+        }
+
+        /// End every process the instance started (ROADMAP PS7), as the
+        /// helper does through its cgroup or jail: the node's own cgroup's
+        /// `cgroup.kill`, or a `SIGKILL` to the process group. Sent while
+        /// the group's leader, the instance's own process, has not been
+        /// reaped, and once more just after ([`Self::swept`]), so a child it
+        /// left behind ends with it: the group's id is not reused while a
+        /// member is left, and is never signalled again after that sweep.
+        fn end_all(&self) {
+            if self.own_cgroup
+                && let Some(dir) = &self.cgroup
+                && std::fs::write(dir.join("cgroup.kill"), "1").is_ok()
+            {
+                return;
+            }
+            if let Some(group) = self.group {
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
+        }
+
+        /// [`Self::end_all`] once the instance's own process has ended,
+        /// the first time only.
+        fn sweep(&mut self) {
+            if !self.swept {
+                self.swept = true;
+                self.end_all();
+            }
         }
 
         /// Why the process ended, once it has: waited for within a grace
@@ -572,6 +618,7 @@ mod process {
                     self.proc.wait().await
                 }
             };
+            self.sweep();
             self.reason(status)
         }
 
@@ -580,6 +627,7 @@ mod process {
         /// did not run.
         pub(crate) fn exited_reason(&mut self) -> Option<ExitReason> {
             let status = self.proc.try_wait()?;
+            self.sweep();
             Some(self.reason(Some(status)))
         }
 
@@ -619,6 +667,7 @@ mod process {
                 self.kill();
                 let _ = self.proc.wait().await;
             }
+            self.sweep();
             if let Some(dir) = self.cgroup.take()
                 && self.own_cgroup
             {

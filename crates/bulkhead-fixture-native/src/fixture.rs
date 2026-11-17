@@ -433,9 +433,13 @@ impl Fixture {
             }
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             "forks" => {
-                let (n, mib) = rest.split_once(' ').unwrap_or((rest, "0"));
-                forks(n.parse().unwrap_or(0), mib.parse().unwrap_or(0))
+                let mut words = rest.split(' ');
+                let n = words.next().and_then(|w| w.parse().ok()).unwrap_or(0);
+                let mib = words.next().and_then(|w| w.parse().ok()).unwrap_or(0);
+                forks(n, mib, words.next() == Some("term-proof"))
             }
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+            "setsid-child" => setsid_child(),
             "threads" => {
                 let n: usize = rest.parse().unwrap_or(0);
                 let mut made = 0;
@@ -947,12 +951,43 @@ fn extension(ctx: &mut Ctx, package: &str, rest: &str) -> String {
     }
 }
 
+/// Fork a child that tries to leave the instance's process group
+/// (ROADMAP PS7): `setsid`, then sleep. `refused` if it could not (the
+/// runner's seccomp filter on Linux ends it with `SIGSYS`), `escaped
+/// <pid>` if it is still running in a session of its own.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn setsid_child() -> String {
+    // SAFETY: the child makes only async-signal-safe calls and exits.
+    match unsafe { libc::fork() } {
+        // SAFETY: in the child: libc calls, then exit.
+        0 => unsafe {
+            // The app's SIGSYS handler is the parent's; die of the signal.
+            libc::signal(libc::SIGSYS, libc::SIG_DFL);
+            if libc::setsid() < 0 {
+                libc::_exit(1);
+            }
+            libc::sleep(60);
+            libc::_exit(0)
+        },
+        -1 => format!("err:{}", std::io::Error::last_os_error()),
+        pid => {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let mut status = 0;
+            // SAFETY: an out parameter on the stack; this process's child.
+            match unsafe { libc::waitpid(pid, &raw mut status, libc::WNOHANG) } {
+                0 => format!("escaped {pid}"),
+                _ => "refused".into(),
+            }
+        }
+    }
+}
+
 /// `forks N MIB`: fork `n` children, each touching `mib` MiB and then
 /// sleeping a minute (no exec: capability mode refuses it); after 200 ms,
 /// how many were made, how many still live, the last one's pid
 /// and the first refusal.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn forks(n: usize, mib: usize) -> String {
+fn forks(n: usize, mib: usize, term_proof: bool) -> String {
     let mut pids = Vec::new();
     let mut err = "none".to_string();
     for _ in 0..n {
@@ -961,6 +996,9 @@ fn forks(n: usize, mib: usize) -> String {
         match unsafe { libc::fork() } {
             // SAFETY: in the child: its own heap and libc calls, then exit.
             0 => unsafe {
+                if term_proof {
+                    libc::signal(libc::SIGTERM, libc::SIG_IGN);
+                }
                 if mib > 0 {
                     let p = libc::malloc(mib << 20);
                     if p.is_null() {
