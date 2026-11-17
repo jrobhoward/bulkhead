@@ -185,7 +185,7 @@ must_use_candidate = "warn"
 return_self_not_must_use = "warn"
 missing_errors_doc = "warn"
 # Every `unsafe` block states why it is sound.
-undocumented_unsafe_blocks = "warn"
+undocumented_unsafe_blocks = "deny"
 # The host is async end to end; a lock held across `.await` stalls a worker
 # that other instances are scheduled on.
 await_holding_lock = "deny"

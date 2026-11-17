@@ -11,6 +11,8 @@
 //! operator. The node asks it to read the operators file again on SIGHUP
 //! and `bulkhead reload-tls` ([`RELOAD_SCHEMA`]).
 
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::{Arc, PoisonError, RwLock};

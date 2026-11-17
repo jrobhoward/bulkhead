@@ -15,6 +15,8 @@
 //! - [`tls`]: certificates by SNI, reloaded from their files.
 //! - [`driver`]: the app, its worker threads and host events.
 
+#![forbid(unsafe_code)]
+
 pub mod config;
 pub mod driver;
 pub mod serve;

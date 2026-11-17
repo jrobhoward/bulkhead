@@ -17,6 +17,8 @@
 //! - [`statements`]: running statements, and their failures.
 //! - [`driver`]: the app, its worker thread, and the requests.
 
+#![forbid(unsafe_code)]
+
 pub mod config;
 pub mod driver;
 pub mod pool;

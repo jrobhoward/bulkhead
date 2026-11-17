@@ -8,6 +8,14 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `unsafe` kept where it is (ROADMAP CR2): every crate without unsafe
+  code has `#![forbid(unsafe_code)]` in its `lib.rs` and `main.rs` (21
+  crates, the fixtures included), and `undocumented_unsafe_blocks` is
+  `deny` rather than `warn`. The runner's lease watchdog kills and reaps
+  the app through rustix rather than `libc`, and the channel's ring copy
+  documents why an app writing the ring during the copy can only tear
+  the bytes the node decodes from its own copy.
+
 - Without the privileged helper, what a native instance forked ends
   with it (ROADMAP PS7): the node writes the instance's own cgroup's
   `cgroup.kill` with `[native] cgroup`, else sends `SIGKILL` to its

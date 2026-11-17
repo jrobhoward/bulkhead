@@ -21,6 +21,8 @@
 //!
 //! A cast of `count` counts as a call does.
 
+#![forbid(unsafe_code)]
+
 use std::time::{Duration, Instant};
 
 use bulkhead_sdk::{App, CallError, CallRef, Ctx, Envelope, Pid, Reply};

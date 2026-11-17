@@ -8,6 +8,8 @@
 //! app and holds no secret: a bug in its parser reaches the metrics, which
 //! are public anyway.
 
+#![forbid(unsafe_code)]
+
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;

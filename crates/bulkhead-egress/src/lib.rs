@@ -18,6 +18,8 @@
 //!   body cap, and failures.
 //! - [`driver`]: the app, its worker thread, and the requests.
 
+#![forbid(unsafe_code)]
+
 pub mod client;
 pub mod config;
 pub mod driver;

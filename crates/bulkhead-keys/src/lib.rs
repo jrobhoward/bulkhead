@@ -13,6 +13,8 @@
 //!   (the admin driver, ROADMAP DA7) cannot forge or replay one.
 //! - [`check_key_permissions`]: a private key file its owner alone reads.
 
+#![forbid(unsafe_code)]
+
 pub mod key;
 mod key_file;
 pub mod operators;

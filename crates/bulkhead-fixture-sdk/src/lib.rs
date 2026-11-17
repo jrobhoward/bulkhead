@@ -66,6 +66,8 @@
 //!   a prefix: `i:` integer, `f:` float, `t:` text, `b:` boolean, `x:` hex
 //!   bytes, `null`. Errors reply `err:<debug>`.
 
+#![forbid(unsafe_code)]
+
 use bulkhead_sdk::groups::{self, GroupError};
 use bulkhead_sdk::http::{Request, Response};
 use bulkhead_sdk::kv::{Bucket, KvError};

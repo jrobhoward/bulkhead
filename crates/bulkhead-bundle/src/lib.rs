@@ -27,6 +27,8 @@
 //! # Ok::<(), bulkhead_bundle::BundleError>(())
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod error;
 mod grant;
 mod load;

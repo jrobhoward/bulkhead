@@ -17,6 +17,8 @@
 //! - `received`: everything kept, joined by `,`.
 //! - `open`: how many sockets the fixture holds.
 
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeMap;
 
 use bulkhead_sdk::net::{self, NetError, TcpListener, TcpStream};

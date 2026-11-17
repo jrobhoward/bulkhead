@@ -15,6 +15,8 @@
 //! - [`driver`]: the app, its worker thread, and the hand-back to the
 //!   callback thread.
 
+#![forbid(unsafe_code)]
+
 pub mod config;
 pub mod driver;
 pub mod lookup;

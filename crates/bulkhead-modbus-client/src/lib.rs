@@ -14,6 +14,8 @@
 //! extension cannot take (a newer client than the node's extension) is
 //! `Invalid` for the client interface and `NotServing` for the server's.
 
+#![forbid(unsafe_code)]
+
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 

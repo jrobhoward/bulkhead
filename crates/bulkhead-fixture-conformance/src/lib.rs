@@ -99,6 +99,8 @@
 //! take over another's state. `load-snapshot` refuses another format
 //! version, and a state whose `refuse` is true.
 
+#![forbid(unsafe_code)]
+
 use std::time::Duration;
 
 use bulkhead_sdk::log::{self, Level};

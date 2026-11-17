@@ -24,6 +24,8 @@
 //! Each run writes its seed, events and node logs into its directory.
 //! Unix only: it signals processes and talks to admin sockets.
 
+#![forbid(unsafe_code)]
+
 #[cfg(unix)]
 mod soak;
 

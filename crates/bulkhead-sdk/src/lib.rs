@@ -66,6 +66,8 @@
 //! it. The SDK panics only for states that are bugs (a snapshot that cannot
 //! serialize).
 
+#![forbid(unsafe_code)]
+
 extern crate self as bulkhead_sdk;
 
 mod app;

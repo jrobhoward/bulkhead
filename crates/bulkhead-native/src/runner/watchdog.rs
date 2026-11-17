@@ -60,8 +60,9 @@ pub fn fork() -> Result<(), String> {
         Err(e) => {
             eprintln!("bulkhead-runner: watchdog: {e}");
             // The app must not outlive a watchdog that cannot watch it.
-            // SAFETY: `kill` takes no pointers.
-            unsafe { libc::kill(child, libc::SIGKILL) };
+            if let Some(pid) = Pid::from_raw(child) {
+                let _ = rustix::process::kill_process(pid, Signal::KILL);
+            }
             std::process::exit(2)
         }
     }
@@ -93,10 +94,7 @@ fn watch(child: Pid) -> Result<i32, String> {
         let now = now_ns();
         if !killed && now >= deadline {
             eprintln!("bulkhead-runner: the lease ended; the app is killed");
-            // SAFETY: `kill` takes no pointers.
-            if unsafe { libc::kill(child.as_raw_nonzero().get(), libc::SIGKILL) } != 0 {
-                return Err(format!("kill: {}", std::io::Error::last_os_error()));
-            }
+            rustix::process::kill_process(child, Signal::KILL).map_err(|e| format!("kill: {e}"))?;
             killed = true;
         }
         let timeout = (!killed && deadline != NO_DEADLINE).then(|| {
@@ -150,17 +148,15 @@ fn drain(lease: BorrowedFd<'_>) -> Drained {
 /// Reap `child` and give its exit as this process's: its status, or its
 /// signal raised again here; [`KILLED_EXIT`] when the lease killed it.
 fn exit_code(child: Pid, killed: bool) -> i32 {
-    let mut status = 0;
-    // SAFETY: `status` is a valid pointer for the call's duration.
-    let reaped = unsafe { libc::waitpid(child.as_raw_nonzero().get(), &raw mut status, 0) };
-    if reaped < 0 {
+    let Ok(Some((_, status))) =
+        rustix::process::waitpid(Some(child), rustix::process::WaitOptions::empty())
+    else {
         return 2;
+    };
+    if let Some(code) = status.exit_status() {
+        return code;
     }
-    if libc::WIFEXITED(status) {
-        return libc::WEXITSTATUS(status);
-    }
-    if libc::WIFSIGNALED(status) {
-        let signal = libc::WTERMSIG(status);
+    if let Some(signal) = status.terminating_signal() {
         if killed && signal == libc::SIGKILL {
             return i32::from(KILLED_EXIT);
         }

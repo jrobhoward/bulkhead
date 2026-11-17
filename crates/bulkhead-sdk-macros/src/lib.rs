@@ -1,5 +1,7 @@
 //! Derive macros for `bulkhead-sdk`. Use them through `bulkhead_sdk`.
 
+#![forbid(unsafe_code)]
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Expr, ExprLit, Lit, Meta, Path, parse_macro_input};

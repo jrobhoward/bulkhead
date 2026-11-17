@@ -43,6 +43,8 @@
 //! The node checks each call against the grant and these lists and
 //! forwards it to the driver (`bulkhead_host::services::modbus`).
 
+#![forbid(unsafe_code)]
+
 mod calls;
 mod cidr;
 mod config;

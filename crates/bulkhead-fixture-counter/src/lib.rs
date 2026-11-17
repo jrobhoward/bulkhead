@@ -15,6 +15,8 @@
 //! `<name>`; its exit adds one), `hold` (no reply until `release`) and
 //! `release`.
 
+#![forbid(unsafe_code)]
+
 use std::time::Duration;
 
 use bulkhead_sdk::{App, CallRef, Ctx, Envelope, Info, Reply};

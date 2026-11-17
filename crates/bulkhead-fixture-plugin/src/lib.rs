@@ -8,6 +8,8 @@
 //! | `fail` | any | an error |
 //! | `config` | any | the plugin config's `data` |
 
+#![forbid(unsafe_code)]
+
 use rustbridge::prelude::*;
 use rustbridge::{serde_json, tracing};
 

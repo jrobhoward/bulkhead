@@ -12,6 +12,8 @@
 //! - `crash`: panic (the instance crashes).
 //! - `spin`: loop forever without I/O (the callback deadline ends it).
 
+#![forbid(unsafe_code)]
+
 use std::io::Write;
 use std::time::Duration;
 

@@ -373,6 +373,15 @@ impl Ring<'_> {
 
     /// Copy `n` bytes (at most [`RING_CAP`]) between `at` in the ring and
     /// `other`, wrapping at the end of the data area.
+    ///
+    /// The ring is memory the other side shares and may write while this
+    /// copy runs: an app that breaks the protocol can change the bytes
+    /// the node is reading, which may then be torn. That is all it can do
+    /// (ROADMAP CR2): the range copied comes from `at` and `n`, which the
+    /// caller checked against its own reading of the positions, so the
+    /// copy stays inside the data area whatever the app writes; and the
+    /// node decodes a frame only from its own copy, never from the shared
+    /// memory, so a byte cannot change between its check and its use.
     fn copy(&self, at: u64, other: *const u8, n: usize, into_ring: bool) {
         // `% RING_CAP` keeps `start` inside the data area whatever `at` is.
         let start = usize::try_from(at % RING_CAP as u64).unwrap_or(0);

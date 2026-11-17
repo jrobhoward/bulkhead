@@ -509,7 +509,7 @@ pure function over faking a filesystem or a network.
 allows them in tests only. No `panic!` in production code either; a guest's
 failure is an exit reason, never a host panic. Workspace lints also warn on
 `cognitive_complexity`, `must_use_candidate`, `return_self_not_must_use`,
-`missing_errors_doc` and `undocumented_unsafe_blocks`: a new public method
+`missing_errors_doc` (and deny `undocumented_unsafe_blocks`): a new public method
 that returns `Self` or a `Result` carries `#[must_use]` or an `# Errors`
 section. These are lint gates, so none can be skipped quietly.
 
@@ -532,9 +532,15 @@ pid and node.
 and never call external code (guest calls, logging callbacks, channel sends
 that can block) while holding one.
 
-**Unsafe:** `unsafe_op_in_unsafe_fn` is `forbid`. The host should need almost
-no `unsafe`. Every `unsafe` block carries a `// SAFETY:`
-comment saying why it is sound.
+**Unsafe:** `unsafe_op_in_unsafe_fn` is `forbid`, and
+`undocumented_unsafe_blocks` is `deny`: every `unsafe` block carries a
+`// SAFETY:` comment saying why it is sound. Unsafe code lives in
+`bulkhead-native` (the channel, the runner, the app side), `bulkhead-host`
+(its native port), `bulkhead-priv` (its `sys` module only),
+`bulkhead`'s serial tty and `bulkhead-fixture-native`; every other crate
+has `#![forbid(unsafe_code)]` in its `lib.rs` and `main.rs` (ROADMAP CR2).
+Adding `unsafe` to one of those is a change to argue for, not a lint to
+silence; prefer rustix's safe call where it has one.
 
 **Public docs:** every public item needs a doc comment (`missing_docs` is on).
 Rustdoc must not link to a repository-relative path like `docs/DESIGN.md`; use

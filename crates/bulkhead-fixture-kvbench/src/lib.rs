@@ -30,6 +30,8 @@
 //! - `fillchain:<bucket>:<n>`: keys `c000000` to `c<n-1>`, each holding the
 //!   next key of the chain `i -> (7919 i + 1) mod n`; replies `ok`.
 
+#![forbid(unsafe_code)]
+
 use std::time::Instant;
 
 use bulkhead_sdk::kv::{Bucket, KvError};
