@@ -457,7 +457,7 @@ impl Node {
     }
 
     /// Stop running `name`, if it runs: a singleton or a supervised app.
-    async fn stop_running(&self, name: &str) -> Result<(), NodeError> {
+    pub(super) async fn stop_running(&self, name: &str) -> Result<(), NodeError> {
         if let Some(gate) = &self.gate
             && gate
                 .release(name)
@@ -527,6 +527,7 @@ impl Node {
             previous: None,
             running: true,
             new_side: None,
+            quarantined: None,
         };
         {
             let mut st = self.st();
@@ -605,10 +606,14 @@ impl Node {
         started?;
         if let Some(entry) = self.st().desired.apps.get_mut(name) {
             entry.running = true;
+            entry.quarantined = None;
         }
         self.save_desired()?;
-        self.audit
-            .record("start", json!({ "app": name, "version": app.current }));
+        let mut record = json!({ "app": name, "version": app.current });
+        if let Some(why) = &app.quarantined {
+            record["was_quarantined"] = json!(why);
+        }
+        self.audit.record("start", record);
         Ok(Done {
             message: format!("{name} started"),
         })

@@ -32,11 +32,21 @@ pub struct HostObjects {
     pub watches: u32,
     /// Sender channels a native instance holds at once (ROADMAP AP1).
     pub senders: u32,
+    /// Refusals (`access-denied` answers and messaging-ACL refusals) an
+    /// instance may meet within [`Self::refusals_period`]; one more kills
+    /// it, `crashed: policy(refusals)` (ROADMAP PS5).
+    pub refusals: u32,
+    /// The window [`Self::refusals`] counts over; the node's alone.
+    pub refusals_period: Duration,
+    /// Requests an instance may make of the node in a second; one more
+    /// kills it, `crashed: policy(rate)`. 0: no limit.
+    pub requests_per_sec: u32,
 }
 
 impl Default for HostObjects {
     /// 10,000 of each, the default `mailbox_max`, 1,000 groups and
-    /// watches, and 8 sender channels.
+    /// watches, 8 sender channels, 100 refusals in 10 s and no request
+    /// rate.
     fn default() -> Self {
         Self {
             timers: 10_000,
@@ -46,6 +56,9 @@ impl Default for HostObjects {
             groups: 1_000,
             watches: 1_000,
             senders: 8,
+            refusals: 100,
+            refusals_period: Duration::from_secs(10),
+            requests_per_sec: 0,
         }
     }
 }
@@ -76,6 +89,13 @@ impl HostObjects {
             groups: pick("groups_max", requested.groups, self.groups)?,
             watches: pick("watches_max", requested.watches, self.watches)?,
             senders: pick("senders_max", requested.senders, self.senders)?,
+            refusals: pick("refusals_max", requested.refusals, self.refusals)?,
+            refusals_period: self.refusals_period,
+            // None at the node: a manifest may set one of its own.
+            requests_per_sec: match (requested.requests_per_sec, self.requests_per_sec) {
+                (Some(n), 0) => n,
+                (asked, node) => pick("requests_per_sec", asked, node)?,
+            },
         })
     }
 }
@@ -98,6 +118,10 @@ pub struct HostObjectRequest {
     pub watches: Option<u32>,
     /// `senders_max`.
     pub senders: Option<u32>,
+    /// `refusals_max`.
+    pub refusals: Option<u32>,
+    /// `requests_per_sec`.
+    pub requests_per_sec: Option<u32>,
 }
 
 /// A shared keyvalue bucket: named in node configuration, opened by every

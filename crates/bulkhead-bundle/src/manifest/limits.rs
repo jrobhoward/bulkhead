@@ -76,6 +76,18 @@ pub struct Limits {
     /// (ROADMAP AP1). Unset uses the node's value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub senders_max: Option<u32>,
+    /// Most refusals one instance meets within node config's
+    /// `[limits] refusals_period_ms` (ROADMAP PS5): `access-denied`
+    /// answers and messaging-ACL refusals together. One more kills it,
+    /// `crashed: policy(refusals)`. Unset uses the node's value, which is
+    /// also the most a manifest may ask for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusals_max: Option<u32>,
+    /// Most requests one instance makes of the node in a second (ROADMAP
+    /// PS5); one more kills it, `crashed: policy(rate)`. Unset uses the
+    /// node's value (none by default); under a node's value, only lower.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests_per_sec: Option<u32>,
 }
 
 impl Default for Limits {
@@ -97,6 +109,8 @@ impl Default for Limits {
             groups_max: None,
             watches_max: None,
             senders_max: None,
+            refusals_max: None,
+            requests_per_sec: None,
         }
     }
 }
@@ -144,6 +158,8 @@ impl Limits {
             ("groups_max", self.groups_max.map(u64::from)),
             ("watches_max", self.watches_max.map(u64::from)),
             ("senders_max", self.senders_max.map(u64::from)),
+            ("refusals_max", self.refusals_max.map(u64::from)),
+            ("requests_per_sec", self.requests_per_sec.map(u64::from)),
         ] {
             if value == Some(0) {
                 v.error_at(field, "must be greater than zero");

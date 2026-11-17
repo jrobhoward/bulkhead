@@ -103,6 +103,9 @@ pub(crate) struct SenderContext {
     pub(crate) spec: InstanceSpec,
     pub(crate) host_objects: HostObjects,
     pub(crate) spin: Duration,
+    /// The instance's misbehaviour policy (ROADMAP PS5), which counts a
+    /// sender's answers with the callbacks'.
+    pub(crate) policy: Arc<crate::policy::Policy>,
 }
 
 /// A process's sender channels: held by its port, and every sender's task
@@ -233,7 +236,7 @@ async fn serve(place: Place, mut link: Link, mut states: SenderStates) {
         let next = tokio::select! {
             biased;
             (id, answer) = next_done(&mut in_flight), if !in_flight.is_empty() => {
-                link.send(&ToApp::Answer { id, answer });
+                answered(&mut link, &hub, id, answer);
                 continue;
             }
             // As inside a callback: the thread waits for its answer, so
@@ -245,7 +248,7 @@ async fn serve(place: Place, mut link: Link, mut states: SenderStates) {
         match next {
             Some(Incoming::Frame(FromApp::Request { id, request })) => {
                 match handle(&hub, &mut states, request) {
-                    Handled::Now(answer) => link.send(&ToApp::Answer { id, answer }),
+                    Handled::Now(answer) => answered(&mut link, &hub, id, answer),
                     Handled::Later(fut) => {
                         let fut: InFlight = Box::pin(async move { (id, fut.await) });
                         in_flight.push(fut);
@@ -255,10 +258,7 @@ async fn serve(place: Place, mut link: Link, mut states: SenderStates) {
                         let answer = ServiceCtx::new(&mut states.keyvalue, &tags)
                             .native(request)
                             .await;
-                        link.send(&ToApp::Answer {
-                            id,
-                            answer: Answer::Kv(answer),
-                        });
+                        answered(&mut link, &hub, id, Answer::Kv(answer));
                     }
                     Handled::Refused(what) => {
                         refuse(&hub, &what);
@@ -522,23 +522,27 @@ async fn kv_hot(hub: &Hub, link: &mut Link, states: &mut SenderStates, call: KvC
     let outcome = ServiceCtx::new(&mut states.keyvalue, &hub.ctx.tags)
         .native_hot(call.bucket, call.op, call.key, call.value)
         .await;
-    match outcome {
-        Ok(outcome) => match &outcome {
-            Outcome::Value(v) => link.send_kv(call.id, &KvReply::Value(v.as_deref())),
-            Outcome::Exists(e) => link.send_kv(call.id, &KvReply::Exists(*e)),
-            Outcome::Done => link.send_kv(call.id, &KvReply::Unit),
-            other => link.send(&ToApp::Answer {
-                id: call.id,
-                answer: Answer::Kv(Err(p::KvError::Other(format!(
-                    "unexpected outcome {other:?}"
-                )))),
-            }),
-        },
-        Err(e) => link.send(&ToApp::Answer {
-            id: call.id,
-            answer: Answer::Kv(Err(e)),
-        }),
-    }
+    let reply = match &outcome {
+        Ok(Outcome::Value(v)) => KvReply::Value(v.as_deref()),
+        Ok(Outcome::Exists(e)) => KvReply::Exists(*e),
+        Ok(Outcome::Done) => KvReply::Unit,
+        Ok(other) => {
+            let answer = Answer::Kv(Err(p::KvError::Other(format!(
+                "unexpected outcome {other:?}"
+            ))));
+            return answered(link, hub, call.id, answer);
+        }
+        Err(e) => return answered(link, hub, call.id, Answer::Kv(Err(e.clone()))),
+    };
+    hub.ctx.policy.served();
+    link.send_kv(call.id, &reply);
+}
+
+/// Send `answer` to request `id`, counted by the instance's misbehaviour
+/// policy (ROADMAP PS5), which may kill the instance for it.
+fn answered(link: &mut Link, hub: &Hub, id: u64, answer: Answer) {
+    hub.ctx.policy.answered(&answer);
+    link.send(&ToApp::Answer { id, answer });
 }
 
 /// A cast's answer: `Unit` once queued, or why it was not.

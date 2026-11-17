@@ -440,7 +440,11 @@ impl TestNode {
         let mut tries = 0;
         let node = loop {
             match Node::open(node_config(&toml), ring()).await {
-                Ok(node) => break Arc::new(node),
+                Ok(node) => {
+                    let node = Arc::new(node);
+                    node.start_quarantine();
+                    break node;
+                }
                 Err(e) if tries < 250 => {
                     tries += 1;
                     let _ = e;

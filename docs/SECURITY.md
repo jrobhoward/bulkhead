@@ -42,7 +42,7 @@ Cluster members trust one another fully, as nodes of an Erlang cluster do: mutua
 
 ### App and host
 
-- **Controls.** the restricted process ("Native-process apps" below); `memory_max` and instance limits; the callback deadline, then a kill; mailboxes bounded in messages and bytes (`mailbox_max`, `mailbox_max_bytes`) and `message_max_bytes`; host-object limits (timers, monitors, links, pending calls, groups, watches); an `access-denied` answer to any request outside the grant. Exit signals into an instance are bounded by the node's instance count, timers and watch notices by their own limits.
+- **Controls.** the restricted process ("Native-process apps" below); `memory_max` and instance limits; the callback deadline, then a kill; mailboxes bounded in messages and bytes (`mailbox_max`, `mailbox_max_bytes`) and `message_max_bytes`; host-object limits (timers, monitors, links, pending calls, groups, watches); an `access-denied` answer to any request outside the grant; a misbehaviour policy (ROADMAP PS5) that kills an instance past `refusals_max` refusals (`access-denied` and messaging-ACL refusals) within a period or, if set, past `requests_per_sec`, and quarantines an app such kills and protocol breaks hit `quarantine_after` times within a period, until an operator starts it again. Exit signals into an instance are bounded by the node's instance count, timers and watch notices by their own limits.
 - **Gaps.** None found; S2, S3, S6 and S11 are fixed. A writable volume is bounded only by the filesystem quota the operator gives it.
 
 ### App and app

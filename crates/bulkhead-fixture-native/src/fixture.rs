@@ -69,6 +69,32 @@ pub(crate) fn parse_pid(s: &str) -> Option<Pid> {
     })
 }
 
+/// Requests the node refuses, or merely counts (ROADMAP PS5): `refuse N`
+/// reads configuration it was not granted, `refuse-acl N PID` calls a
+/// pid whose ACL refuses it, `requests N` asks its own pid.
+fn misbehave(ctx: &mut Ctx, verb: &str, count: &str, tail: &str) -> String {
+    let n: u32 = count.parse().unwrap_or(0);
+    match verb {
+        "refuse" => {
+            let refused = (0..n).filter(|_| ctx.config("refused").is_err()).count();
+            format!("refused {refused}")
+        }
+        "refuse-acl" => {
+            let to = parse_pid(tail).unwrap_or_else(|| panic!("not a pid: {tail}"));
+            let refused = (0..n)
+                .filter(|_| ctx.call(to, text("echo x"), 1_000).is_err())
+                .count();
+            format!("refused {refused}")
+        }
+        _ => {
+            for _ in 0..n {
+                std::hint::black_box(ctx.self_pid());
+            }
+            format!("asked {n}")
+        }
+    }
+}
+
 /// Every key of the bucket, sorted, joined by `,`.
 fn all_keys(bucket: &mut app::Bucket<'_>) -> Result<String, KvError> {
     let mut all = Vec::new();
@@ -522,6 +548,7 @@ impl Fixture {
             }
             "kv" => kv(ctx, rest),
             "group" => group(ctx, first, tail),
+            "refuse" | "refuse-acl" | "requests" => misbehave(ctx, verb, first, tail),
             "config" => match ctx.config(first) {
                 Ok(v) => v.unwrap_or_else(|| "none".into()),
                 Err(e) => format!("err:{e:?}"),

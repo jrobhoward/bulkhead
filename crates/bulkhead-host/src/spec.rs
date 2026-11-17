@@ -182,6 +182,8 @@ impl InstanceSpec {
                 groups: spec.limits.groups_max,
                 watches: spec.limits.watches_max,
                 senders: spec.limits.senders_max,
+                refusals: spec.limits.refusals_max,
+                requests_per_sec: spec.limits.requests_per_sec,
             },
         }
     }

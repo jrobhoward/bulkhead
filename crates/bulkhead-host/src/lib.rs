@@ -46,6 +46,7 @@ mod names;
 mod native;
 mod output;
 pub mod pid;
+mod policy;
 mod pool;
 mod probe;
 mod process;

@@ -42,6 +42,7 @@ use crate::native::Program;
 use crate::native::convert;
 use crate::native::port::{Incoming, KvCall, Port};
 use crate::output::{CapturedOutput, Tags};
+use crate::policy::Policy;
 use crate::probe;
 use crate::runtime::{LoadedApp, RuntimeInner};
 use crate::services::HostState;
@@ -209,21 +210,31 @@ async fn kv_hot(state: &mut InstanceState, call: KvCall) -> Result<Outcome, p::K
         .await
 }
 
+/// Send `answer` to request `id`, counted by the misbehaviour policy
+/// (ROADMAP PS5), which may kill the instance for it.
+fn answered(port: &mut Port, policy: Option<&Policy>, id: u64, answer: Answer) {
+    if let Some(policy) = policy {
+        policy.answered(&answer);
+    }
+    port.send(&ToApp::Answer { id, answer });
+}
+
 /// Answer a hot keyvalue request with what the store returned.
-fn send_kv(port: &mut Port, id: u64, outcome: Outcome) {
+fn send_kv(port: &mut Port, policy: Option<&Policy>, id: u64, outcome: Outcome) {
     let reply = match &outcome {
         Outcome::Value(v) => KvReply::Value(v.as_deref()),
         Outcome::Exists(e) => KvReply::Exists(*e),
         Outcome::Done => KvReply::Unit,
         other => {
-            return port.send(&ToApp::Answer {
-                id,
-                answer: Answer::Kv(Err(p::KvError::Other(format!(
-                    "unexpected storage outcome {other:?}"
-                )))),
-            });
+            let answer = Answer::Kv(Err(p::KvError::Other(format!(
+                "unexpected storage outcome {other:?}"
+            ))));
+            return answered(port, policy, id, answer);
         }
     };
+    if let Some(policy) = policy {
+        policy.served();
+    }
     port.send_kv(id, &reply);
 }
 
@@ -580,6 +591,13 @@ impl InstanceTask {
             not(any(target_os = "linux", target_os = "freebsd")),
             allow(unused_mut)
         )]
+        let host_objects = rt.host_objects().grant(&spec.host_objects)?;
+        let policy = Arc::new(Policy::new(
+            self.me.clone(),
+            self.stats.clone(),
+            &host_objects,
+        ));
+        self.native_policy = Some(policy.clone());
         let mut port = Port::spawn(rt.native_config(), code, spec, &name, output, lease).await?;
         // The app's threads may open sender channels (ROADMAP AP1), which
         // end with this process.
@@ -590,8 +608,9 @@ impl InstanceTask {
             tags,
             stats: self.stats.clone(),
             spec: spec.clone(),
-            host_objects: rt.host_objects().grant(&spec.host_objects)?,
+            host_objects,
             spin: rt.native_config().spin,
+            policy,
         });
         Ok(port)
     }
@@ -900,6 +919,7 @@ impl InstanceTask {
         let start = Instant::now();
         let mut host = Duration::ZERO;
         let mut lease = state.lease.clone();
+        let policy = self.native_policy.clone();
         // A timer left from an earlier callback is due no later than this
         // one's deadline, so it can only fire early: then the deadline is
         // checked and the timer moved, rather than armed for every frame.
@@ -949,7 +969,7 @@ impl InstanceTask {
                     request: Request::OpenSender,
                 })) => {
                     let answer = Answer::Sender(port.open_sender());
-                    port.send(&ToApp::Answer { id, answer });
+                    answered(port, policy.as_deref(), id, answer);
                 }
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 Some(Incoming::Frame(FromApp::Request {
@@ -985,7 +1005,7 @@ impl InstanceTask {
                             return Err(killed);
                         }
                     };
-                    port.send(&ToApp::Answer { id, answer });
+                    answered(port, policy.as_deref(), id, answer);
                 }
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                 Some(Incoming::Frame(FromApp::Request {
@@ -1000,7 +1020,7 @@ impl InstanceTask {
                     let answer = crate::native::driver::answer(&rt, allowed, &request, |fd| {
                         port.send_fd(fd, crate::native::Passed::Stream)
                     });
-                    port.send(&ToApp::Answer { id, answer });
+                    answered(port, policy.as_deref(), id, answer);
                 }
                 #[cfg(unix)]
                 Some(Incoming::Frame(FromApp::Request {
@@ -1014,7 +1034,7 @@ impl InstanceTask {
                     match super::killable(&self.kill, &self.control, asked_for).await {
                         Ok(reply) => {
                             let answer = Answer::Net(pass_socket(port, reply));
-                            port.send(&ToApp::Answer { id, answer });
+                            answered(port, policy.as_deref(), id, answer);
                         }
                         Err(killed) => {
                             port.kill();
@@ -1034,14 +1054,14 @@ impl InstanceTask {
                         .native(request, |app| blobs::may_share(&rt, &me, app));
                     let answer =
                         Answer::Blob(blobs::pass(reply, |fd, kind| port.send_fd(fd, kind)));
-                    port.send(&ToApp::Answer { id, answer });
+                    answered(port, policy.as_deref(), id, answer);
                 }
                 Some(Incoming::Frame(FromApp::Request { id, request })) => {
                     let asked = Instant::now();
                     match super::killable(&self.kill, &self.control, answer(state, request, budget))
                         .await
                     {
-                        Ok(Ok(answer)) => port.send(&ToApp::Answer { id, answer }),
+                        Ok(Ok(answer)) => answered(port, policy.as_deref(), id, answer),
                         Ok(Err(why)) => {
                             port.kill();
                             return Err(ExitReason::Crashed(why));
@@ -1057,11 +1077,8 @@ impl InstanceTask {
                     let asked = Instant::now();
                     let id = call.id;
                     match super::killable(&self.kill, &self.control, kv_hot(state, call)).await {
-                        Ok(Ok(outcome)) => send_kv(port, id, outcome),
-                        Ok(Err(e)) => port.send(&ToApp::Answer {
-                            id,
-                            answer: Answer::Kv(Err(e)),
-                        }),
+                        Ok(Ok(outcome)) => send_kv(port, policy.as_deref(), id, outcome),
+                        Ok(Err(e)) => answered(port, policy.as_deref(), id, Answer::Kv(Err(e))),
                         Err(killed) => {
                             port.kill();
                             return Err(killed);

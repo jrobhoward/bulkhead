@@ -112,6 +112,12 @@ fn run(s: &mut Sender, cmd: &str) -> String {
     };
     match arg(0) {
         "self" => pid_text(s.self_pid()),
+        // ROADMAP PS5: a right a sender lacks, asked for n times.
+        "refuse" => {
+            let n: u32 = arg(1).parse().unwrap_or(0);
+            let refused = (0..n).filter(|_| s.metrics_text().is_err()).count();
+            format!("refused {refused}")
+        }
         "selfs" => {
             let n: u64 = arg(1).parse().unwrap_or(0);
             let started = Instant::now();

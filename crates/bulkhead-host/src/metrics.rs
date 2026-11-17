@@ -363,6 +363,11 @@ pub(crate) struct AppStats {
     blob_bytes: AtomicU64,
     /// Blob requests by outcome ([`BLOB_OUTCOMES`]).
     blobs: [AtomicU64; 5],
+    /// Refusals the misbehaviour policy counted: access-denied, acl
+    /// (ROADMAP PS5).
+    refusals: [AtomicU64; 2],
+    /// Instances the misbehaviour policy killed: refusals, rate.
+    policy_kills: [AtomicU64; 2],
 }
 
 /// What happened to blobs, as `bulkhead_blobs_total` labels it: created,
@@ -388,6 +393,8 @@ impl Default for AppStats {
             sockets_refused: AtomicU64::new(0),
             blob_bytes: AtomicU64::new(0),
             blobs: Default::default(),
+            refusals: Default::default(),
+            policy_kills: Default::default(),
         }
     }
 }
@@ -451,6 +458,24 @@ impl AppStats {
         if let Some(n) = self.blobs.get(outcome) {
             n.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// An instance met a refusal (ROADMAP PS5).
+    pub(crate) fn refused(&self, kind: crate::policy::Refusal) {
+        let i = match kind {
+            crate::policy::Refusal::AccessDenied => 0,
+            crate::policy::Refusal::Acl => 1,
+        };
+        self.refusals[i].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The misbehaviour policy killed an instance.
+    pub(crate) fn policy_kill(&self, over: crate::policy::Over) {
+        let i = match over {
+            crate::policy::Over::Refusals => 0,
+            crate::policy::Over::Rate => 1,
+        };
+        self.policy_kills[i].fetch_add(1, Ordering::Relaxed);
     }
 
     /// An instance exited with `reason`.
@@ -612,6 +637,7 @@ impl Metrics {
         }
         write_sockets(&mut out, &apps);
         write_blobs(&mut out, &apps);
+        write_policy(&mut out, &apps);
         for (app, (m, _)) in &apps {
             m.write(&mut out, app);
         }
@@ -721,6 +747,54 @@ fn write_blobs(out: &mut String, apps: &BTreeMap<String, AppEntry>) {
 
 /// `bulkhead_sockets_open` and `bulkhead_sockets_refused_total`, for apps
 /// that have opened a socket or been refused one.
+/// A pair of policy counters: name, help, label, where they are, and
+/// the label's two values.
+type PolicyCounter = (
+    &'static str,
+    &'static str,
+    &'static str,
+    fn(&AppStats) -> &[AtomicU64; 2],
+    [&'static str; 2],
+);
+
+/// The misbehaviour policy's counters (ROADMAP PS5), for apps that met it.
+fn write_policy(out: &mut String, apps: &BTreeMap<String, AppEntry>) {
+    use crate::policy::{Over, Refusal};
+    let counters: [PolicyCounter; 2] = [
+        (
+            "bulkhead_refusals_total",
+            "Refusals the misbehaviour policy counted, by kind.",
+            "kind",
+            |s| &s.refusals,
+            [Refusal::AccessDenied.label(), Refusal::Acl.label()],
+        ),
+        (
+            "bulkhead_policy_kills_total",
+            "Instances the misbehaviour policy killed, by reason.",
+            "reason",
+            |s| &s.policy_kills,
+            [Over::Refusals.label(), Over::Rate.label()],
+        ),
+    ];
+    for (name, help, label, of, values) in counters {
+        header(out, name, "counter", help);
+        for (app, (_, s)) in apps {
+            let counts = of(s);
+            if counts.iter().all(|n| n.load(Ordering::Relaxed) == 0) {
+                continue;
+            }
+            for (value, n) in values.iter().zip(counts) {
+                let _ = writeln!(
+                    out,
+                    "{name}{{app=\"{}\",{label}=\"{value}\"}} {}",
+                    escape(app),
+                    n.load(Ordering::Relaxed)
+                );
+            }
+        }
+    }
+}
+
 fn write_sockets(out: &mut String, apps: &BTreeMap<String, AppEntry>) {
     let sockets = |s: &AppStats| {
         (

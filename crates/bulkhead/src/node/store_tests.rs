@@ -17,6 +17,7 @@ fn Store____state____saved_and_loaded() {
             previous: Some("1.0.0".into()),
             running: true,
             new_side: None,
+            quarantined: None,
         },
     );
 
@@ -172,6 +173,7 @@ fn prune_compiled____apps_and_versions_not_kept____removed() {
             previous: Some("1.0.0".into()),
             running: true,
             new_side: None,
+            quarantined: None,
         },
     );
 

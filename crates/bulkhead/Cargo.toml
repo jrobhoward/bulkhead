@@ -111,6 +111,10 @@ name = "node"
 required-features = ["node"]
 
 [[test]]
+name = "policy"
+required-features = ["node"]
+
+[[test]]
 name = "remote_admin"
 required-features = ["tls"]
 

@@ -119,6 +119,11 @@
 //! watches_max = 1000
 //! senders_max = 8
 //! cpu = 2            # cores per instance (ROADMAP PS6); unset: no default, no ceiling
+//! refusals_max = 100  # refusals per instance within refusals_period_ms (ROADMAP PS5)
+//! refusals_period_ms = 10000
+//! requests_per_sec = 0          # 0: none
+//! quarantine_after = 3          # policy and protocol kills per app within the period; 0: never
+//! quarantine_period_ms = 600000
 //! ```
 
 use std::collections::BTreeMap;
@@ -285,6 +290,28 @@ pub struct NodeLimits {
     /// only lower it; 0 for no ceiling.
     #[serde(default = "default_log_records")]
     pub log_records_per_sec: u32,
+    /// Refusals per instance within `refusals_period_ms` (ROADMAP PS5):
+    /// `access-denied` answers and messaging-ACL refusals together; one
+    /// more kills the instance, `crashed: policy(refusals)`. A manifest
+    /// may only lower it.
+    #[serde(default = "default_refusals")]
+    pub refusals_max: u32,
+    /// The window `refusals_max` counts over.
+    #[serde(default = "default_refusals_period")]
+    pub refusals_period_ms: u64,
+    /// Requests per second per instance; one more kills it,
+    /// `crashed: policy(rate)`. 0: none, and a manifest may set its own.
+    #[serde(default)]
+    pub requests_per_sec: u32,
+    /// Kills by the policy (`policy(...)`) and protocol breaks
+    /// (`protocol: ...`) an app may have within `quarantine_period_ms`;
+    /// at this many the node stops it and marks it quarantined until
+    /// `bulkhead start`. 0: never.
+    #[serde(default = "default_quarantine_after")]
+    pub quarantine_after: u32,
+    /// The window `quarantine_after` counts over.
+    #[serde(default = "default_quarantine_period")]
+    pub quarantine_period_ms: u64,
     /// CPU per instance, in cores (ROADMAP PS6): the limit of an app whose
     /// manifest sets none, and the most one may ask for. Unset: neither.
     /// The node's own drivers take no default.
@@ -303,9 +330,30 @@ impl Default for NodeLimits {
             watches_max: default_groups(),
             senders_max: default_senders(),
             log_records_per_sec: default_log_records(),
+            refusals_max: default_refusals(),
+            refusals_period_ms: default_refusals_period(),
+            requests_per_sec: 0,
+            quarantine_after: default_quarantine_after(),
+            quarantine_period_ms: default_quarantine_period(),
             cpu: None,
         }
     }
+}
+
+fn default_refusals() -> u32 {
+    100
+}
+
+fn default_refusals_period() -> u64 {
+    10_000
+}
+
+fn default_quarantine_after() -> u32 {
+    3
+}
+
+fn default_quarantine_period() -> u64 {
+    600_000
 }
 
 fn default_log_records() -> u32 {
@@ -1671,12 +1719,20 @@ impl NodeConfig {
             ("groups_max", limits.groups_max),
             ("watches_max", limits.watches_max),
             ("senders_max", limits.senders_max),
+            ("refusals_max", limits.refusals_max),
         ] {
             if value == 0 {
                 return Err(NodeError::Invalid(format!(
                     "node config: limits.{name} must be more than 0"
                 )));
             }
+        }
+        if limits.refusals_period_ms == 0 || limits.quarantine_period_ms == 0 {
+            return Err(NodeError::Invalid(
+                "node config: limits.refusals_period_ms and limits.quarantine_period_ms must be \
+                 more than 0"
+                    .into(),
+            ));
         }
         if let Some(cpu) = limits.cpu {
             use bulkhead_bundle::manifest::Millicores;

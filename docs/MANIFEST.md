@@ -139,6 +139,8 @@ The app's root supervisor, with OTP semantics.
 | `watches_max` | node's `[limits]` (1000) | Most keyvalue watches the instance holds (`bulkhead:watch`). One more `watch` returns `limit-reached`. |
 | `senders_max` | node's `[limits]` (8) | Most sender channels a native instance holds at once, one for each of its threads that asks the node outside the callbacks (`Ctx::sender`). One more returns `limit-reached`; a dropped sender frees its place. Each is two 68 KiB rings shared by the node and the app, and two of the node's descriptors (OPERATIONS.md, "Running as a service"). |
 | `pending_calls_max` | node's `[limits]` (10000) | Most calls answered `noreply` and not yet replied to. One more crashes the instance with `pending_call_limit`, and its waiting callers get `exited`. |
+| `refusals_max` | node's `[limits]` (100) | Most refusals an instance meets within node config's `refusals_period_ms` (10 s): `access-denied` answers (a capability, bucket, group, secret, datasource, address or destination not granted) and messaging-ACL refusals together, from its callbacks and its sender channels. One more kills it, `crashed: policy(refusals)` (ROADMAP PS5). |
+| `requests_per_sec` | node's `[limits]` (none) | Most requests an instance makes of the node in a second. One more kills it, `crashed: policy(rate)`. Under a node's value, only lower; with none at the node, the manifest's own. |
 | `storage_quota`, `open_files`, `outbound_connections` | none | *Not enforced.* |
 
 A `send_after` timer never fires early, and on an idle node fires 1 to 2 ms late: the host's timers have a 1 ms grain and round a deadline up to it, then round the wait up to it again. A busy node adds more when every worker is busy (`docs/BASELINE.md`, 2026-10-24: `send_after` 1.0 to 1.2 ms late at p50 and about 2 ms at p99, idle, on a 16-core machine and on a Raspberry Pi 5).
@@ -476,6 +478,11 @@ groups_max = 1000
 watches_max = 1000
 senders_max = 8                        # sender channels per native instance
 log_records_per_sec = 1000             # per app, logging records and stdout/stderr lines together; 0: none
+refusals_max = 100                     # refusals per instance within refusals_period_ms; one more: crashed: policy(refusals)
+refusals_period_ms = 10000
+requests_per_sec = 0                   # per instance; one more: crashed: policy(rate). 0: none, and a manifest may set its own
+quarantine_after = 3                   # policy and protocol kills of an app within quarantine_period_ms that quarantine it; 0: never
+quarantine_period_ms = 600000
 cpu = 2                                # cores per instance: for apps that set none, and the most one may ask for; unset: neither. The node's own drivers take no default
 
 [buckets.points]                       # a shared keyvalue bucket, opened by apps that list it

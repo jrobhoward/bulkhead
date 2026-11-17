@@ -40,6 +40,10 @@ pub(crate) struct AppState {
     /// The new version running beside `current` in a blue-green upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) new_side: Option<NewSideState>,
+    /// Why the node quarantined the app (ROADMAP PS5): stopped for
+    /// misbehaving, until `bulkhead start` clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) quarantined: Option<String>,
 }
 
 /// A blue-green upgrade's new version and its share of traffic.

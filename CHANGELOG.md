@@ -8,6 +8,23 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A misbehaviour policy and quarantine (ROADMAP PS5). The node counts,
+  per native instance, the refusals it answers (`access-denied` and
+  messaging-ACL refusals together, from callbacks and sender channels;
+  `bulkhead_host`'s `policy`) and, when set, its requests a second. Past
+  node config's `[limits] refusals_max` (100) within
+  `refusals_period_ms` (10 s), or the manifest's lower
+  `limits.refusals_max`, it kills the instance,
+  `crashed: policy(refusals)`; past `requests_per_sec` (none by
+  default; the manifest may set one), `crashed: policy(rate)`. Metrics
+  `bulkhead_refusals_total` and `bulkhead_policy_kills_total`. Each
+  policy kill and protocol break is an audit record (`misbehaved`); at
+  `quarantine_after` (3) within `quarantine_period_ms` (10 minutes) the
+  node stops the app and quarantines it, kept in `state.json` across
+  restarts and shown as `quarantined` by `list` and `status`, until
+  `bulkhead start` (whose audit record says what it cleared). The
+  native fixture gains `refuse`, `refuse-acl` and `requests`.
+
 - CPU limits per instance (ROADMAP PS6). The manifest's `limits.cpu`
   takes cores (`0.5`, `2`; `bulkhead_bundle::manifest::Millicores`, kept
   as thousandths); node config's `[limits] cpu` is the value for apps

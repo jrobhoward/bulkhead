@@ -49,9 +49,10 @@ pub struct AppSummary {
     pub name: String,
     /// Running (or last deployed) version.
     pub version: String,
-    /// `starting`, `running`, `failed`, `stopped`.
+    /// `starting`, `running`, `failed`, `stopped`, `standby`, or
+    /// `quarantined` (stopped by the node for misbehaving, ROADMAP PS5).
     pub status: String,
-    /// Why it failed, for `failed`.
+    /// Why it failed, for `failed`; why it is quarantined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Running instances.

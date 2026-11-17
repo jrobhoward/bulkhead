@@ -28,7 +28,7 @@ Connection handlers do not appear in `ps` (an instance per connection, with no m
 
 | `kind` | `event` | Fields |
 | --- | --- | --- |
-| `audit` | as `audit.log` (`deploy`, `upgrade`, `kill`, `remote_admin`, ...) | as `audit.log` |
+| `audit` | as `audit.log` (`deploy`, `upgrade`, `kill`, `remote_admin`, `misbehaved`, `quarantine`, ...) | as `audit.log` |
 | `instance` | `exit` | `pid`, `app`, `reason` |
 | `instance` | `restart` | `pid` (the new incarnation), `previous`, `child` (the supervisor's child id) |
 | `member` | `joined`, `left`, `reachable`, `unreachable`, `down`, `path_silent`, `path_heard` | `node`, and `creation`, `session` or `path` |
@@ -79,6 +79,8 @@ The host's metrics, every one with an `app` label. The names and labels are an i
 | `bulkhead_instance_exits_total` | counter | `reason` (`normal`, `shutdown`, `killed`, `noproc`, `noconnection`, `timeout`, `crashed`) | Instance exits. |
 | `bulkhead_egress_requests_total` | counter | `outcome` (`sent`: a response came; `denied`; `limited`: over `max_concurrent`; `failed`: connection, TLS or timeout) | Outgoing HTTP requests (`bulkhead:http-egress`); listed once an app has made one. |
 | `bulkhead_sockets_open` | gauge | | Sockets the app's instances hold open (`bulkhead:sockets`), TCP and UDP, accepted ones included; listed once an app has opened or been refused one. |
+| `bulkhead_refusals_total` | counter | `kind` (`access-denied`, `acl`) | Refusals the misbehaviour policy counted (ROADMAP PS5), for apps that met any. |
+| `bulkhead_policy_kills_total` | counter | `reason` (`refusals`, `rate`) | Instances the misbehaviour policy killed. |
 | `bulkhead_sockets_refused_total` | counter | | Socket addresses the app's policy refused (bind, listen, connect, send, receive) and sockets refused over `max_sockets`. |
 | `bulkhead_blobs_bytes` | gauge | | Bytes of the app's blobs the node holds (`bulkhead:blobs`, ROADMAP BL1), against its `max_bytes`; listed once the app has asked for a blob. |
 | `bulkhead_blobs_total` | counter | `outcome` (`created`; `sealed`; `refused`: a request refused; `freed`: released by every app, or unsealed when its instance ended; `expired`) | The app's blobs and blob requests. |

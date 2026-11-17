@@ -210,6 +210,7 @@ The host detects every failure, converts it to an exit reason, and propagates it
 | Native process panics, aborts, exits or is killed by a signal | A `Failed` frame with the panic's message, or the process's exit status | `crashed("panic: ...")`, `crashed("killed by signal N")` or `crashed("exited with status N")` |
 | Native process over `memory_max` | The cgroup's OOM kill (or a failed allocation under `RLIMIT_DATA`, which aborts) | `crashed("memory_limit")` (or a signal) |
 | Native callback runs too long, or an idle process misses a ping | The instance's deadline timer, the ping timer | `timeout`, by a kill |
+| Too many refusals within a period, or requests over a set rate (the misbehaviour policy, ROADMAP PS5) | The node's count of the answers it sends the instance | `crashed("policy(refusals)")` or `crashed("policy(rate)")`, by a kill; an app with `quarantine_after` such kills or protocol breaks within a period is stopped and quarantined until `bulkhead start` |
 | Remote node lost | QUIC idle timeout or connection close | `noconnection` for every remote link and monitor through that node |
 
 This is stronger than BEAM in one way: BEAM cannot stop a NIF stuck in a loop, while a kill of an instance's process always gets control back.

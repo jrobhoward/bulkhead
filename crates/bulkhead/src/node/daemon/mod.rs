@@ -10,6 +10,7 @@ mod egress;
 mod ingress;
 mod metrics;
 mod modbus;
+mod quarantine;
 mod queries;
 #[cfg(feature = "tls")]
 mod remote;
@@ -206,6 +207,9 @@ impl Node {
                 groups: config.limits.groups_max,
                 watches: config.limits.watches_max,
                 senders: config.limits.senders_max,
+                refusals: config.limits.refusals_max,
+                refusals_period: Duration::from_millis(config.limits.refusals_period_ms),
+                requests_per_sec: config.limits.requests_per_sec,
             },
             log_records_per_sec: config.limits.log_records_per_sec,
             incoming_calls_per_peer: config.cluster.incoming_calls_max,

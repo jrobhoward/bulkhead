@@ -82,7 +82,10 @@ impl Node {
                 Some("a singleton; runs while this node is primary".into()),
             ),
             (None, Some(e)) => ("failed".into(), Some(e.clone())),
-            (None, None) => ("stopped".into(), None),
+            (None, None) => match &app.quarantined {
+                Some(why) => ("quarantined".into(), Some(why.clone())),
+                None => ("stopped".into(), None),
+            },
         };
         AppSummary {
             name: name.to_string(),
