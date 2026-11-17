@@ -24,7 +24,7 @@ jobs:
         target:
           [bundle_open, manifest, parse, routing_key, process_ops,
            wire_packet, failover_status, http_reply, state_view, modbus_request,
-           native_frame]
+           native_frame, priv_request, ring_reader]
     steps:
       - uses: actions/checkout@v4
 

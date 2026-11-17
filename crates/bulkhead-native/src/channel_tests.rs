@@ -155,6 +155,29 @@ fn ring____writer_claims_more_than_the_ring_holds____read_corrupt() {
     assert!(ring.is_readable());
 }
 
+#[rstest]
+#[case::reader_at_the_top(u64::MAX, 0)]
+#[case::both_near_the_top(u64::MAX - 3, u64::MAX)]
+fn ring____positions_wrapping_past_u64_max____read_and_moved_on(
+    #[case] head: u64,
+    #[case] tail: u64,
+) {
+    // Positions the app stored (ROADMAP T1b found the first): the ring
+    // holds `tail - head` bytes, wrapping, and reading them moves the head
+    // past `u64::MAX` rather than overflowing.
+    let (channel, _fd) = Channel::create().unwrap();
+    let ring = channel.to_node();
+    ring.word64(HEAD).store(head, Ordering::Release);
+    ring.word64(TAIL).store(tail, Ordering::Release);
+    let mut out = [0u8; 16];
+
+    let read = ring.read(&mut out);
+
+    let held = tail.wrapping_sub(head);
+    assert_eq!(read, Ok(usize::try_from(held).unwrap()));
+    assert_eq!(ring.word64(HEAD).load(Ordering::Acquire), tail);
+}
+
 #[test]
 fn ring____reader_position_past_the_writer____write_corrupt() {
     let (channel, _fd) = Channel::create().unwrap();

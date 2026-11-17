@@ -86,6 +86,11 @@ pub use names::{Names, RESOLVE_SCHEMA, ResolveError, Resolver};
 pub use native::NativeCode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use native::helper::PrivHelper;
+/// The node's frame splitter for a native app's input, for the fuzz
+/// targets in `fuzz/` only (ROADMAP T1b).
+#[cfg(all(fuzzing, any(target_os = "linux", target_os = "freebsd")))]
+#[doc(hidden)]
+pub use native::link::frames_for_fuzzing;
 pub use pid::Pid;
 /// Hash routing's key reader, for the fuzz targets in `fuzz/` only.
 #[cfg(fuzzing)]

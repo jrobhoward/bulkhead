@@ -91,6 +91,72 @@ pub(super) fn turn() -> (usize, u64) {
     })
 }
 
+/// What the first bytes of the app's input hold.
+#[derive(Debug)]
+pub(crate) enum Next {
+    /// Not a whole frame yet.
+    Need,
+    /// A frame, and how many bytes it took with its length prefix.
+    Ready { incoming: Incoming, len: usize },
+    /// A frame the node cannot read: the app is broken.
+    Broken(String),
+}
+
+/// The first frame in `have`, bytes the app wrote: a length prefix
+/// ([`protocol::frame_len`], which bounds it), then a hot frame
+/// ([`bulkhead_native::hot`]) or CBOR. Nothing here trusts the bytes; the
+/// ring's reader already bounded how many there are (ROADMAP T1b fuzzes
+/// both).
+pub(crate) fn next_frame(have: &[u8]) -> Next {
+    let Some(prefix) = have.get(..4).and_then(|p| <[u8; 4]>::try_from(p).ok()) else {
+        return Next::Need;
+    };
+    let len = match protocol::frame_len(prefix) {
+        Ok(len) => len,
+        Err(e) => return Next::Broken(e.to_string()),
+    };
+    let Some(body) = 4usize.checked_add(len).and_then(|end| have.get(4..end)) else {
+        return Next::Need;
+    };
+    let decoded = if bulkhead_native::hot::is_hot(body) {
+        bulkhead_native::hot::parse_from_app(body).map(|hot| match hot {
+            FromAppHot::Kv(f) => Incoming::Kv(KvCall {
+                id: f.id,
+                bucket: f.bucket,
+                op: f.op,
+                key: f.key.to_string(),
+                value: f.value.to_vec(),
+            }),
+            FromAppHot::Frame(frame) => Incoming::Frame(frame),
+        })
+    } else {
+        protocol::decode(body).map(Incoming::Frame)
+    };
+    match decoded {
+        Ok(incoming) => Next::Ready {
+            incoming,
+            len: 4 + len,
+        },
+        Err(e) => Next::Broken(e.to_string()),
+    }
+}
+
+/// [`next_frame`] over `bytes` as the link reads them, frame after frame
+/// until one is incomplete or broken: the bytes consumed, and whether it
+/// broke. For the `ring_reader` fuzz target only.
+#[cfg(fuzzing)]
+#[must_use]
+pub fn frames_for_fuzzing(bytes: &[u8]) -> (usize, bool) {
+    let mut at = 0;
+    loop {
+        match next_frame(bytes.get(at..).unwrap_or_default()) {
+            Next::Need => return (at, false),
+            Next::Ready { len, .. } => at += len,
+            Next::Broken(_) => return (at, true),
+        }
+    }
+}
+
 /// The frames from the app, read from its ring and not yet decoded.
 #[derive(Debug)]
 struct Input {
@@ -439,7 +505,9 @@ impl Link {
         }
     }
 
-    /// A whole frame from the input, if one is there.
+    /// A whole frame from the input, if one is there ([`next_frame`]).
+    /// After a broken frame the input is cleared and nothing more is
+    /// read.
     fn take(&mut self) -> Option<Incoming> {
         if let Some(why) = self.broken.take() {
             return Some(Incoming::Broken(why));
@@ -448,40 +516,19 @@ impl Link {
         if input.done {
             return None;
         }
-        let have = &input.buf[input.start..];
-        let prefix: [u8; 4] = have.get(..4)?.try_into().ok()?;
-        let len = match protocol::frame_len(prefix) {
-            Ok(len) => len,
-            Err(e) => {
+        match next_frame(&input.buf[input.start..]) {
+            Next::Need => None,
+            Next::Ready { incoming, len } => {
+                input.start += len;
+                Some(incoming)
+            }
+            Next::Broken(why) => {
                 input.done = true;
                 input.buf.clear();
                 input.start = 0;
-                return Some(Incoming::Broken(e.to_string()));
+                Some(Incoming::Broken(why))
             }
-        };
-        let body = have.get(4..4 + len)?;
-        let next = if bulkhead_native::hot::is_hot(body) {
-            bulkhead_native::hot::parse_from_app(body).map(|hot| match hot {
-                FromAppHot::Kv(f) => Incoming::Kv(KvCall {
-                    id: f.id,
-                    bucket: f.bucket,
-                    op: f.op,
-                    key: f.key.to_string(),
-                    value: f.value.to_vec(),
-                }),
-                FromAppHot::Frame(frame) => Incoming::Frame(frame),
-            })
-        } else {
-            protocol::decode(body).map(Incoming::Frame)
         }
-        .unwrap_or_else(|e| Incoming::Broken(e.to_string()));
-        input.start += 4 + len;
-        if matches!(next, Incoming::Broken(_)) {
-            input.done = true;
-            input.buf.clear();
-            input.start = 0;
-        }
-        Some(next)
     }
 
     /// Close the ring to the app: it exits once it has read what is

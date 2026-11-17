@@ -349,7 +349,8 @@ impl Ring<'_> {
         let n = bytes.len().min(RING_CAP - self.queued()?);
         if n > 0 {
             self.copy(tail, bytes.as_ptr(), n, true);
-            self.word64(TAIL).store(tail + n as u64, Ordering::Release);
+            self.word64(TAIL)
+                .store(tail.wrapping_add(n as u64), Ordering::Release);
             fence(Ordering::SeqCst);
         }
         Ok(n)
@@ -365,7 +366,11 @@ impl Ring<'_> {
         let n = out.len().min(self.queued()?);
         if n > 0 {
             self.copy(head, out.as_mut_ptr(), n, false);
-            self.word64(HEAD).store(head + n as u64, Ordering::Release);
+            // Wrapping, as `queued` subtracts: the other side may have
+            // stored any position, near `u64::MAX` too (found by the
+            // `ring_reader` fuzz target, ROADMAP T1b).
+            self.word64(HEAD)
+                .store(head.wrapping_add(n as u64), Ordering::Release);
             fence(Ordering::SeqCst);
         }
         Ok(n)

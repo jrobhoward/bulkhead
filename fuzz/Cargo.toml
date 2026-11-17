@@ -22,8 +22,9 @@ bulkhead-bundle = { path = "../crates/bulkhead-bundle" }
 bulkhead-host = { path = "../crates/bulkhead-host", features = ["test-apps"] }
 bulkhead-ingress = { path = "../crates/bulkhead-ingress" }
 bulkhead-modbus = { path = "../crates/bulkhead-modbus" }
-bulkhead-native = { path = "../crates/bulkhead-native", default-features = false }
+bulkhead-native = { path = "../crates/bulkhead-native", default-features = false, features = ["channel"] }
 bulkhead-priv-wire = { path = "../crates/bulkhead-priv-wire" }
+rustix = { version = "1", features = ["mm"] }
 semver = "1"
 serde_json = "1"
 tempfile = "3"
@@ -110,3 +111,10 @@ name = "priv_request"
 path = "fuzz_targets/priv_request.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "ring_reader"
+path = "fuzz_targets/ring_reader.rs"
+test = false
+doc = false
+bench = false

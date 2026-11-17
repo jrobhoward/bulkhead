@@ -235,6 +235,7 @@ In `fuzz/`, run nightly for five minutes each: `bundle_open`, `manifest`, `parse
 | `state_view` | apps | `node/state_view.rs`, which decodes an app's snapshot for `bulkhead state` |
 | `modbus_request` | Modbus masters | the server's request handling against its tables (address and count bounds) |
 | `native_frame` | native apps | `bulkhead_native::hot::parse_from_app` (hot frames) and the CBOR frame decoder the port uses |
+| `ring_reader` | native apps, through the shared memory | `bulkhead_native::channel::Ring::read` against positions and data the app stores at will, then `bulkhead-host`'s frame splitter (`native/link.rs`, `next_frame`) over what it read (ROADMAP T1b). Its first run found the reader's `head + n` overflowing when the app stored a position near `u64::MAX` (a panic with overflow checks; wrapping now, 2026-11-16) |
 | `priv_request` | the node, read by the root helper | `bulkhead_priv_wire::Request::decode` and `Reply::decode`: no panic, and what decodes encodes back to the same bytes |
 
 Private functions are exported for fuzzing the way `routing_key` is: `#[cfg(fuzzing)] #[doc(hidden)]`.

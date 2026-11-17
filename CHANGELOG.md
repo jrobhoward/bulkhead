@@ -8,6 +8,17 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A fuzz target for the node's reader of a native app's ring
+  (`ring_reader`, ROADMAP T1b): raw stores to the ring's positions and
+  data against `Ring::read`, then the node's frame splitter, now a pure
+  function (`bulkhead-host`'s `native/link.rs`, `next_frame`). Its first
+  run found `Ring::read` and `Ring::write` adding to a position the
+  other side may have stored near `u64::MAX`, which panicked where
+  overflow checks are on; both now wrap, as `queued` already
+  subtracted. The fuzz crate's own lock moves to rustbridge 356f700, so
+  its targets build again (they had not since FB6), and the nightly fuzz
+  job also runs `priv_request`, which it had left out.
+
 - `unsafe` kept where it is (ROADMAP CR2): every crate without unsafe
   code has `#![forbid(unsafe_code)]` in its `lib.rs` and `main.rs` (21
   crates, the fixtures included), and `undocumented_unsafe_blocks` is

@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use rstest::rstest;
 
-use super::{hinted_idle, too_new, turn};
+use bulkhead_native::protocol::{self, FromApp};
+
+use super::{Next, hinted_idle, next_frame, too_new, turn};
+use crate::native::port::Incoming;
 
 #[test]
 fn turn____nothing_between____one_count_apart() {
@@ -77,4 +80,62 @@ fn too_new____a_frame_newer_than_the_app____refused_naming_both() {
     );
     assert_eq!(current, None);
     assert_eq!(ping, None);
+}
+
+/// Two frames, a pong and a log, as the app writes them.
+fn two_frames() -> (Vec<u8>, usize) {
+    let first = protocol::encode(&FromApp::Pong { id: 7 });
+    let mut bytes = first.clone();
+    bytes.extend(protocol::encode(&FromApp::Log {
+        level: protocol::Level::Info,
+        message: "hello".into(),
+    }));
+    (bytes, first.len())
+}
+
+#[test]
+fn next_frame____a_whole_frame____it_and_its_length() {
+    let (bytes, first) = two_frames();
+
+    let next = next_frame(&bytes);
+
+    assert!(
+        matches!(next, Next::Ready { incoming: Incoming::Frame(FromApp::Pong { id: 7 }), len } if len == first),
+        "{next:?}"
+    );
+}
+
+#[rstest]
+#[case::nothing(0)]
+#[case::part_of_the_prefix(3)]
+#[case::the_prefix_alone(4)]
+#[case::all_but_the_last_byte(usize::MAX)]
+fn next_frame____a_frame_cut_short____need(#[case] keep: usize) {
+    let frame = protocol::encode(&FromApp::Pong { id: 7 });
+    let keep = keep.min(frame.len() - 1);
+
+    let next = next_frame(&frame[..keep]);
+
+    assert!(matches!(next, Next::Need), "{next:?}");
+}
+
+#[test]
+fn next_frame____a_length_over_the_largest_frame____broken() {
+    let too_long = u32::try_from(protocol::MAX_FRAME + 1)
+        .unwrap()
+        .to_be_bytes();
+
+    let next = next_frame(&too_long);
+
+    assert!(matches!(next, Next::Broken(_)), "{next:?}");
+}
+
+#[test]
+fn next_frame____a_body_that_does_not_decode____broken() {
+    let mut bytes = 3u32.to_be_bytes().to_vec();
+    bytes.extend([0xff, 0xff, 0xff]);
+
+    let next = next_frame(&bytes);
+
+    assert!(matches!(next, Next::Broken(_)), "{next:?}");
 }
