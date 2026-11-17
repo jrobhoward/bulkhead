@@ -14,7 +14,7 @@ The single plan for remaining work: what is left, in what order, and which part 
 - **Failover and replication changes** follow V1 (below): the TLA+ model changes first and its configurations are rerun.
 - **Benchmarks** run on an idle machine only, and every new boundary (a helper, a driver app, a thread's sends) is measured against the path it replaces before it becomes the default.
 - **Platforms:** an item is done when it works on Linux and FreeBSD, or says plainly what is left on the other.
-- **Test machines** (set up 2026-11-11; `CLAUDE.local.md` names them): work that needs root (the helper, users, cgroups, namespaces, jails, ZFS, service units) runs on a FreeBSD 15 VM, an Ubuntu 26.04 x86-64 VM and the Raspberry Pi 5, never on the development machine. The VMs share the 16-core machine's cores, so they are for function checks and soaks only; benchmarks stay on the 16-core machine and the Pi, and FreeBSD is not benchmarked (Goals). A VM is snapshotted before root experiments. FB5's mixed pair uses the two VMs; three cluster VMs follow when DR5 and FO1 need more nodes.
+- **Test machines** (set up 2026-11-11; `CLAUDE.local.md` names them): work that needs root (the helper, users, cgroups, namespaces, jails, ZFS, service units) runs on a FreeBSD 15 VM, an Ubuntu 26.04 x86-64 VM and the Raspberry Pi 5, never on the development machine. The VMs share the 16-core machine's cores, so they are for function checks and soaks only; benchmarks stay on the 16-core machine and the Pi, and FreeBSD is not benchmarked (Goals). A VM is snapshotted before root experiments. `scripts/vm-pair.sh` runs a pair across the two VMs, the witness on the host (FB5); three cluster VMs follow when DR5 and FO1 need more nodes.
 - **Sizes** are relative: S = days, M = about a week, L = more than a week.
 
 ## Goals
@@ -63,7 +63,7 @@ Measured against the goals on 2026-11-10:
 | Observability | Good: probes, metrics, audit, events, `ps`, `state` | A trace id across calls and nodes (O1) |
 | A small, protected core | Mostly: HTTP ingress and its TLS (DA2), host names (DA9), the remote admin API's TLS and the metrics endpoint (DA7) run in drivers since 2026-11-14, so no listener any client reaches is served by the node before a key is checked, SQL since 2026-11-15 (DA3), a driver per datasource holding its password, HTTP egress the same day (DA4), a driver per app, and Modbus (DA5), drivers for devices and masters; no code from outside Bulkhead runs in the node since DA8 (the `Extension` trait removed); what the node still parses from outside is SECURITY.md's list of what stays ("What the node parses from outside") | Phase 6a |
 | No root; apps unprivileged | Half: nothing runs as root, but apps run as the node's user (their system calls are an allow-list since 2026-11-11) | Phase 6a |
-| FreeBSD, jails, ZFS | FreeBSD done in function: native apps in capability mode (FB1), a jail per instance under the helper (FB2), bundles (FB6), the whole suite in CI (FB3), an hour's scada soak on its VM (FB4); not measured, by decision (Goals); ZFS missing | Phase 6b's FB5, ZFS volumes |
+| FreeBSD, jails, ZFS | FreeBSD done in function: native apps in capability mode (FB1), a jail per instance under the helper (FB2), bundles (FB6), the whole suite in CI (FB3), an hour's scada soak on its VM (FB4), a pair across Linux and FreeBSD with a serial line between them, DTrace and the tutorial (FB5); not measured, by decision (Goals); ZFS missing | ZFS volumes |
 | A disaster-recovery site | Partial: the third node is a witness and holds no data | Phase 8 |
 
 ## Order
@@ -80,7 +80,7 @@ flowchart LR
 ```
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
-- **Next:** FB5 on the VMs (a mixed Linux and FreeBSD pair, a serial line between the guests, DTrace, the tutorial's scripts). Phase 6's software items are done (T1b was the last, 2026-11-16), and the FreeBSD VM passed its hour's scada soak (FB4, 2026-11-16). What is left of Phase 6 on hardware is the Raspberry Pi 5's, once its drive is replaced (it logged read errors on 2026-11-15): PS1c, PS1b's check on aarch64 (the helper's root tests, the conformance suite under it and `scripts/priv-e2e-systemd.sh`, with `BULKHEAD_PRIV_SECCOMP_LOG=1` first), the ARM baselines and the Pi's soak. Then Phase 8 (disaster recovery, starting with S38) or the open Phase 7 threads, by the order above.
+- **Next:** Phase 8 (disaster recovery, starting with S38) or the open Phase 7 threads, by the order above. Phase 6's software and VM items are done (FB5 was the last, 2026-11-17). What is left of Phase 6 is the Raspberry Pi 5's, waiting for its drive to be replaced (it failed on 2026-11-15): PS1c, PS1b's check on aarch64 (the helper's root tests, the conformance suite under it and `scripts/priv-e2e-systemd.sh`, with `BULKHEAD_PRIV_SECCOMP_LOG=1` first), the ARM baselines and the Pi's soak.
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
 - **Disaster recovery in parallel** with Phases 6 and 7: it touches replication, failover and the transport, which they do not. Its model (S38) comes first, under V1. Shipping volumes (DR6) waits for ZFS volumes.
@@ -112,9 +112,7 @@ Since FB1 (2026-11-11) the node runs native apps on FreeBSD: the port, the rings
 - Rust's std opens `/dev/null` when stdio lacks `CAP_EVENT`.
 - A dying jail frees asynchronously, so nullfs unmounts retry on `EBUSY`.
 
-Items:
-
-- [ ] **FB5 The rest on FreeBSD, on the VMs** (M). A pair mixing a Linux and a FreeBSD node: the Ubuntu VM and the FreeBSD VM, with the witness on the 16-core machine, failing over across systems by the network and by a serial heartbeat over a virtual serial line between the two guests (libvirt joins their serial ports through a socket on the host; the tty layer is on `rustix`). Probes through DTrace (anyprobe's USDT) and the tutorial's scripts on the FreeBSD VM. Function checks only, as for every VM. Areas: tests, soak, docs, OPERATIONS.md (a serial line between VMs).
+No items left: FB5 was the last (2026-11-17).
 
 ## Phase 7: protocols out of the core
 

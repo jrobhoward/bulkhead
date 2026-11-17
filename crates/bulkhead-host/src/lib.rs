@@ -96,6 +96,7 @@ pub use pid::Pid;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub use pool::routing_key;
+pub use probe::registration as probe_registration;
 pub use replication::ReplicationStatus;
 #[cfg(unix)]
 pub use runtime::AdminStreams;

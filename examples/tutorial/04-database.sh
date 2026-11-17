@@ -22,9 +22,13 @@ BASE_PORT=${BASE_PORT:-7401}
 url() { echo "http://127.0.0.1:$((HTTP_PORT + $1 - 1))/tally"; }
 addr() { echo "127.0.0.1:$((BASE_PORT + $1 - 1))"; }
 
-PG_BIN=${BULKHEAD_PG_BIN:-$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1)}
+# `|| true`: with no match, pipefail would end the script here.
+PG_BIN=${BULKHEAD_PG_BIN:-$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -n 1 || true)}
+# Elsewhere (FreeBSD's postgresql server package, macOS) on the PATH.
+[ -n "$PG_BIN" ] || PG_BIN=$(dirname "$(command -v initdb 2>/dev/null || echo /none/initdb)")
 if [ ! -x "$PG_BIN/initdb" ] || [ ! -x "$PG_BIN/pg_ctl" ]; then
   echo "this chapter needs Postgres's initdb and pg_ctl (apt install postgresql," >&2
+  echo "pkg install postgresql17-server on FreeBSD," >&2
   echo "or set BULKHEAD_PG_BIN to the directory holding them)" >&2
   exit 1
 fi
@@ -136,9 +140,9 @@ if [ "$AUTO" = 1 ]; then
 else
   pause "kill node 1 now (kill -9 ${NODE_PIDS[1]}), then"
 fi
-start=$(date +%s%N)
+start=$(now_ms)
 until_ok 60 serves 2
-echo "node 2 serves the tally $((($(date +%s%N) - start) / 1000000)) ms later:"
+echo "node 2 serves the tally $(($(now_ms) - start)) ms later:"
 show curl -s "$(url 2)"
 show curl -s -X POST "$(url 2)"
 cat <<'EOF'

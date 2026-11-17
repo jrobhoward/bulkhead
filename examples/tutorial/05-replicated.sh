@@ -126,9 +126,9 @@ if [ "$AUTO" = 1 ]; then
 else
   pause "kill node 1 now (kill -9 ${NODE_PIDS[1]}), then"
 fi
-start=$(date +%s%N)
+start=$(now_ms)
 until_ok 60 serves 2
-echo "node 2 serves the board $((($(date +%s%N) - start) / 1000000)) ms later:"
+echo "node 2 serves the board $(($(now_ms) - start)) ms later:"
 show curl -s "$(url 2)"
 showp 2 failover
 cat <<'EOF'

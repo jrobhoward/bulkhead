@@ -137,6 +137,27 @@ An agent beside each node of the pair holds the address while its node may run s
 - **A lost node.** The watch prints `unreachable` when the agent cannot reach its own node, so the agent releases the address. A node that is gone with its agent (a power cut) releases nothing, and the address moves when the other node takes it.
 - **keepalived instead.** A site that already runs keepalived can have it follow Bulkhead's role. A `vrrp_script` that runs `bulkhead --json failover` and succeeds only when `"may_run": true` appears, with a weight above the gap between the two nodes' priorities, makes the Bulkhead primary the VRRP master. VRRP then runs its own election beside Bulkhead's, so the address can lag a takeover by keepalived's own interval, and during a network cut each side's keepalived decides on its own. The watch agent above does not have these gaps.
 
+### A serial line between two VMs
+
+Two nodes of a pair in virtual machines on one host can have the serial heartbeat path as well, through a second serial port in each guest that the host joins. With libvirt (`virsh edit <domain>`, as a member of the `libvirt` group; the VM's first port stays its console):
+
+```xml
+<serial type='tcp'>
+  <source mode='bind' host='127.0.0.1' service='47111'/>   <!-- 47112 on the other VM -->
+  <protocol type='raw'/>
+  <target port='1'/>
+</serial>
+```
+
+In the guest the port is `/dev/ttyS1` on Linux (group `dialout`) and `/dev/cuau1` on FreeBSD (group `dialer`); the node's user joins the group, and `[failover] serial = { device = "/dev/ttyS1" }` (or `/dev/cuau1`) names it. The host joins the two ports:
+
+```sh
+mkfifo /tmp/serial-line
+nc 127.0.0.1 47111 < /tmp/serial-line | nc 127.0.0.1 47112 > /tmp/serial-line
+```
+
+Stopping the relay cuts the line and starting it again joins it; each node shows the path in `bulkhead failover` (`paths: link heard, serial heard`). For a line that stays up with no process on the host, give the two ports `type='udp'` instead, each with `<source mode='bind' host='127.0.0.1' service='<its port>'/>` and `<source mode='connect' host='127.0.0.1' service='<the other's port>'/>`; it cannot then be cut on its own (not tried here). [`scripts/vm-pair.sh`](../scripts/vm-pair.sh) runs a pair across a Linux and a FreeBSD VM this way, with the witness on the host, and cuts the network, the line and a node in turn (ROADMAP FB5, 2026-11-17).
+
 ## Misbehaving apps and quarantine
 
 The node holds each native instance to a misbehaviour policy (ROADMAP PS5). It counts the refusals it answers the instance, `access-denied` (something not granted) and messaging-ACL refusals together; past node config's `[limits] refusals_max` (100) within `refusals_period_ms` (10 s), or a lower `limits.refusals_max` in the manifest, it kills the instance, `crashed: policy(refusals)`. With `requests_per_sec` set (node config or manifest; none by default), more requests a second than that kill it too, `crashed: policy(rate)`. The supervisor restarts it as after any crash; `bulkhead_refusals_total` and `bulkhead_policy_kills_total` count them, and the log says which limit.

@@ -1,6 +1,6 @@
-# Tracing a live node with bpftrace
+# Tracing a live node with bpftrace or DTrace
 
-A walkthrough of Bulkhead's USDT probes (anyprobe, provider `bulkhead`) on a running node: a script that starts a node with steady, eventful traffic, and bpftrace scripts that watch it from a second terminal. Linux only; bpftrace needs root. The probes and their arguments are listed in [docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md).
+A walkthrough of Bulkhead's USDT probes (anyprobe, provider `bulkhead`) on a running node: a script that starts a node with steady, eventful traffic, and scripts that watch it from a second terminal: bpftrace on Linux (`bt/`), DTrace on FreeBSD (`d/`). Both need root. The probes and their arguments are listed in [docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md).
 
 ## 1. Start the demo
 
@@ -39,8 +39,24 @@ A pid reads `node.serial.incarnation@creation`; the probes give an instance's wh
 
 Attaching needs no restart and no change to the node: with no tracer attached each probe costs one enabled check. The scripts use `-p`, which lets bpftrace find the probes in the running process and switch them on.
 
+## On FreeBSD: DTrace
+
+The same probes are DTrace USDT there (x86-64). The node hands them to DTrace when it starts, so load DTrace before starting the demo:
+
+```sh
+kldload dtraceall                       # as root, once per boot
+examples/tracing/demo.sh                # as the user, in one terminal
+dtrace -l -P bulkhead<node pid>         # as root, in another: the 12 probes
+dtrace -q -p <node pid> -s examples/tracing/d/lifecycle.d
+```
+
+`d/lifecycle.d`, `d/calls.d`, `d/callbacks.d` and `d/everything.d` show the same as their `bt/` namesakes. DTrace writes `__` in a probe name as `-` (`call-start`) and names the provider per process (`bulkhead<pid>`, `bulkhead$target` in a script); `copyinstr(ptr, len)` reads a `&str`. Only one `dtrace -p` can attach to a process at a time.
+
+A node started before DTrace was loaded, or whose user cannot open `/dev/dtrace/helper` (`root:wheel`, mode 0660, by default), logs `probes not registered` and shows no probes until it restarts.
+
 ## Notes
 
+- The D scripts ran against this demo on a FreeBSD 15 VM (2026-11-17), each printing the traffic above. The demo prints the commands for the system it runs on.
 - These bpftrace scripts have not been run in this repository's automated checks: bpftrace needs root even to parse a script. They follow anyprobe's documented argument layout (a `&str` is a pointer and a length, read with `buf(ptr, len)` and printed with `%r`). Tested so far: that the probes are in the binary (`readelf -n target/release/bulkhead | grep -A3 stapsdt`) and that the demo's traffic produces the events above.
 - Without bpftrace, `perf` reads the same probes: `sudo perf probe -x target/release/bulkhead sdt_bulkhead:instance__exit`, then `sudo perf record -e sdt_bulkhead:instance__exit -p <node pid>`.
 - `DEMO_DIR=<dir> examples/tracing/demo.sh` keeps the node's files (data, `node.log`, bundles) in `<dir>` instead of a temporary directory.

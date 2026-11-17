@@ -48,6 +48,9 @@ pub fn run(config: &Path) -> anyhow::Result<()> {
         .with(json)
         .with(RingLayer::new(ring.clone()))
         .init();
+    if let Err(error) = bulkhead_host::probe_registration() {
+        tracing::warn!(%error, "probes not registered: tracers will not see this node's until it restarts");
+    }
     // Multi-threaded: instances must never run on a current-thread runtime.
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

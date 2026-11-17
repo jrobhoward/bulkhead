@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run a Bulkhead node with traffic worth tracing, for the bpftrace scripts in
-# examples/tracing/bt. See examples/tracing/README.md.
+# examples/tracing/bt (Linux) and the D scripts in examples/tracing/d
+# (FreeBSD). See examples/tracing/README.md.
 #
 #   examples/tracing/demo.sh            # from the repository root; Ctrl-C stops it
 #
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-DEMO_DIR=${DEMO_DIR:-$(mktemp -d -t bulkhead-trace-XXXXXX)}
+DEMO_DIR=${DEMO_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/bulkhead-trace-XXXXXX")}
 BULKHEAD="$ROOT/target/release/bulkhead"
 PROGRAMS="$ROOT/target/release"
 
@@ -77,15 +78,22 @@ bundle "$ROOT/examples/ping-pong/pong.toml" example-ping-pong pong.rbp
 bundle "$ROOT/examples/ping-pong/ping.toml" example-ping-pong ping.rbp
 bundle chaos.toml example-chaos chaos.rbp
 
+if [ "$(uname)" = FreeBSD ]; then
+  TRACE="dtrace -q -p $NODE -s examples/tracing/d"
+  EXT=d
+else
+  TRACE="sudo bpftrace -p $NODE examples/tracing/bt"
+  EXT=bt
+fi
 cat <<EOF
 
 node running: pid $NODE, data in $DEMO_DIR
-In another terminal, from $ROOT:
+In another terminal, from $ROOT (as root for dtrace):
 
-  sudo bpftrace -p $NODE examples/tracing/bt/calls.bt
-  sudo bpftrace -p $NODE examples/tracing/bt/lifecycle.bt
-  sudo bpftrace -p $NODE examples/tracing/bt/callbacks.bt
-  sudo bpftrace -p $NODE examples/tracing/bt/everything.bt
+  $TRACE/calls.$EXT
+  $TRACE/lifecycle.$EXT
+  $TRACE/callbacks.$EXT
+  $TRACE/everything.$EXT
 
 and to watch the instances:
 

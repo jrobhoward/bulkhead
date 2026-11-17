@@ -366,8 +366,10 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   stopped node's time, since its native apps run on); changing their wording breaks the
   check (its tests hold sample lines).
 - `scripts/`: `check.sh` (every check; `--help`), `check-secrets.sh` (run
-  before pushing; `--help`) and `soak.sh` (hours of fault injection, not in
-  CI; `--help`).
+  before pushing; `--help`), `soak.sh` (hours of fault injection, not in
+  CI; `--help`) and `vm-pair.sh` (a pair across a Linux and a FreeBSD VM
+  with a serial line between them, the witness on the host; the test
+  machines only, `--help`).
 - `docs/`: design and plan. `docs/tla/`: TLA+ specifications of failover
   and their results (`VERIFICATION.md`); run with TLC, not in CI.
 - `spikes/`: throwaway programs that answered design questions

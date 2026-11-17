@@ -14,7 +14,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-DEMO_DIR=${DEMO_DIR:-$(mktemp -d -t bulkhead-failover-XXXXXX)}
+DEMO_DIR=${DEMO_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/bulkhead-failover-XXXXXX")}
 BASE_PORT=${BASE_PORT:-7401}
 BULKHEAD="$ROOT/target/release/bulkhead"
 PROGRAM="$ROOT/target/release/example-counter"
@@ -96,6 +96,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Milliseconds since the epoch (bash 5; GNU date's %N is not portable).
+now_ms() { local t=${EPOCHREALTIME/[.,]/}; echo $((t / 1000)); }
+
 # Wait up to $1 seconds for the command after it to succeed.
 until_ok() {
   local deadline=$(($(date +%s) + $1))
@@ -137,9 +140,9 @@ echo "== 2. kill -9 node 1"
 kill -9 "${PIDS[1]}"
 wait "${PIDS[1]}" 2>/dev/null || true
 unset 'PIDS[1]'
-START=$(date +%s%N)
+START=$(now_ms)
 until_ok 60 running 2
-TOOK=$((($(date +%s%N) - START) / 1000000))
+TOOK=$(($(now_ms) - START))
 echo "node 2 runs the counter $TOOK ms after node 1 was killed"
 echo "node 2: $(p 2 call counter get)   (a singleton starts from init: state is not carried over)"
 p 2 failover

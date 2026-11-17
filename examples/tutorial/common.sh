@@ -6,6 +6,7 @@
 #   p N ARGS...      run the bulkhead CLI against node N
 #   start_node N     start `bulkhead node` on $DEMO_DIR/node-N.toml
 #   until_ok SECS CMD...   retry CMD until it succeeds
+#   now_ms           milliseconds since the epoch
 #   pause TEXT       wait for Enter (skipped with AUTO=1)
 #   show CMD...      print a command, then run it
 #   showp N ARGS...  the same for `bulkhead ARGS` against node N
@@ -15,7 +16,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-DEMO_DIR=${DEMO_DIR:-$(mktemp -d -t bulkhead-tutorial-XXXXXX)}
+DEMO_DIR=${DEMO_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/bulkhead-tutorial-XXXXXX")}
 BULKHEAD="$ROOT/target/release/bulkhead"
 AUTO=${AUTO:-0}
 
@@ -26,6 +27,8 @@ cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \
   -p bulkhead-native --bin bulkhead-runner
 # And its resolver of host names (bulkhead-resolve), also beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-resolve
+# And the HTTP ingress driver (bulkhead-ingress), which serves [http].
+cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-ingress
 # And each datasource's driver (bulkhead-sql), for chapter 4.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-sql
 BOARD_DIR="$ROOT/examples/board"
@@ -62,6 +65,9 @@ cleanup() {
   echo "nodes stopped; configs, data and logs are in $DEMO_DIR"
 }
 trap cleanup EXIT
+
+# bash 5's clock: GNU date's %N is not portable (FreeBSD's date has none).
+now_ms() { local t=${EPOCHREALTIME/[.,]/}; echo $((t / 1000)); }
 
 until_ok() {
   local deadline=$(($(date +%s) + $1))

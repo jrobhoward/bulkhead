@@ -8,6 +8,30 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A failover pair across systems (ROADMAP FB5): `scripts/vm-pair.sh`
+  runs node 1 on a Linux VM and node 2 on a FreeBSD VM, with the witness
+  on the host and a serial line between the guests (each VM's second
+  serial port, joined on the host; OPERATIONS.md, "A serial line between
+  two VMs"). It checks that the serial path alone keeps the standby from
+  taking over while the network between them is cut, that with both cut
+  the witness keeps one runner, a takeover by the FreeBSD node after the
+  Linux node is killed, and a switchover back; all passed on 2026-11-17.
+
+- The probes under DTrace on FreeBSD: `examples/tracing/d/` holds D
+  scripts showing what the bpftrace ones do, and the tracing demo prints
+  the commands for the system it runs on. `bulkhead node` logs `probes
+  not registered` at startup when its probes could not be handed to the
+  system's tracer (on FreeBSD: DTrace not loaded yet, or
+  `/dev/dtrace/helper` not open to the node's user); a tracer then sees
+  none until the node restarts.
+
+- The tutorial and the failover demo time with bash's `EPOCHREALTIME`
+  instead of GNU date's `%N`, and chapter 4 finds Postgres's programs on
+  the `PATH` where they are not under `/usr/lib/postgresql`, so every
+  chapter runs on FreeBSD. The tutorial also builds `bulkhead-ingress`,
+  which every chapter's HTTP listener has needed since the ingress became
+  a driver (DA2); without an earlier build of it, node 1 did not start.
+
 - The scada soak runs on FreeBSD (ROADMAP FB4): its memory sampler
   finds the nodes and their resident memory through `ps` there, as
   `/proc` is Linux's. An hour on the FreeBSD VM passed on 2026-11-16.

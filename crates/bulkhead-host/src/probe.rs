@@ -77,6 +77,28 @@ fn outcome<T>(result: &Result<T, CallError>) -> &'static str {
     }
 }
 
+/// Whether this process's probes registered with the system's tracer, for
+/// the node to report at startup. On FreeBSD a process hands its probes to
+/// DTrace through `/dev/dtrace/helper` when it starts, which fails when
+/// DTrace is not loaded yet or the device is not open to the process's
+/// user; the probes then stay invisible until the process restarts.
+/// Always `Ok` without the `probes` feature, and where registration cannot
+/// fail (Linux).
+///
+/// # Errors
+///
+/// Why the probes did not register.
+pub fn registration() -> Result<(), String> {
+    #[cfg(feature = "probes")]
+    {
+        anyprobe::registration().map_err(|e| e.to_string())
+    }
+    #[cfg(not(feature = "probes"))]
+    {
+        Ok(())
+    }
+}
+
 /// A call is about to be queued. Returns the call id for [`call_done`]; 0
 /// when no tracer is attached.
 #[inline]

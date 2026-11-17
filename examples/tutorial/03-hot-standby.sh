@@ -110,12 +110,12 @@ if [ "$AUTO" = 1 ]; then
 else
   pause "kill node 1 now (kill -9 ${NODE_PIDS[1]}), then"
 fi
-start=$(date +%s%N)
+start=$(now_ms)
 until_ok 60 role 2 primary
 # The app hears its role a moment after the node: until it takes a write
 # (adding 0 changes nothing).
 until_ok 10 curl -sf -X POST -d 0 "$(url 2)"
-echo "node 2 is the primary $((($(date +%s%N) - start) / 1000000)) ms later:"
+echo "node 2 is the primary $(($(now_ms) - start)) ms later:"
 show curl -s "$(url 2)"
 show curl -s -X POST "$(url 2)"
 cat <<'EOF'

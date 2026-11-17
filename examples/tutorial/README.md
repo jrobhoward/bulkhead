@@ -6,7 +6,8 @@ with its state kept in four places; then a counter that keeps its state in
 memory, carried through a hot upgrade.
 Each chapter is a script that starts the nodes, prints the commands to
 try, and pauses between steps; it stops everything at the end or on
-Ctrl-C. Run the scripts from the repository root. They need Linux and
+Ctrl-C. Run the scripts from the repository root. They need Linux or
+FreeBSD (every chapter ran on a FreeBSD 15 VM on 2026-11-17), bash 5 and
 `curl`, and the first build takes a few minutes.
 
 ```bash

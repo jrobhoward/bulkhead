@@ -126,7 +126,7 @@ The call id pairs `call__start` with `call__done`; it is 0 if no tracer was atta
 
 List them in a binary with `readelf -n target/release/bulkhead | grep -A3 stapsdt`, or `cargo anyprobe` (from the anyprobe repository), which also writes tracer scripts that decode every argument.
 
-[`examples/tracing`](../examples/tracing/README.md) runs a node with traffic worth tracing (calls between apps, kills and restarts, an overflowing mailbox) and has ready-made bpftrace scripts.
+[`examples/tracing`](../examples/tracing/README.md) runs a node with traffic worth tracing (calls between apps, kills and restarts, an overflowing mailbox) and has ready-made bpftrace scripts, and the same as D scripts for DTrace.
 
 bpftrace one-liners, attached to a running node (root; `buf(ptr, len)` reads a `&str`):
 
@@ -153,6 +153,21 @@ usdt:*:bulkhead:supervisor__restart { printf("restart %d.%d %r\n", arg0, arg1, b
 sudo bpftrace -p $PID -e 'usdt:*:bulkhead:mailbox__drop { @drops[arg0] = count(); }'
 ```
 
+On FreeBSD (x86-64) the same probes are DTrace USDT, which DTrace names with `-` for `__` and a provider per process (`bulkhead<pid>`); `copyinstr(ptr, len)` reads a `&str`. The node hands them to DTrace when it starts, through `/dev/dtrace/helper`, so DTrace has to be loaded first (`kldload dtraceall`, or `dtraceall_load="YES"` in `/boot/loader.conf`) and the device open to the node's user (`root:wheel`, mode 0660, by default; a devfs rule gives the node's group access). A node that cannot register logs `probes not registered` at startup, and a tracer sees none of its probes until it restarts. One `dtrace -p` can attach to a process at a time.
+
+```sh
+PID=$(pgrep -f 'bulkhead node')
+dtrace -l -P "bulkhead$PID"     # the probes the node registered
+
+# Call latency per target instance, in microseconds.
+dtrace -q -p $PID -n '
+bulkhead$target:::call-start { t[arg0] = timestamp; }
+bulkhead$target:::call-done /t[arg0]/ { @us[arg1] = quantize((timestamp - t[arg0]) / 1000); t[arg0] = 0; }'
+
+# Exits as they happen.
+dtrace -q -p $PID -n 'bulkhead$target:::instance-exit { printf("exit %d.%d %s\n", arg0, arg1, copyinstr(arg2, arg3)); }'
+```
+
 Probes see what the host sees: pids, sizes, kinds, timings and outcomes. They do not see message bodies or app internals.
 
-Verified so far: the probe notes are in the Linux x86-64 binary (`readelf`), and the cost with no tracer attached. Attaching bpftrace to a live node has not been run in this repository's tests; it needs root.
+Verified so far: the probe notes are in the Linux x86-64 binary (`readelf`), and the cost with no tracer attached. Attaching bpftrace to a live node has not been run in this repository's tests; it needs root. On FreeBSD 15 (a VM, 2026-11-17) every D script in `examples/tracing/d` ran against the tracing demo and printed its traffic; that is not in the automated checks either.
