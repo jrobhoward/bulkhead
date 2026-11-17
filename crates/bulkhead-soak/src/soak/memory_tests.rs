@@ -105,3 +105,16 @@ fn node_of____other_bulkhead_command____none() {
 
     assert_eq!(node_of(cmdline), None);
 }
+
+#[test]
+fn children_running_nodes____ps_lines____this_processes_nodes_only() {
+    let ps = "  101   100 /usr/local/bin/bulkhead node --config /tmp/run/node-1.toml\n\
+                102   100 /usr/local/bin/bulkhead node --config /tmp/run/node-2.toml\n\
+                103   999 /usr/local/bin/bulkhead node --config /tmp/run/node-3.toml\n\
+                104   100 /usr/local/bin/bulkhead-runner --executable /x\n\
+                bad line\n";
+
+    let found = children_running_nodes(ps, 100);
+
+    assert_eq!(found, [(1, 101), (2, 102)]);
+}

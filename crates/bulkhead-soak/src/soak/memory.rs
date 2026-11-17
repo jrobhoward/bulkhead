@@ -1,6 +1,8 @@
 //! Resident memory of a run's node processes. Every 10 s the sampler finds
 //! this process's children that run `bulkhead node --config .../node-<n>.toml`
-//! and reads each one's `VmRSS` (Linux; elsewhere nothing is sampled). A
+//! and reads each one's resident size: `VmRSS` from `/proc` on Linux, `ps`'s
+//! `rss` on FreeBSD, which has no `/proc` (ROADMAP FB4); elsewhere nothing
+//! is sampled. A
 //! node killed and started again is a new process, so growth is judged per
 //! process: from its first sample after a minute's warm-up to its last.
 //!
@@ -145,6 +147,7 @@ pub(crate) fn node_of(cmdline: &[u8]) -> Option<u32> {
 }
 
 /// A process's resident memory in KiB, from `/proc` (Linux).
+#[cfg(not(target_os = "freebsd"))]
 pub(crate) fn rss_kib(pid: u32) -> Option<u64> {
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     status
@@ -157,6 +160,7 @@ pub(crate) fn rss_kib(pid: u32) -> Option<u64> {
 }
 
 /// This process's children running `bulkhead node`, as (node, pid).
+#[cfg(not(target_os = "freebsd"))]
 fn nodes() -> Vec<(u32, u32)> {
     let me = std::process::id();
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -172,8 +176,53 @@ fn nodes() -> Vec<(u32, u32)> {
         .collect()
 }
 
+/// A process's resident memory in KiB, from `ps` (FreeBSD, whose `rss` is
+/// in KiB).
+#[cfg(target_os = "freebsd")]
+pub(crate) fn rss_kib(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// This process's children running `bulkhead node`, as (node, pid), from
+/// `ps` (FreeBSD).
+#[cfg(target_os = "freebsd")]
+fn nodes() -> Vec<(u32, u32)> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-ax", "-o", "pid=", "-o", "ppid=", "-o", "command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    children_running_nodes(&String::from_utf8_lossy(&out.stdout), std::process::id())
+}
+
+/// From `ps`'s `pid ppid command` lines, `parent`'s children running
+/// `bulkhead node`, as (node, pid). The command's words become the
+/// NUL-separated arguments [`node_of`] reads (a config path with a space
+/// in it is not matched).
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+pub(crate) fn children_running_nodes(ps: &str, parent: u32) -> Vec<(u32, u32)> {
+    ps.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid: u32 = words.next()?.parse().ok()?;
+            let ppid: u32 = words.next()?.parse().ok()?;
+            if ppid != parent {
+                return None;
+            }
+            let cmdline = words.collect::<Vec<_>>().join("\0");
+            Some((node_of(cmdline.as_bytes())?, pid))
+        })
+        .collect()
+}
+
 /// The parent pid from `/proc/<pid>/stat` (after the parenthesized name,
 /// which may hold spaces: state, then ppid).
+#[cfg(not(target_os = "freebsd"))]
 fn parent(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     stat.rsplit_once(") ")?.1.split(' ').nth(1)?.parse().ok()

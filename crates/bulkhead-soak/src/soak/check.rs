@@ -197,11 +197,12 @@ pub(crate) fn running(records: &[Record], node: u32, horizon: i64, native: bool)
                 // (a native one killed by the runner's watchdog, its
                 // restart waiting for the lease), so the run ended at the
                 // old bound and goes on from this extension.
+                // A cut-off from here on is the new run's, not the old.
                 if let (Some(s), Some(old)) = (run, bound)
                     && old < r.at_us
                 {
                     runs.push((s, old.max(s)));
-                    closed_by_lease = Some(runs.len() - 1);
+                    closed_by_lease = None;
                     run = Some(r.at_us);
                 }
                 if run.is_some() {
@@ -223,7 +224,13 @@ pub(crate) fn running(records: &[Record], node: u32, horizon: i64, native: bool)
                 bound = None;
             }
             Mark::CutOff => {
-                if let Some(span) = closed_by_lease.and_then(|i| runs.get_mut(i)) {
+                if run.is_some() {
+                    // Cut off in an open run past its bound (the lease
+                    // lapsed, no extension or stop yet): it ran until now.
+                    if let Some(b) = bound.as_mut() {
+                        *b = (*b).max(r.at_us);
+                    }
+                } else if let Some(span) = closed_by_lease.and_then(|i| runs.get_mut(i)) {
                     span.1 = span.1.max(r.at_us);
                 }
             }

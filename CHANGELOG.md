@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The scada soak runs on FreeBSD (ROADMAP FB4): its memory sampler
+  finds the nodes and their resident memory through `ps` there, as
+  `/proc` is Linux's. An hour on the FreeBSD VM passed on 2026-11-16.
+
+### Fixed
+
+- The soak's failover check reported a false overlap (found by FB4's
+  first hour on FreeBSD): when a node's lease lapsed during a run and
+  came back without the gate stopping it, a callback cut off at the end
+  of the resumed run stretched the run before the lapse to the cut, so
+  it seemed to run on while its watchdog had already killed it. A
+  cut-off now extends only the run it ends; one logged while a run is
+  still open past its lease's bound extends that run (it had been
+  dropped, which shortened the run). `bulkhead-soak check` over the
+  failed run's directory finds no overlap.
+
 - `scripts/check.sh cross` (and a CI job of the same name) compiles the
   workspace for FreeBSD on x86-64 and aarch64. With no bare-metal
   FreeBSD machine (2026-11-16), FreeBSD is first-class in function and

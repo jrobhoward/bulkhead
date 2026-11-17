@@ -155,6 +155,38 @@ fn running____lease_lapsed_and_came_back____the_gap_not_counted() {
     assert_eq!(spans, vec![(20, 40), (70, 80)]);
 }
 
+/// FB4's false overlap: a cut-off at the end of the run that resumed
+/// after a lapse stretched the run before the lapse to it.
+#[test]
+fn running____lease_came_back_then_cut_off____only_the_new_run_ends_there() {
+    let records = [
+        rec(20, 1, Mark::Start),
+        rec(21, 1, Mark::LeaseBound(40)),
+        rec(70, 1, Mark::LeaseBound(90)),
+        rec(80, 1, Mark::CutOff),
+        rec(80, 1, Mark::Stop),
+    ];
+
+    let spans = running(&records, 1, 100, true);
+
+    assert_eq!(spans, vec![(20, 40), (70, 80)]);
+}
+
+#[test]
+fn running____cut_off_while_the_lease_lapsed____the_old_run_ends_at_the_cut() {
+    let records = [
+        rec(20, 1, Mark::Start),
+        rec(21, 1, Mark::LeaseBound(40)),
+        rec(50, 1, Mark::CutOff),
+        rec(70, 1, Mark::LeaseBound(90)),
+        rec(80, 1, Mark::Stop),
+    ];
+
+    let spans = running(&records, 1, 100, true);
+
+    assert_eq!(spans, vec![(20, 50), (70, 80)]);
+}
+
 #[test]
 fn running____started_just_after_an_extension____capped_by_it() {
     let records = [

@@ -63,7 +63,7 @@ Measured against the goals on 2026-11-10:
 | Observability | Good: probes, metrics, audit, events, `ps`, `state` | A trace id across calls and nodes (O1) |
 | A small, protected core | Mostly: HTTP ingress and its TLS (DA2), host names (DA9), the remote admin API's TLS and the metrics endpoint (DA7) run in drivers since 2026-11-14, so no listener any client reaches is served by the node before a key is checked, SQL since 2026-11-15 (DA3), a driver per datasource holding its password, HTTP egress the same day (DA4), a driver per app, and Modbus (DA5), drivers for devices and masters; no code from outside Bulkhead runs in the node since DA8 (the `Extension` trait removed); what the node still parses from outside is SECURITY.md's list of what stays ("What the node parses from outside") | Phase 6a |
 | No root; apps unprivileged | Half: nothing runs as root, but apps run as the node's user (their system calls are an allow-list since 2026-11-11) | Phase 6a |
-| FreeBSD, jails, ZFS | FreeBSD done in function: native apps in capability mode (FB1), a jail per instance under the helper (FB2), bundles (FB6), the whole suite in CI (FB3); not measured, by decision (Goals); ZFS missing | Phase 6b's FB4 and FB5, ZFS volumes |
+| FreeBSD, jails, ZFS | FreeBSD done in function: native apps in capability mode (FB1), a jail per instance under the helper (FB2), bundles (FB6), the whole suite in CI (FB3), an hour's scada soak on its VM (FB4); not measured, by decision (Goals); ZFS missing | Phase 6b's FB5, ZFS volumes |
 | A disaster-recovery site | Partial: the third node is a witness and holds no data | Phase 8 |
 
 ## Order
@@ -80,7 +80,7 @@ flowchart LR
 ```
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
-- **Next:** FB4, the hour-long scada soak on the FreeBSD VM (Phase 6's exit; the VM runs it, by decision 2026-11-16), then FB5 on the VMs. Phase 6's software items are otherwise done (T1b was the last, 2026-11-16). What is left of Phase 6 on hardware is the Raspberry Pi 5's, once its drive is replaced (it logged read errors on 2026-11-15): PS1c, PS1b's check on aarch64 (the helper's root tests, the conformance suite under it and `scripts/priv-e2e-systemd.sh`, with `BULKHEAD_PRIV_SECCOMP_LOG=1` first), the ARM baselines and the Pi's soak. Then Phase 8 (disaster recovery, starting with S38) or the open Phase 7 threads, by the order above.
+- **Next:** FB5 on the VMs (a mixed Linux and FreeBSD pair, a serial line between the guests, DTrace, the tutorial's scripts). Phase 6's software items are done (T1b was the last, 2026-11-16), and the FreeBSD VM passed its hour's scada soak (FB4, 2026-11-16). What is left of Phase 6 on hardware is the Raspberry Pi 5's, once its drive is replaced (it logged read errors on 2026-11-15): PS1c, PS1b's check on aarch64 (the helper's root tests, the conformance suite under it and `scripts/priv-e2e-systemd.sh`, with `BULKHEAD_PRIV_SECCOMP_LOG=1` first), the ARM baselines and the Pi's soak. Then Phase 8 (disaster recovery, starting with S38) or the open Phase 7 threads, by the order above.
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
 - **Disaster recovery in parallel** with Phases 6 and 7: it touches replication, failover and the transport, which they do not. Its model (S38) comes first, under V1. Shipping volumes (DR6) waits for ZFS volumes.
@@ -93,7 +93,7 @@ flowchart LR
 
 ## Phase 6: a hardened core
 
-Exit: on Linux and FreeBSD, every app's instances run under a user of their own, started by the privileged helper, with the node unprivileged, holding no capabilities and not dumpable; Linux apps run under a seccomp allow-list (done 2026-11-11) and FreeBSD apps in a jail in capability mode; an app past the misbehaviour policy is killed and then quarantined (PS5, 2026-11-16); CPU is limited per app (PS6, 2026-11-16: per instance, with cgroups or the helper); the board, scada and failover node tests pass on both systems in CI (the whole suite since FB3, 2026-11-16; CI's first FreeBSD run comes with that push), and the scada soak passes an hour on the 16-core machine, the Raspberry Pi 5 and the FreeBSD VM (no bare-metal FreeBSD machine exists; decided 2026-11-16).
+Exit: on Linux and FreeBSD, every app's instances run under a user of their own, started by the privileged helper, with the node unprivileged, holding no capabilities and not dumpable; Linux apps run under a seccomp allow-list (done 2026-11-11) and FreeBSD apps in a jail in capability mode; an app past the misbehaviour policy is killed and then quarantined (PS5, 2026-11-16); CPU is limited per app (PS6, 2026-11-16: per instance, with cgroups or the helper); the board, scada and failover node tests pass on both systems in CI (the whole suite since FB3, 2026-11-16; CI's first FreeBSD run comes with that push), and the scada soak passes an hour on the 16-core machine, the Raspberry Pi 5 and the FreeBSD VM (no bare-metal FreeBSD machine exists; decided 2026-11-16). The FreeBSD VM's hour passed on 2026-11-16 (FB4): a 60-minute run (229 singleton starts and 58 heals under link faults, kills and pauses, with no overlap, once the soak's check stopped reporting a false one) and a 24-minute one; resident memory rose at most 9.3 MiB in any node process's life.
 
 ### 6a: privilege separation
 
@@ -114,7 +114,6 @@ Since FB1 (2026-11-11) the node runs native apps on FreeBSD: the port, the rings
 
 Items:
 
-- [ ] **FB4 The scada soak on the FreeBSD VM** (S). Phase 6's exit: `scripts/soak.sh --hours 1 --only scada --scada-minutes 60` on the FreeBSD VM, as its user, with no benchmark on the 16-core machine meanwhile (the VM shares its cores; a soak checks correctness, not speed). There is no bare-metal FreeBSD machine (2026-11-16): FreeBSD is not measured in BASELINE.md, and a FreeBSD number, when one is wanted, comes from the VM beside an Ubuntu VM on the same host and configuration, marked as VM numbers. Areas: soak, VERIFICATION.md or BASELINE.md's soak notes.
 - [ ] **FB5 The rest on FreeBSD, on the VMs** (M). A pair mixing a Linux and a FreeBSD node: the Ubuntu VM and the FreeBSD VM, with the witness on the 16-core machine, failing over across systems by the network and by a serial heartbeat over a virtual serial line between the two guests (libvirt joins their serial ports through a socket on the host; the tty layer is on `rustix`). Probes through DTrace (anyprobe's USDT) and the tutorial's scripts on the FreeBSD VM. Function checks only, as for every VM. Areas: tests, soak, docs, OPERATIONS.md (a serial line between VMs).
 
 ## Phase 7: protocols out of the core
