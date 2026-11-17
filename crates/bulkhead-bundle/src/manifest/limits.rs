@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::bytesize::ByteSize;
+use crate::manifest::cpu::Millicores;
 use crate::manifest::validate::Validator;
 
 /// The `limits` section.
@@ -14,6 +15,13 @@ pub struct Limits {
     /// or `RLIMIT_DATA` without a cgroup, past which an allocation in the
     /// app fails.
     pub memory_max: ByteSize,
+    /// Most CPU one instance's processes may use together, in cores
+    /// (`0.5`, `2`): its cgroup's `cpu.max` on Linux, its jail's `pcpu`
+    /// rule on FreeBSD (ROADMAP PS6). Unset takes node config's
+    /// `[limits] cpu`, and none without it. Enforced only where the node
+    /// has cgroups or the privileged helper; elsewhere the node says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<Millicores>,
     /// Most guest execution time one callback may take before the instance is
     /// killed with reason `timeout`. Time spent in host calls (waiting on
     /// another instance) does not count.
@@ -74,6 +82,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             memory_max: ByteSize::mib(64),
+            cpu: None,
             callback_deadline_ms: 5_000,
             mailbox_max: 10_000,
             mailbox_max_bytes: ByteSize::mib(64),
@@ -96,6 +105,18 @@ impl Limits {
     pub(crate) fn validate(&self, v: &mut Validator) {
         if self.memory_max.bytes() == 0 {
             v.error_at("memory_max", "must be greater than zero");
+        }
+        if let Some(cpu) = self.cpu
+            && !(Millicores::MIN..=Millicores::MAX).contains(&cpu)
+        {
+            v.error_at(
+                "cpu",
+                format!(
+                    "must be between {} and {} cores",
+                    Millicores::MIN,
+                    Millicores::MAX
+                ),
+            );
         }
         if self.callback_deadline_ms == 0 {
             v.error_at("callback_deadline_ms", "must be greater than zero");

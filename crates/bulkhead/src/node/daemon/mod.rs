@@ -117,6 +117,8 @@ struct DeployInfo {
     warnings: Vec<String>,
     /// The registered names the manifest lists, reserved for this app.
     names: Vec<String>,
+    /// The manifest's `limits.cpu`, in thousandths of a core.
+    cpu: Option<u32>,
 }
 
 impl Node {
@@ -690,11 +692,11 @@ fn warn_capabilities() {
 }
 
 fn native_config(config: &NodeConfig) -> Result<bulkhead_host::NativeConfig, NodeError> {
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "freebsd")),
-        expect(unused_mut, reason = "the helper is Linux's and FreeBSD's")
-    )]
     let mut native = config.native.runtime();
+    native.cpu = config
+        .limits
+        .cpu
+        .map(bulkhead_bundle::manifest::Millicores::millis);
     let started_by_helper = std::env::var_os(bulkhead_priv_wire::SOCKET_ENV).is_some();
     match (config.privileges.is_some(), started_by_helper) {
         (false, false) => {}

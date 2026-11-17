@@ -232,6 +232,9 @@ fn AppSpec____memory_max_above_4_gib____accepted() {
 
 #[rstest]
 #[case(json!({ "limits": { "memory_max": 0 } }), "limits.memory_max")]
+#[case(json!({ "limits": { "cpu": 0 } }), "limits.cpu")]
+#[case(json!({ "limits": { "cpu": 0.005 } }), "limits.cpu")]
+#[case(json!({ "limits": { "cpu": 2000 } }), "limits.cpu")]
 #[case(json!({ "limits": { "callback_deadline_ms": 0 } }), "limits.callback_deadline_ms")]
 #[case(json!({ "limits": { "mailbox_max": 0 } }), "limits.mailbox_max")]
 #[case(json!({ "limits": { "mailbox_max_bytes": "512KiB" } }), "limits.mailbox_max_bytes")]

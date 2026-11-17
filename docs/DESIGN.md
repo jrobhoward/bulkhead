@@ -183,7 +183,7 @@ Every instance is its own process, restricted by `bulkhead-runner` before the ap
 | Resource | Mechanism | Notes |
 | --- | --- | --- |
 | Memory | A delegated cgroup's `memory.max`, no swap, or `RLIMIT_DATA` without one: memory_max | Over the cgroup's limit the process is killed; under `RLIMIT_DATA` an allocation fails and the app aborts. |
-| CPU, wall clock | A deadline per callback (callback_deadline_ms): wall time less time answering requests, then a kill | A blown deadline ends the instance with reason `timeout`. There is no CPU limit yet. |
+| CPU, wall clock | A deadline per callback (callback_deadline_ms): wall time less time answering requests, then a kill | A blown deadline ends the instance with reason `timeout`. CPU is capped per instance by `limits.cpu` where the node has cgroups or the privileged helper (ROADMAP PS6). |
 | Threads and processes | The cgroup's `pids.max`; an instance handles one callback at a time | Scale with instance pools. |
 | Mailbox | mailbox_max messages and mailbox_max_bytes of bodies per instance (64 MiB by default, ROADMAP I6); message_max_bytes | When full: cast is dropped and counted, call fails fast with `overloaded`. |
 | Link to another node | `[cluster] send_buffer_bytes` of messages queued per peer (64 MiB by default) | When full: the same rule as a full mailbox. Link and monitor notices are queued past it. |

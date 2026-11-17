@@ -3,21 +3,32 @@
 //!
 //! ```text
 //! <root>/node/            the node's own processes
-//! <root>/native/<pid>/    one per native instance: memory.max, pids.max
+//! <root>/native/<pid>/    one per native instance: memory.max, pids.max, cpu.max
 //! ```
 //!
 //! cgroup v2 allows no processes in a cgroup whose controllers are enabled
 //! for its children, so the node moves itself into the leaf `node` before
-//! enabling `memory` and `pids` below `<root>` (spike S19).
+//! enabling `memory`, `pids` and `cpu` below `<root>` (spike S19).
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 /// The controllers enabled for native instances.
-const CONTROLLERS: &str = "+memory +pids";
+const CONTROLLERS: &str = "+memory +pids +cpu";
+
+/// cgroup's CPU period, in microseconds: `cpu.max` gives a quota in it.
+const CPU_PERIOD_US: u64 = 100_000;
+
+/// `cpu.max` for a limit of `millis` thousandths of a core, or none.
+pub(crate) fn cpu_max(millis: Option<u32>) -> String {
+    match millis {
+        Some(m) => format!("{} {CPU_PERIOD_US}", u64::from(m) * CPU_PERIOD_US / 1000),
+        None => format!("max {CPU_PERIOD_US}"),
+    }
+}
 
 /// Move this process into `<root>/node` and make `<root>/native`, with
-/// `memory` and `pids` enabled for its children.
+/// `memory`, `pids` and `cpu` enabled for its children.
 ///
 /// # Errors
 ///
@@ -55,6 +66,7 @@ pub(crate) fn create(
     name: &str,
     memory_max: u64,
     pids_max: u32,
+    cpu_millis: Option<u32>,
 ) -> io::Result<PathBuf> {
     let dir = root.join("native").join(name);
     std::fs::create_dir_all(&dir)?;
@@ -62,6 +74,7 @@ pub(crate) fn create(
     // Absent without swap accounting; then there is no swap to limit.
     let _ = std::fs::write(dir.join("memory.swap.max"), "0");
     std::fs::write(dir.join("pids.max"), pids_max.to_string())?;
+    std::fs::write(dir.join("cpu.max"), cpu_max(cpu_millis))?;
     Ok(dir)
 }
 
@@ -92,3 +105,7 @@ pub(crate) async fn remove(dir: &Path) {
     }
     tracing::warn!(dir = %dir.display(), "native instance's cgroup not removed");
 }
+
+#[cfg(test)]
+#[path = "cgroup_tests.rs"]
+mod tests;

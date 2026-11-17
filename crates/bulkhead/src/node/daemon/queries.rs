@@ -180,11 +180,32 @@ impl Node {
             } else {
                 "the node's user".into()
             },
+            cpu: self.cpu_text(info.cpu),
             blobs: match self.rt.blob_usage(name) {
                 (0, _) => None,
                 (count, bytes) => Some((count as u64, bytes)),
             },
         })
+    }
+
+    /// An app's CPU limit for `status` (ROADMAP PS6): its manifest's, else
+    /// node config's default, and whether this node enforces it.
+    fn cpu_text(&self, asked: Option<u32>) -> String {
+        use bulkhead_bundle::manifest::Millicores;
+        let node = self.config.limits.cpu.map(Millicores::millis);
+        let Some(cpu) = asked.or(node) else {
+            return "unlimited".into();
+        };
+        let enforced = self.config.privileges.is_some()
+            || (cfg!(target_os = "linux") && self.config.native.cgroup.is_some());
+        if enforced {
+            format!("{} cores", Millicores(cpu))
+        } else {
+            format!(
+                "{} cores, not enforced (needs [native] cgroup or [priv])",
+                Millicores(cpu)
+            )
+        }
     }
 
     /// Every live instance.

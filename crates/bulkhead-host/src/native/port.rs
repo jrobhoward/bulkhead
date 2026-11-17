@@ -711,7 +711,15 @@ mod process {
         let cgroup = config
             .cgroup
             .as_ref()
-            .map(|root| cgroup::create(root, name, spec.memory_max, config.pids_max))
+            .map(|root| {
+                cgroup::create(
+                    root,
+                    name,
+                    spec.memory_max,
+                    config.pids_max,
+                    spec.cpu_millis,
+                )
+            })
             .transpose()
             .map_err(|e| format!("cgroup: {e}"))?;
         let procs = cgroup
@@ -857,6 +865,7 @@ mod process {
             app: spec.app.clone(),
             memory_max: spec.memory_max,
             pids_max: config.pids_max,
+            cpu_millis: spec.cpu_millis.unwrap_or(0),
             args,
             env,
             binds,

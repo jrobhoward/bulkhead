@@ -17,6 +17,7 @@ state = /var/lib/bulkhead-priv
 binds = /var/lib/bulkhead, /srv/bulkhead
 memory_max = 8GiB
 pids_max = 4096
+cpu_max = 2.5
 ports = 80, 443
 cgroup = /sys/fs/cgroup/system.slice/bulkhead.service
 ";
@@ -29,6 +30,7 @@ fn parse____a_full_file____every_value() {
     assert_eq!(c.uids, 60000..=60999);
     assert_eq!(c.binds.len(), 2);
     assert_eq!(c.memory_max, 8 << 30);
+    assert_eq!(c.cpu_max, Some(2500));
     assert_eq!(c.ports, [80, 443]);
     assert_eq!(c.tmp_size, 16 << 20);
     assert!(c.cgroup.is_some());
@@ -63,6 +65,8 @@ fn parse____a_full_file____every_value() {
 )]
 #[case("pids_max = 4096", "pids_max = 0", "above 0")]
 #[case("memory_max = 8GiB", "memory_max = lots", "not a size")]
+#[case("cpu_max = 2.5", "cpu_max = 0.001", "at least 0.01")]
+#[case("cpu_max = 2.5", "cpu_max = half", "at least 0.01")]
 fn parse____a_bad_value____refused_saying_why(
     #[case] from: &str,
     #[case] to: &str,
@@ -106,6 +110,20 @@ fn parse____a_key_missing____refused() {
 #[case("18446744073709551615GiB", None)]
 fn size____text____bytes(#[case] text: &str, #[case] bytes: Option<u64>) {
     assert_eq!(size(text), bytes);
+}
+
+#[rstest]
+#[case("2", Some(2000))]
+#[case("0.5", Some(500))]
+#[case("1.25", Some(1250))]
+#[case("0.001", Some(1))]
+#[case("0.0001", None)]
+#[case(".5", None)]
+#[case("-1", None)]
+#[case("1e3", None)]
+#[case("", None)]
+fn cores____text____thousandths(#[case] text: &str, #[case] millis: Option<u32>) {
+    assert_eq!(cores(text), millis);
 }
 
 #[test]

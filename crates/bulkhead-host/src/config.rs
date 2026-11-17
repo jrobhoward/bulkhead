@@ -509,6 +509,11 @@ pub struct NativeConfig {
     pub cgroup: Option<PathBuf>,
     /// Most processes and threads in one native instance (with a cgroup).
     pub pids_max: u32,
+    /// The CPU limit, in thousandths of a core, of an instance whose
+    /// manifest sets none, and the most a manifest may ask for (node
+    /// config `[limits] cpu`, ROADMAP PS6); `None`: no default and no
+    /// ceiling. The node's own drivers take no default.
+    pub cpu: Option<u32>,
     /// How long an idle native instance goes between pings.
     pub ping_interval: Duration,
     /// How long a ping may go unanswered before the instance is killed
@@ -544,6 +549,7 @@ impl Default for NativeConfig {
             runner: None,
             cgroup: None,
             pids_max: 64,
+            cpu: None,
             ping_interval: Duration::from_secs(10),
             ping_timeout: Duration::from_secs(5),
             landlock_optional: false,
@@ -552,6 +558,40 @@ impl Default for NativeConfig {
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             helper: None,
         }
+    }
+}
+
+impl NativeConfig {
+    /// The CPU limit an instance gets, in thousandths of a core: what its
+    /// manifest asks, else the node's default (not for a driver, whose
+    /// manifest is the node's).
+    ///
+    /// # Errors
+    ///
+    /// The manifest asks for more than the node's ceiling.
+    pub fn cpu_for(&self, asked: Option<u32>, driver: bool) -> Result<Option<u32>, String> {
+        use bulkhead_bundle::manifest::Millicores;
+        match (asked, self.cpu) {
+            (Some(a), Some(node)) if a > node => Err(format!(
+                "cpu of {} exceeds the node limit of {}",
+                Millicores(a),
+                Millicores(node)
+            )),
+            (Some(a), _) => Ok(Some(a)),
+            (None, node) if !driver => Ok(node),
+            (None, _) => Ok(None),
+        }
+    }
+
+    /// Whether this node can hold an instance to a CPU limit: a cgroup
+    /// of the node's own (Linux) or the privileged helper.
+    #[must_use]
+    pub fn enforces_cpu(&self) -> bool {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if self.helper.is_some() {
+            return true;
+        }
+        cfg!(target_os = "linux") && self.cgroup.is_some()
     }
 }
 

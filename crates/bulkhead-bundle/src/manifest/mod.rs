@@ -27,6 +27,7 @@
 
 mod bytesize;
 mod capabilities;
+mod cpu;
 mod error;
 mod lifecycle;
 mod limits;
@@ -42,6 +43,7 @@ pub use capabilities::{
     Preopen, RESERVED_NAMESPACES, Route, SecretsScope, SocketRule, SocketsScope, SqlScope,
     cidr_contains, is_extension_key, parse_cidr,
 };
+pub use cpu::Millicores;
 pub use error::{ManifestError, ValidationError};
 pub use lifecycle::{
     Backoff, ChildSpec, Instances, Kind, Lifecycle, Native, NativeProgram, RestartType, Routing,

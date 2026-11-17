@@ -81,3 +81,35 @@ fn SqlDatasource____call_timeout____past_the_drivers_own_bound() {
 
     assert!(ds.call_timeout() > bound);
 }
+
+#[rstest::rstest]
+#[case::asked_under_ceiling(Some(500), Some(2000), false, Ok(Some(500)))]
+#[case::asked_no_ceiling(Some(500), None, false, Ok(Some(500)))]
+#[case::none_takes_default(None, Some(2000), false, Ok(Some(2000)))]
+#[case::driver_takes_no_default(None, Some(2000), true, Ok(None))]
+#[case::none_at_all(None, None, false, Ok(None))]
+fn NativeConfig____cpu_for____the_manifests_or_the_nodes(
+    #[case] asked: Option<u32>,
+    #[case] node: Option<u32>,
+    #[case] driver: bool,
+    #[case] gets: Result<Option<u32>, String>,
+) {
+    let native = NativeConfig {
+        cpu: node,
+        ..NativeConfig::default()
+    };
+
+    assert_eq!(native.cpu_for(asked, driver), gets);
+}
+
+#[test]
+fn NativeConfig____cpu_over_the_ceiling____refused_naming_both() {
+    let native = NativeConfig {
+        cpu: Some(2000),
+        ..NativeConfig::default()
+    };
+
+    let err = native.cpu_for(Some(4000), false).unwrap_err();
+
+    assert_eq!(err, "cpu of 4 exceeds the node limit of 2");
+}

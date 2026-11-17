@@ -161,6 +161,9 @@ pub fn detail(d: &AppDetail) -> String {
     if !d.runs_as.is_empty() {
         out.push(format!("runs as:   {}", d.runs_as));
     }
+    if !d.cpu.is_empty() {
+        out.push(format!("cpu:       {}", d.cpu));
+    }
     if let Some((count, bytes)) = d.blobs {
         out.push(format!("blobs:     {count}, {bytes} bytes"));
     }

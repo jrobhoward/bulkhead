@@ -336,6 +336,11 @@ impl Node {
                 .collect::<Vec<_>>()
         };
         let info = DeployInfo {
+            cpu: manifest
+                .spec
+                .limits
+                .cpu
+                .map(bulkhead_bundle::manifest::Millicores::millis),
             names: manifest
                 .spec
                 .registered_names

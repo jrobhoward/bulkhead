@@ -21,6 +21,11 @@ pub struct InstanceSpec {
     /// Most memory the instance's process may use, in bytes (the
     /// manifest's `limits.memory_max`).
     pub memory_max: u64,
+    /// Most CPU the instance's processes may use together, in thousandths
+    /// of a core (the manifest's `limits.cpu`, ROADMAP PS6); `None` takes
+    /// node config's default ([`NativeConfig::cpu`](crate::NativeConfig)),
+    /// or none.
+    pub cpu_millis: Option<u32>,
     /// Guest execution time allowed per `handle-*` callback.
     pub callback_deadline: Duration,
     /// Mailbox capacity.
@@ -124,6 +129,10 @@ impl InstanceSpec {
             app,
             version,
             memory_max: spec.limits.memory_max.bytes(),
+            cpu_millis: spec
+                .limits
+                .cpu
+                .map(bulkhead_bundle::manifest::Millicores::millis),
             callback_deadline: Duration::from_millis(spec.limits.callback_deadline_ms),
             mailbox_max: usize::try_from(spec.limits.mailbox_max).unwrap_or(usize::MAX),
             mailbox_max_bytes: spec.limits.mailbox_max_bytes.bytes(),

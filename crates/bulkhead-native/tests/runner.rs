@@ -240,6 +240,8 @@ fn executable() -> Port {
     port
 }
 
+// For the plugin's tests, which are Linux's.
+#[cfg(target_os = "linux")]
 fn json(schema: &str, body: &str) -> Envelope {
     Envelope {
         content_type: "application/json".into(),

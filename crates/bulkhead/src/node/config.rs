@@ -118,6 +118,7 @@
 //! groups_max = 1000
 //! watches_max = 1000
 //! senders_max = 8
+//! cpu = 2            # cores per instance (ROADMAP PS6); unset: no default, no ceiling
 //! ```
 
 use std::collections::BTreeMap;
@@ -284,6 +285,11 @@ pub struct NodeLimits {
     /// only lower it; 0 for no ceiling.
     #[serde(default = "default_log_records")]
     pub log_records_per_sec: u32,
+    /// CPU per instance, in cores (ROADMAP PS6): the limit of an app whose
+    /// manifest sets none, and the most one may ask for. Unset: neither.
+    /// The node's own drivers take no default.
+    #[serde(default)]
+    pub cpu: Option<bulkhead_bundle::manifest::Millicores>,
 }
 
 impl Default for NodeLimits {
@@ -297,6 +303,7 @@ impl Default for NodeLimits {
             watches_max: default_groups(),
             senders_max: default_senders(),
             log_records_per_sec: default_log_records(),
+            cpu: None,
         }
     }
 }
@@ -1668,6 +1675,16 @@ impl NodeConfig {
             if value == 0 {
                 return Err(NodeError::Invalid(format!(
                     "node config: limits.{name} must be more than 0"
+                )));
+            }
+        }
+        if let Some(cpu) = limits.cpu {
+            use bulkhead_bundle::manifest::Millicores;
+            if !(Millicores::MIN..=Millicores::MAX).contains(&cpu) {
+                return Err(NodeError::Invalid(format!(
+                    "node config: limits.cpu must be between {} and {} cores",
+                    Millicores::MIN,
+                    Millicores::MAX
                 )));
             }
         }

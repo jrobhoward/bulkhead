@@ -13,6 +13,7 @@ fn spawn() -> Spawn {
         app: "orders".into(),
         memory_max: 64 << 20,
         pids_max: 64,
+        cpu_millis: 500,
         args: vec![
             "--executable".into(),
             "/var/lib/bulkhead/compiled/orders/1/p".into(),

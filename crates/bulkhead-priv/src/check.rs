@@ -13,6 +13,22 @@ use crate::config::Config;
 /// The least memory a spawn may ask: below it the runner cannot start.
 pub const MIN_MEMORY: u64 = 4 << 20;
 
+/// The least CPU a spawn may ask, in thousandths of a core: cgroup's
+/// smallest quota, 1 ms in its 100 ms period.
+pub const MIN_CPU: u32 = 10;
+
+/// The CPU limit an instance gets, in thousandths of a core: what the
+/// spawn asks, else the configuration's `cpu_max` (the node is not
+/// trusted to ask); `None` for none.
+#[must_use]
+pub fn cpu(config: &Config, s: &Spawn) -> Option<u32> {
+    if s.cpu_millis == 0 {
+        config.cpu_max
+    } else {
+        Some(s.cpu_millis)
+    }
+}
+
 /// `v` as a path if it is absolute and every part after the root is a
 /// plain name: no `.`, `..` or empty part (`//`).
 #[must_use]
@@ -62,6 +78,17 @@ pub fn spawn(config: &Config, s: &Spawn, passed: usize) -> Result<(), String> {
         return Err(format!(
             "pids_max {} is outside 1..={}",
             s.pids_max, config.pids_max
+        ));
+    }
+    if s.cpu_millis != 0
+        && (s.cpu_millis < MIN_CPU || config.cpu_max.is_some_and(|max| s.cpu_millis > max))
+    {
+        return Err(format!(
+            "cpu {} is outside {MIN_CPU}..={} thousandths of a core",
+            s.cpu_millis,
+            config
+                .cpu_max
+                .map_or_else(|| "any".to_string(), |m| m.to_string())
         ));
     }
     for (name, _) in &s.env {

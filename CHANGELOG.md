@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- CPU limits per instance (ROADMAP PS6). The manifest's `limits.cpu`
+  takes cores (`0.5`, `2`; `bulkhead_bundle::manifest::Millicores`, kept
+  as thousandths); node config's `[limits] cpu` is the value for apps
+  that set none and the most one may ask for (the node's own drivers take
+  no default). Enforced as the instance cgroup's `cpu.max` with
+  `[native] cgroup` (whose instances now get the `cpu` controller) or the
+  privileged helper on Linux, and as the jail's rctl `pcpu` rule under
+  the helper on FreeBSD. The helper's `Spawn` carries `cpu_millis`, and
+  its `priv.conf` takes an optional `cpu_max`, a ceiling that also
+  applies to a spawn asking for none. A node that cannot enforce a limit
+  runs the app, warns at each start, and `bulkhead status` shows
+  `cpu: 0.5 cores, not enforced (needs [native] cgroup or [priv])`.
+  Checked as root on the test VMs: an instance spinning at `cpu = 0.2`
+  used 0.20 of a core on Linux and 0.27 to 0.33 over 8 s on FreeBSD
+  (rctl throttles in bursts), and 1.00 without a limit.
+
 - Under the privileged helper the node binds its low TCP ports through
   the helper (ROADMAP PS3b), so it holds no capabilities. Every TCP
   listener the node opens (`[http]`, `[admin]`, `[metrics]`,
