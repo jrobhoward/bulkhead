@@ -99,7 +99,7 @@ jobs:
           run: |
             chown -R ci "$PWD"
             su -l ci -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
-            su -l ci -c "cd '$PWD' && . ~/.cargo/env && rustc --version && scripts/check.sh test"
+            su -l ci -c "cd '$PWD' && . ~/.cargo/env && rustc --version && scripts/check.sh -v test"
 
   # Guards `rust-version = "1.99.0"`, the stable rustc the dependencies resolve for.
   msrv:
