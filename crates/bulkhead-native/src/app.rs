@@ -1689,7 +1689,6 @@ fn watch_refused_calls() {
 }
 
 /// Serve `A` to the node over its channel until the node stops it.
-#[must_use]
 pub fn serve<A: App>() -> ExitCode {
     // Not dumpable again: the runner made itself so, but `execve` resets
     // it for a readable program. Without this a crash went through the

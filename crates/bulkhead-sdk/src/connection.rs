@@ -271,7 +271,6 @@ impl<H: Handler> n::App for Connections<H> {
 
 /// Serve `H` until the node stops it.
 #[doc(hidden)]
-#[must_use]
 pub fn serve<H: Handler>() -> ExitCode {
     n::serve::<Connections<H>>()
 }

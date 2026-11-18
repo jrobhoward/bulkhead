@@ -123,7 +123,6 @@ bulkhead = { path = "crates/bulkhead", default-features = false }
 bulkhead-bundle = { path = "crates/bulkhead-bundle" }
 # Without the HTTP ingress; `bulkhead` enables `http` and `tls` by feature.
 bulkhead-host = { path = "crates/bulkhead-host", default-features = false }
-bulkhead-modbus = { path = "crates/bulkhead-modbus" }
 bulkhead-modbus-client = { path = "crates/bulkhead-modbus-client" }
 bulkhead-native = { path = "crates/bulkhead-native", default-features = false }
 bulkhead-priv-wire = { path = "crates/bulkhead-priv-wire" }
@@ -147,9 +146,6 @@ anyprobe = { git = "https://github.com/jrobhoward/anyprobe", branch = "main", de
 minisign = "0.10"
 
 # Test-only
-# Ordinary app code for the `app_cost` benchmark (bulkhead-workload).
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-regex = "1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std", "fmt", "env-filter", "ansi", "json"] }
 proptest = "1"
 rstest = "0.28"

@@ -150,7 +150,6 @@ impl Args {
 }
 
 /// The runner's `main`.
-#[must_use]
 pub fn main() -> ExitCode {
     let args = match Args::parse(std::env::args().skip(1)) {
         Ok(args) => args,

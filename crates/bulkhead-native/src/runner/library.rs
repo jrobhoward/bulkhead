@@ -119,7 +119,6 @@ impl App for Library {
 }
 
 /// Serve the plugin at `path`.
-#[must_use]
 pub fn serve(path: PathBuf) -> ExitCode {
     let _ = PATH.set(path);
     app::serve::<Library>()

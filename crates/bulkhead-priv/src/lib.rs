@@ -52,7 +52,6 @@ pub use serve::Mode;
 const USAGE: &str = "usage: bulkhead-priv CONFIG\n       bulkhead-priv --inherited-socket CONFIG   (serve the node on descriptor 3; for tests)";
 
 /// The helper's `main`.
-#[must_use]
 pub fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (inherited, path) = match args.as_slice() {

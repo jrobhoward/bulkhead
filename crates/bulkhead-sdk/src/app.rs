@@ -176,7 +176,6 @@ impl<A: App> n::App for Adapter<A> {
 }
 
 /// Serve `A` until the node stops it.
-#[must_use]
 pub fn serve<A: App>() -> ExitCode {
     n::serve::<Adapter<A>>()
 }

@@ -137,7 +137,6 @@ fn open_preopens(args: &Args) -> Result<String, String> {
 
 /// Fence this process and execute `program` in capability mode, with
 /// `env` (the variables the app may know); returns only on failure.
-#[must_use]
 pub fn exec(args: &Args, program: &std::path::Path, env: Vec<(String, String)>) -> ExitCode {
     match prepare_and_exec(args, program, env) {
         Err(e) => {
