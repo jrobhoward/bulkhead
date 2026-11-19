@@ -207,6 +207,7 @@ fn failover____primary_with_cluster_buckets____replication_line() {
         log_bytes: 3000,
         partner_matched: Some(30),
         alone: true,
+        dr_lag_ms: None,
     });
 
     let out = failover(&info);
@@ -217,6 +218,54 @@ fn failover____primary_with_cluster_buckets____replication_line() {
             "\nreplicated: points (commit 40, last 42, log 3 KiB, partner at 30, 12 behind, committing alone)"
         ),
         "{out}"
+    );
+}
+
+#[test]
+fn failover____primary_with_a_dr_node____dr_line() {
+    let mut info = primary();
+    info.replication = Some(bulkhead::api::ReplicationInfo {
+        buckets: vec!["points".into()],
+        commit: 40,
+        last: 40,
+        base: 0,
+        log_bytes: 1024,
+        partner_matched: Some(40),
+        alone: false,
+        dr_lag_ms: Some(1_250),
+    });
+
+    let out = failover(&info);
+
+    assert!(
+        out.ends_with("\ndr:         the DR node last held all of it 1.2 s ago"),
+        "{out}"
+    );
+}
+
+#[test]
+fn dr____past_its_target_and_snapshotting____says_both() {
+    let info = bulkhead::api::DrInfo {
+        pair: [1, 2],
+        source: 2,
+        commit: 812,
+        base: 700,
+        log_bytes: 4096,
+        lag_ms: 400_000,
+        rpo_target_ms: 300_000,
+        snapshotting: true,
+        stopped: false,
+        deploys: None,
+    };
+
+    let out = dr(&info);
+
+    assert_eq!(
+        out,
+        "pair:       1 and 2, pulling from 2\n\
+         copy:       commit 812, log 4 KiB\n\
+         lag:        400.0 s (target 300.0 s), past its target\n\
+         snapshot:   catching up from a snapshot of the pair's buckets"
     );
 }
 
@@ -314,5 +363,48 @@ fn members_named____a_contact____contact_column_with_dash_for_others() {
     assert_eq!(
         plain,
         "NODE  CREATION  ROLE     REACHABLE  ADDRESS\n1     1         member   yes        10.0.0.1:9000"
+    );
+}
+
+#[test]
+fn dr____deploys_not_ready_and_grants_differ____a_line_each() {
+    let info = bulkhead::api::DrInfo {
+        pair: [1, 2],
+        source: 1,
+        commit: 9,
+        base: 0,
+        log_bytes: 1024,
+        lag_ms: 300,
+        rpo_target_ms: 300_000,
+        snapshotting: false,
+        stopped: false,
+        deploys: Some(bulkhead::api::DrDeploysInfo {
+            source: Some(1),
+            apps: 3,
+            checked_ms: Some(4_000),
+            fetching: None,
+            not_ready: [
+                (
+                    "orders".to_string(),
+                    "1.0.0: secret 'stripe' is not configured".to_string(),
+                ),
+                ("points".to_string(), "1.2.0: no trusted key".to_string()),
+            ]
+            .into(),
+            grants_differ: [("shop".to_string(), "not granted here: timers".to_string())].into(),
+            refused: None,
+        }),
+    };
+
+    let out = dr(&info);
+
+    assert_eq!(
+        out.lines().skip(3).collect::<Vec<_>>(),
+        [
+            "deploys:    3 apps, from node 1, checked 4.0 s ago",
+            "not ready:  orders: 1.0.0: secret 'stripe' is not configured",
+            "            points: 1.2.0: no trusted key",
+            "grants:     shop: not granted here: timers",
+        ]
     );
 }

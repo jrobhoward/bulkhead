@@ -7,7 +7,8 @@
 //! `agreement` replays spike S12's counterexamples; `backpressure` a
 //! congested link; `cast_wait` casts that wait for room on another node;
 //! `groups` process groups across nodes;
-//! `replication` replicated buckets on an HA pair.
+//! `replication` replicated buckets on an HA pair; `dr` shipping them to
+//! a disaster-recovery node.
 //!
 //! Each targeted test fixes a frame delay, puts an event inside that window,
 //! and asserts the one outcome DESIGN.md's "Distribution" rules allow.
@@ -22,6 +23,7 @@ mod cast_wait;
 #[path = "../common/mod.rs"]
 mod common;
 mod credit;
+mod dr;
 mod failover;
 mod groups;
 mod harness;

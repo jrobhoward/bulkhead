@@ -382,6 +382,7 @@ pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply 
         (&Method::GET, ["v1", "cluster"]) => json(StatusCode::OK, &node.members()),
         (&Method::POST, ["v1", "tls", "reload"]) => respond(node.reload_tls().await),
         (&Method::GET, ["v1", "failover"]) => failover(node, &q).await,
+        (&Method::GET, ["v1", "dr"]) => respond(node.dr()),
         (&Method::POST, ["v1", "failover", "confirm"]) => respond(node.confirm_failover()),
         (&Method::POST, ["v1", "failover", "switchover"]) => respond(node.switchover().await),
         (&Method::GET, ["v1", "release"]) => respond(node.release().await),

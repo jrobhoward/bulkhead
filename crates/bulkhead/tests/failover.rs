@@ -78,6 +78,21 @@ where
     panic!("timed out waiting for {what}");
 }
 
+/// [`until`] for longer: about 40 s.
+async fn until_long<F, Fut>(what: &str, mut done: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..400 {
+        if done().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
 async fn standing(node: &TestNode) -> FailoverInfo {
     node.client.failover().await.unwrap()
 }
@@ -795,21 +810,31 @@ async fn failover_serial____line_cut_and_restored_then_primary_killed____paths_f
 /// The SDK fixture as a singleton with its own `replicated` bucket
 /// `state`.
 fn replicated_singleton(signer: &minisign::KeyPair) -> Vec<u8> {
+    replicated_app(signer, "vault", "1.0.0", &[])
+}
+
+/// [`replicated_singleton`] as `name` at `version`, asking for `secrets`.
+fn replicated_app(
+    signer: &minisign::KeyPair,
+    name: &str,
+    version: &str,
+    secrets: &[&str],
+) -> Vec<u8> {
     let manifest = fast(serde_json::json!({
         "placement": { "mode": "singleton" },
         "capabilities": {
             "bulkhead:config": {},
             "bulkhead:keyvalue": { "buckets": { "state": { "durability": "replicated" } } },
             "bulkhead:groups": {},
-            "bulkhead:metrics": { "prefix": "vault" },
-            "bulkhead:secrets": { "secrets": [] },
+            "bulkhead:metrics": { "prefix": name },
+            "bulkhead:secrets": { "secrets": secrets },
             // The SDK fixture uses `bulkhead:sql` and `bulkhead:http-egress`;
             // declared, nothing used.
             "bulkhead:sql": {},
             "bulkhead:http-egress": {}
         }
     }));
-    app_bundle(signer, "vault", "1.0.0", &native_sdk(), manifest)
+    app_bundle(signer, name, version, &native_sdk(), manifest)
 }
 
 async fn call_text(c: &bulkhead::api::Client, app: &str, body: &str) -> String {
@@ -889,6 +914,216 @@ async fn failover____singleton_with_replicated_bucket_primary_killed____new_prim
     assert_eq!(keys.split(',').count(), 20, "{keys}");
     assert_eq!(after, "ok");
     for p in [&mut n2, &mut w] {
+        p.child.kill().await.unwrap();
+    }
+}
+
+/// The witness keeps a DR copy of the pair's replicated log (ROADMAP DR2):
+/// it pulls what the primary commits, `bulkhead dr` shows it caught up,
+/// and both sides report the lag in their metrics.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____witness_keeps_the_copy____holds_every_committed_write() {
+    let dir = tempfile::Builder::new()
+        .prefix("pdr")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3) = (free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n").unwrap();
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 3\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let dr = format!(
+        "{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_singleton(&signer))
+            .await
+            .unwrap();
+    }
+    until("node 1 runs the singleton", || {
+        let c = n1.client.clone();
+        async move {
+            c.status("vault")
+                .await
+                .is_ok_and(|d| d.summary.status == "running")
+        }
+    })
+    .await;
+
+    let mut acked = Vec::new();
+    for i in 0..20 {
+        acked.push(call_text(&n1.client, "vault", &format!("set:state:k{i}:v{i}")).await);
+    }
+    let committed = n1
+        .client
+        .failover()
+        .await
+        .unwrap()
+        .replication
+        .unwrap()
+        .commit;
+    until("the DR copy holds every committed entry", || {
+        let c = w.client.clone();
+        async move { c.dr().await.is_ok_and(|d| d.commit >= committed) }
+    })
+    .await;
+    let copy = w.client.dr().await.unwrap();
+    let pair_side = n1.client.failover().await.unwrap().replication.unwrap();
+    let dr_metrics = w.client.metrics().await.unwrap();
+    let pair_metrics = n1.client.metrics().await.unwrap();
+    let not_dr = n1.client.dr().await.unwrap_err();
+
+    assert!(acked.iter().all(|r| r == "ok"), "{acked:?}");
+    assert_eq!(copy.pair, [1, 2]);
+    assert!(!copy.stopped && !copy.snapshotting, "{copy:?}");
+    assert!(copy.lag_ms < 5_000, "{copy:?}");
+    assert!(
+        pair_side.dr_lag_ms.is_some_and(|l| l < 5_000),
+        "{pair_side:?}"
+    );
+    assert!(
+        dr_metrics.contains("\nbulkhead_dr_commit_index "),
+        "{dr_metrics}"
+    );
+    assert!(
+        dr_metrics.contains("\nbulkhead_dr_lag_seconds "),
+        "{dr_metrics}"
+    );
+    assert!(
+        pair_metrics.contains("\nbulkhead_dr_lag_seconds "),
+        "{pair_metrics}"
+    );
+    assert_eq!(common::kind(&not_dr), "not_found");
+    for p in [&mut n1, &mut n2, &mut w] {
+        p.child.kill().await.unwrap();
+    }
+}
+
+/// The witness, as DR node, holds the pair's deployments (ROADMAP DR3):
+/// the primary's apps, deployed and not started, built against this
+/// node's config and policy; an upgrade and a removal on the pair follow;
+/// a deploy of its own is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____witness_holds_the_pair_s_deployments____held_upgraded_and_removed() {
+    let dir = tempfile::Builder::new()
+        .prefix("pdd")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3) = (free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(
+        &policy,
+        "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n[apps.keeper]\ngrant = [\"bulkhead:keyvalue\"]\n",
+    )
+    .unwrap();
+    // The secret keeper asks for is configured on the pair only.
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 3\n[secrets.token]\nenv = \"HOME\"\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let dr = format!(
+        "policy = {policy:?}\n{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_app(&signer, "vault", "1.0.0", &[]))
+            .await
+            .unwrap();
+        n.client
+            .deploy(replicated_app(&signer, "keeper", "1.0.0", &["token"]))
+            .await
+            .unwrap();
+    }
+
+    let held = |want: &'static str| {
+        let c = w.client.clone();
+        move || {
+            let c = c.clone();
+            async move {
+                let Ok(d) = c.dr().await else { return false };
+                let Ok(apps) = c.list().await else {
+                    return false;
+                };
+                let versions: Vec<String> = apps
+                    .iter()
+                    .map(|a| format!("{} {} {:?}", a.name, a.version, a.previous))
+                    .collect();
+                d.deploys
+                    .is_some_and(|h| h.checked_ms.is_some() && h.fetching.is_none())
+                    && versions.join(", ") == want
+            }
+        }
+    };
+    until_long(
+        "the DR node holds both apps",
+        held("vault 1.0.0 None, keeper 1.0.0 None"),
+    )
+    .await;
+    let first = w.client.dr().await.unwrap().deploys.unwrap();
+    let vault = w.client.status("vault").await.unwrap().summary;
+    let own = w
+        .client
+        .deploy(replicated_app(&signer, "other", "1.0.0", &[]))
+        .await
+        .unwrap_err();
+    let metrics = w.client.metrics().await.unwrap();
+
+    for n in [&n2, &n1] {
+        n.client
+            .upgrade(
+                "vault",
+                replicated_app(&signer, "vault", "1.1.0", &[]),
+                &bulkhead::api::RolloutParams::default(),
+            )
+            .await
+            .unwrap();
+        n.client.remove("keeper").await.unwrap();
+    }
+    until_long(
+        "the DR node follows the upgrade and the removal",
+        held("vault 1.1.0 Some(\"1.0.0\")"),
+    )
+    .await;
+    let after = w.client.dr().await.unwrap().deploys.unwrap();
+
+    assert_eq!(first.source, Some(1), "{first:?}");
+    assert_eq!(first.apps, 2);
+    assert!(first.not_ready["keeper"].contains("token"), "{first:?}");
+    assert!(!first.not_ready.contains_key("vault"), "{first:?}");
+    assert!(first.grants_differ.is_empty(), "{first:?}");
+    assert_eq!(vault.status, "dr copy", "{vault:?}");
+    assert_eq!(common::kind(&own), "refused");
+    assert!(metrics.contains("\nbulkhead_dr_apps 2\n"), "{metrics}");
+    assert!(
+        metrics.contains("\nbulkhead_dr_apps_not_ready 1\n"),
+        "{metrics}"
+    );
+    assert!(after.not_ready.is_empty(), "{after:?}");
+    assert_eq!(after.apps, 1);
+    for p in [&mut n1, &mut n2, &mut w] {
         p.child.kill().await.unwrap();
     }
 }

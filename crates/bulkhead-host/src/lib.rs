@@ -97,7 +97,11 @@ pub use pid::Pid;
 #[doc(hidden)]
 pub use pool::routing_key;
 pub use probe::registration as probe_registration;
-pub use replication::ReplicationStatus;
+/// A DR frame's body decoder, for the fuzz targets in `fuzz/` only.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub use replication::dr_body_for_fuzzing;
+pub use replication::{DrConfig, DrDeployInbox, DrDeploySender, DrStatus, ReplicationStatus};
 #[cfg(unix)]
 pub use runtime::AdminStreams;
 pub use runtime::{Elsewhere, LoadedApp, MetricsText, Runtime};

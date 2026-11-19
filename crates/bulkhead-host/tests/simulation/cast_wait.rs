@@ -137,7 +137,7 @@ fn cast_wait____peer_one_release_older____queued_and_plain_casts_still_go() {
         (waited, plain)
     });
 
-    // Version 8 brought `CastWait`; version 9's credit is in `credit.rs`.
+    // Version 8 brought `CastWait`, version 9 credit (`credit.rs`).
     assert_eq!(waited, Ok(()));
     assert_eq!(plain, Ok(()));
 }

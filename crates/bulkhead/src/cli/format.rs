@@ -356,8 +356,77 @@ pub(crate) fn failover(f: &bulkhead::api::FailoverInfo) -> String {
             out.push_str(", committing alone");
         }
         out.push(')');
+        if let Some(lag) = r.dr_lag_ms {
+            out.push_str(&format!(
+                "\ndr:         the DR node last held all of it {} ago",
+                seconds(lag)
+            ));
+        }
     }
     out
+}
+
+/// `bulkhead dr`: a DR node's copy of its pair's log.
+pub(crate) fn dr(d: &bulkhead::api::DrInfo) -> String {
+    let mut out = format!(
+        "pair:       {} and {}, pulling from {}\ncopy:       commit {}, log {} KiB\nlag:        {} (target {})",
+        d.pair[0],
+        d.pair[1],
+        d.source,
+        d.commit,
+        d.log_bytes.div_ceil(1024),
+        seconds(d.lag_ms),
+        seconds(d.rpo_target_ms)
+    );
+    if d.lag_ms > d.rpo_target_ms {
+        out.push_str(", past its target");
+    }
+    if d.snapshotting {
+        out.push_str("\nsnapshot:   catching up from a snapshot of the pair's buckets");
+    }
+    if d.stopped {
+        out.push_str(
+            "\nstopped:    not pulling: the pair is at a newer version, or its logs differ from this copy (see the node's log)",
+        );
+    }
+    if let Some(h) = &d.deploys {
+        out.push_str(&dr_deploys(h));
+    }
+    out
+}
+
+/// The `deploys` lines of `bulkhead dr`.
+fn dr_deploys(h: &bulkhead::api::DrDeploysInfo) -> String {
+    let mut out = match (h.source, h.checked_ms) {
+        (Some(source), Some(ms)) => format!(
+            "\ndeploys:    {} apps, from node {source}, checked {} ago",
+            h.apps,
+            seconds(ms)
+        ),
+        _ if h.apps > 0 => format!(
+            "\ndeploys:    {} apps, not yet confirmed by the primary",
+            h.apps
+        ),
+        _ => "\ndeploys:    none held yet".to_string(),
+    };
+    if let Some(f) = &h.fetching {
+        out.push_str(&format!("\nfetching:   {f}"));
+    }
+    for (label, map) in [("not ready:", &h.not_ready), ("grants:", &h.grants_differ)] {
+        for (i, (app, why)) in map.iter().enumerate() {
+            let label = if i == 0 { label } else { "" };
+            out.push_str(&format!("\n{label:<12}{app}: {why}"));
+        }
+    }
+    if let Some(r) = &h.refused {
+        out.push_str(&format!("\nrefused:    the primary's deploy state: {r}"));
+    }
+    out
+}
+
+/// Milliseconds as seconds with one decimal.
+fn seconds(ms: u64) -> String {
+    format!("{}.{} s", ms / 1000, (ms % 1000) / 100)
 }
 
 /// One line of `bulkhead failover --watch`: the leadership's fields, or

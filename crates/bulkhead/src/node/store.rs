@@ -6,7 +6,8 @@
 //! ├── bundles/<app>/<version>.rbp
 //! ├── priv/<app>/<version>/...   files the app sees at /priv
 //! ├── kv/                        keyvalue disk buckets
-//! ├── tmp/                       uploads being verified
+//! ├── tmp/                       uploads being verified; a DR node's fetches
+//! ├── dr-shipped.json            a DR node's held deploy state (ROADMAP DR3)
 //! ├── failover-epoch             the highest failover epoch reached
 //! ├── witness-state              a witness's epoch, the node it promoted, its record
 //! ├── node.lock                  held while a node has the directory open
@@ -261,6 +262,33 @@ impl Store {
             .join(format!("upload-{}-{n}.rbp", std::process::id()));
         std::fs::write(&path, bytes).map_err(internal)?;
         Ok(path)
+    }
+
+    /// A file of `name` under `tmp/`.
+    pub(crate) fn tmp_path(&self, name: &str) -> PathBuf {
+        self.root.join("tmp").join(name)
+    }
+
+    /// Delete the files under `tmp/` whose names start with `prefix`.
+    pub(crate) fn remove_tmp_prefixed(&self, prefix: &str) {
+        let Ok(entries) = std::fs::read_dir(self.root.join("tmp")) else {
+            return;
+        };
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy().starts_with(prefix) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
+    /// The text of `name` in the store's top directory, if it exists.
+    pub(crate) fn read_file(&self, name: &str) -> Result<Option<String>, NodeError> {
+        read_optional(&self.root.join(name))
+    }
+
+    /// Replace `name` in the store's top directory with `text`, durably.
+    pub(crate) fn write_file(&self, name: &str, text: &str) -> Result<(), NodeError> {
+        write_durable(&self.root, name, text)
     }
 
     /// Keep a verified upload as `app`'s `version`.

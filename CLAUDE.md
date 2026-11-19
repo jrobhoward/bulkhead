@@ -275,7 +275,13 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   HA pair. `core.rs` is the replica as a state machine whose
   transitions are named after spike S20's actions
   (`spikes/s20/PairReplication.tla`); `log.rs` the log, in the keyvalue
-  redb file; `mod.rs` the task around them. The rules are S20's R1 to R7
+  redb file; `mod.rs` the task around them. Shipping to a DR node
+  (ROADMAP DR2, spike S38): `ship.rs` is a pair node's side and the
+  messages, `dr.rs` the DR node's copy as a state machine (it pulls
+  committed entries only), and `tests/simulation/dr.rs` runs both over
+  a lossy WAN. Deployments to it (DR3) are the node's:
+  `crates/bulkhead/src/node/daemon/dr_deploys.rs`, through
+  `Runtime::dr_deploys`. The rules are S20's R1 to R7
   and R13 in `docs/tla/VERIFICATION.md`; `tests/simulation/replication.rs`
   checks that no acknowledged write is lost under single faults.
 - `crates/bulkhead-modbus`: Modbus TCP as drivers (ROADMAP DA5), the

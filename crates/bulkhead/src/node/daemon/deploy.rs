@@ -81,6 +81,17 @@ impl Node {
     /// respects dependencies).
     pub(super) async fn restore(&self) {
         let _change = self.change.lock().await;
+        if self.config.dr.is_some() {
+            // The pair's, held until this node is activated (ROADMAP DR3).
+            let held = self.st().desired.apps.len();
+            if held > 0 {
+                tracing::info!(
+                    apps = held,
+                    "holding the pair's apps (DR copy), not started"
+                );
+            }
+            return;
+        }
         let order = self.st().desired.order.clone();
         for name in order {
             let Some(app) = self.st().desired.apps.get(&name).cloned() else {
@@ -294,7 +305,9 @@ impl Node {
                 "shared bucket '{missing}' is not configured on this node"
             )));
         }
+        // A DR node holds the pair's replicated buckets (ROADMAP DR3).
         if !self.config.replicates()
+            && self.config.dr.is_none()
             && let Some((bucket, _)) = spec
                 .services
                 .keyvalue
@@ -501,6 +514,7 @@ impl Node {
     }
 
     async fn deploy_upload(&self, upload: &Path) -> Result<DeployResponse, NodeError> {
+        self.refuse_dr_copy()?;
         if self.config.cluster.role == ClusterRole::Witness {
             return Err(NodeError::Refused(
                 "this node is a witness, which runs no apps".into(),
@@ -551,6 +565,7 @@ impl Node {
     /// [`NodeError::NotFound`], or [`NodeError::Conflict`] if it is already
     /// stopped or a running app depends on it.
     pub async fn stop(&self, name: &str) -> Result<Done, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         let running = self
             .st()
@@ -585,6 +600,7 @@ impl Node {
     /// [`NodeError::NotFound`], [`NodeError::Conflict`] if it is running,
     /// and the errors of a deploy.
     pub async fn start(&self, name: &str) -> Result<Done, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         let app = self
             .st()
@@ -627,6 +643,7 @@ impl Node {
     /// [`NodeError::NotFound`], or [`NodeError::Conflict`] if a running app
     /// depends on it.
     pub async fn remove(&self, name: &str) -> Result<Done, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         if !self.st().desired.apps.contains_key(name) {
             return Err(NodeError::NotFound(format!("{name} is not deployed")));

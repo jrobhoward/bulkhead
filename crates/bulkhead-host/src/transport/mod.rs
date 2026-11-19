@@ -300,6 +300,14 @@ pub enum Frame {
         #[serde(with = "wire::bytes")]
         body: Vec<u8>,
     },
+    /// Shipping to a disaster-recovery node (ROADMAP Phase 8): its requests
+    /// for committed entries or a snapshot, and a pair node's answers, as
+    /// CBOR the replication module reads.
+    Dr {
+        /// The message.
+        #[serde(with = "wire::bytes")]
+        body: Vec<u8>,
+    },
     /// A call from the sending node's host to the app called `app` on the
     /// receiving node, whose pool picks the instance as for a local caller
     /// (an HTTP request forwarded from a standby's ingress);
@@ -820,6 +828,7 @@ pub(crate) fn deliver(rt: &std::sync::Arc<RuntimeInner>, from_node: u32, packet:
         }
         Frame::Failover(msg) => rt.failover.deliver(rt, from_node, msg),
         Frame::Replication { body } => crate::replication::deliver(rt, from_node, &body),
+        Frame::Dr { body } => crate::replication::deliver_dr(rt, from_node, &body),
         Frame::Leave => {
             if rt.membership.remove(from_node) {
                 end_session(rt, from_node);

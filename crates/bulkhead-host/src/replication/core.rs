@@ -884,7 +884,7 @@ fn refuse(writes: Vec<Write>, out: &mut Vec<Effect>) {
 
 /// Split `buckets` into chunks of about `bytes` each; a bucket larger than
 /// that spans chunks, as consecutive dumps of the same name.
-fn chunks(buckets: Vec<BucketDump>, bytes: usize) -> Vec<Vec<BucketDump>> {
+pub(super) fn chunks(buckets: Vec<BucketDump>, bytes: usize) -> Vec<Vec<BucketDump>> {
     let mut out: Vec<Vec<BucketDump>> = vec![Vec::new()];
     let mut size = 0;
     for bucket in buckets {
@@ -918,7 +918,7 @@ fn chunks(buckets: Vec<BucketDump>, bytes: usize) -> Vec<Vec<BucketDump>> {
 }
 
 /// Add a chunk's dumps, joining a bucket continued from the last chunk.
-fn merge(into: &mut Vec<BucketDump>, buckets: Vec<BucketDump>) {
+pub(super) fn merge(into: &mut Vec<BucketDump>, buckets: Vec<BucketDump>) {
     for b in buckets {
         match into.last_mut() {
             Some(last) if last.name == b.name => last.entries.extend(b.entries),
@@ -929,7 +929,11 @@ fn merge(into: &mut Vec<BucketDump>, buckets: Vec<BucketDump>) {
 
 /// Watch notices for what a snapshot changed: each key whose value or
 /// revision differs, or that is gone (at its bucket's new revision).
-fn notify_differences(before: &[BucketDump], after: &[BucketDump], out: &mut Vec<Effect>) {
+pub(super) fn notify_differences(
+    before: &[BucketDump],
+    after: &[BucketDump],
+    out: &mut Vec<Effect>,
+) {
     let old: HashMap<&str, &BucketDump> = before.iter().map(|b| (b.name.as_str(), b)).collect();
     let new: HashMap<&str, &BucketDump> = after.iter().map(|b| (b.name.as_str(), b)).collect();
     let mut names: Vec<&str> = old.keys().chain(new.keys()).copied().collect();

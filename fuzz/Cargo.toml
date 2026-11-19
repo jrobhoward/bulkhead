@@ -73,6 +73,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "dr_msg"
+path = "fuzz_targets/dr_msg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "failover_status"
 path = "fuzz_targets/failover_status.rs"
 test = false

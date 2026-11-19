@@ -214,10 +214,11 @@ fn since____every_kind____at_most_this_build_s_version() {
             from: pid(1),
             to: pid(2),
         },
+        Frame::Dr { body: vec![1] },
     ];
 
     let versions: Vec<u16> = frames.iter().map(since).collect();
 
-    assert_eq!(versions, [1, 6, 7, 1, 9]);
+    assert_eq!(versions, [1, 6, 7, 1, 9, 10]);
     assert!(versions.iter().all(|&v| v <= VERSION));
 }

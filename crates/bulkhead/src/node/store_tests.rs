@@ -256,3 +256,16 @@ fn open____a_tree_an_older_node_left____tightened_to_the_nodes_and_its_apps() {
     assert_eq!(mode("priv/shop/1.0.0/cert.pem"), 0o640);
     assert_eq!(mode("compiled/shop/1.0.0/a.native"), 0o750);
 }
+
+#[test]
+fn Store____tmp_files_with_a_prefix____only_those_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    std::fs::write(store.tmp_path("dr-abc.rbp"), b"x").unwrap();
+    std::fs::write(store.tmp_path("upload-1.rbp"), b"x").unwrap();
+
+    store.remove_tmp_prefixed("dr-");
+
+    assert!(!store.tmp_path("dr-abc.rbp").exists());
+    assert!(store.tmp_path("upload-1.rbp").exists());
+}

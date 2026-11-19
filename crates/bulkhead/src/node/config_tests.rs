@@ -302,6 +302,7 @@ fn NodeConfig____failover____read_with_defaults() {
             replication: false,
             replication_log_max: ByteSize::mib(64),
             replication_log_age_s: 3600,
+            dr: None,
         })
     );
 }
@@ -973,4 +974,84 @@ fn extensions____any_other_package____refused() {
         err.contains("extensions.\"example:greeting\": no such package"),
         "{err}"
     );
+}
+
+#[test]
+fn NodeConfig____dr_on_the_witness_and_failover_dr____read() {
+    let witness = CLUSTERED.replace("node = 1", "node = 3") + "role = \"witness\"\n";
+    let dr = NodeConfig::from_toml_str(&format!(
+        "{witness}[witness]\npair = [1, 2]\nfirst = 1\n[dr]\npair = [1, 2]\nrpo_target_s = 60\n"
+    ))
+    .unwrap();
+    let pair = NodeConfig::from_toml_str(&format!(
+        "{CLUSTERED}[failover]\npartner = 2\narbiter = \"witness\"\nwitness = 3\n\
+         replication = true\ndr = 3\n"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        dr.dr,
+        Some(DrBinding {
+            pair: [1, 2],
+            rpo_target_s: 60,
+            poll_ms: 1000,
+            batch_bytes: ByteSize::mib(1),
+            log_max: ByteSize::mib(64),
+            log_age_s: 3600,
+        })
+    );
+    assert_eq!(pair.failover.unwrap().dr, Some(3));
+}
+
+#[test]
+fn NodeConfig____bad_dr____refused() {
+    let member = CLUSTERED.replace("node = 1", "node = 4");
+    let pair = "[failover]\npartner = 2\narbiter = \"witness\"\nwitness = 3\n";
+    let cases = [
+        (format!("{member}[dr]\npair = [2, 4]\n"), "two other nodes"),
+        (format!("{member}[dr]\npair = [2, 2]\n"), "two other nodes"),
+        (
+            format!("{member}[dr]\npair = [1, 2]\npoll_ms = 0\n"),
+            "more than 0",
+        ),
+        (
+            format!("{CLUSTERED}{pair}replication = true\n[dr]\npair = [2, 3]\n"),
+            "cannot have [dr]",
+        ),
+        (format!("{CLUSTERED}{pair}dr = 3\n"), "needs replication"),
+        (
+            format!("{CLUSTERED}{pair}replication = true\ndr = 2\n"),
+            "third node",
+        ),
+        (
+            "data_dir = \"/d\"\nnode = 4\n[dr]\npair = [1, 2]\n".to_string(),
+            "cluster.address",
+        ),
+    ];
+
+    let errors: Vec<(String, &str)> = cases
+        .iter()
+        .map(|(text, named)| {
+            (
+                NodeConfig::from_toml_str(text).unwrap_err().to_string(),
+                *named,
+            )
+        })
+        .collect();
+
+    for (err, named) in errors {
+        assert!(err.contains(named), "{err}");
+    }
+}
+
+#[test]
+fn NodeConfig____dr_node_with_the_pair_s_cluster_buckets____read() {
+    let member = CLUSTERED.replace("node = 1", "node = 4");
+    let bucket = "[buckets.points]\ndurability = \"disk\"\nscope = \"cluster\"\n";
+
+    let dr = NodeConfig::from_toml_str(&format!("{member}[dr]\npair = [1, 2]\n{bucket}")).unwrap();
+    let alone = NodeConfig::from_toml_str(&format!("{member}{bucket}")).unwrap_err();
+
+    assert_eq!(dr.buckets["points"].scope, BucketScope::Cluster);
+    assert!(alone.to_string().contains("or [dr]"), "{alone}");
 }

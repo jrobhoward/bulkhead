@@ -6,6 +6,7 @@ mod builtin;
 mod cluster;
 mod connections;
 mod deploy;
+mod dr_deploys;
 mod egress;
 mod ingress;
 mod metrics;
@@ -80,6 +81,9 @@ pub struct Node {
     operators: remote::Operators,
     /// The singletons, with `[failover]`.
     gate: Option<Arc<Gate>>,
+    /// On a DR node, where the pair's deployments it holds stand
+    /// (ROADMAP DR3).
+    held: dr_deploys::Held,
     /// This node's failover, once started.
     failover: std::sync::OnceLock<FailoverHandle>,
     /// Where a singleton runs while this node is its standby, given to the
@@ -161,7 +165,10 @@ impl Node {
             tracing::warn!("no trusted keys configured: every deploy will be refused");
         }
         let desired = store.load_state()?;
-        if config.cluster.role == ClusterRole::Witness && !desired.apps.is_empty() {
+        if config.cluster.role == ClusterRole::Witness
+            && config.dr.is_none()
+            && !desired.apps.is_empty()
+        {
             return Err(NodeError::Invalid(format!(
                 "this node is a witness, which runs no apps, but {} holds deployed apps",
                 config.data_dir.display()
@@ -304,6 +311,7 @@ impl Node {
             #[cfg(feature = "tls")]
             operators: Arc::default(),
             gate,
+            held: dr_deploys::Held::default(),
             failover: std::sync::OnceLock::new(),
             #[cfg(feature = "http")]
             elsewhere: std::sync::OnceLock::new(),
@@ -324,7 +332,8 @@ impl Node {
         // kept here while the runtime holds the closure weakly (ROADMAP DA7).
         let render: bulkhead_host::MetricsText = {
             let (rt, quic) = (node.rt.clone(), node.quic.clone());
-            Arc::new(move || metrics_text(&rt, &quic))
+            let held = node.config.dr.is_some().then(|| node.held.clone());
+            Arc::new(move || metrics_text(&rt, &quic, held.as_ref()))
         };
         node.rt.set_metrics_text(&render);
         let _ = node.metrics_text.set(KeptMetricsText(render));
@@ -369,7 +378,8 @@ impl Node {
     /// the runtime's, then the HTTP ingress's.
     #[must_use]
     pub fn metrics(&self) -> String {
-        metrics_text(&self.rt, &self.quic)
+        let held = self.config.dr.is_some().then_some(&self.held);
+        metrics_text(&self.rt, &self.quic, held)
     }
 
     /// Reload every HTTPS ingress's certificates from their files. An
@@ -453,7 +463,11 @@ impl std::fmt::Debug for KeptMetricsText {
 
 /// The runtime's metrics (apps', the HTTP ingress driver's among them),
 /// then the cluster transport's.
-fn metrics_text(rt: &Runtime, quic: &std::sync::Mutex<Option<QuicTransport>>) -> String {
+fn metrics_text(
+    rt: &Runtime,
+    quic: &std::sync::Mutex<Option<QuicTransport>>,
+    held: Option<&dr_deploys::Held>,
+) -> String {
     let mut text = rt.render_metrics();
     let quic = quic
         .lock()
@@ -470,7 +484,58 @@ fn metrics_text(rt: &Runtime, quic: &std::sync::Mutex<Option<QuicTransport>>) ->
             s.alone,
         ));
     }
+    let dr = rt.dr_status();
+    text.push_str(&dr_metrics(
+        rt.dr_lag().or(dr.map(|d| d.lag)),
+        dr.map(|d| d.commit),
+    ));
+    if let Some(held) = held {
+        let h = held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let not_ready = h.not_ready.keys().chain(h.grants_differ.keys());
+        let not_ready = not_ready.collect::<std::collections::BTreeSet<_>>().len();
+        text.push_str(&dr_apps_metrics(h.apps, not_ready));
+    }
     text
+}
+
+/// Shipping to the DR node in the Prometheus text format: on a pair node
+/// with `[failover] dr` and on the DR node, how long since the DR node
+/// last held every committed entry; on the DR node, its copy's last
+/// entry.
+fn dr_metrics(lag: Option<Duration>, commit: Option<u64>) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    if let Some(lag) = lag {
+        let _ = writeln!(
+            text,
+            "# HELP bulkhead_dr_lag_seconds Seconds since the DR node last held every committed \
+             replicated entry.\n# TYPE bulkhead_dr_lag_seconds gauge\nbulkhead_dr_lag_seconds {:.3}",
+            lag.as_secs_f64()
+        );
+    }
+    if let Some(commit) = commit {
+        let _ = writeln!(
+            text,
+            "# HELP bulkhead_dr_commit_index The last replicated entry in the DR node's copy.\n\
+             # TYPE bulkhead_dr_commit_index gauge\nbulkhead_dr_commit_index {commit}"
+        );
+    }
+    text
+}
+
+/// The pair's apps a DR node holds (ROADMAP DR3), in the Prometheus text
+/// format: how many, and how many would not start here or have a grant
+/// that differs from the primary's.
+fn dr_apps_metrics(apps: usize, not_ready: usize) -> String {
+    format!(
+        "# HELP bulkhead_dr_apps The pair's apps the DR node holds, deployed and not started.\n\
+         # TYPE bulkhead_dr_apps gauge\nbulkhead_dr_apps {apps}\n\
+         # HELP bulkhead_dr_apps_not_ready Held apps that would not start on the DR node, or \
+         whose grant there differs from the primary's.\n\
+         # TYPE bulkhead_dr_apps_not_ready gauge\nbulkhead_dr_apps_not_ready {not_ready}\n"
+    )
 }
 
 /// The replicated log (`cluster` buckets) in the Prometheus text format:

@@ -9,6 +9,7 @@
 | `parse` | arbitrary text | pids, byte sizes, routing, port ranges, CIDRs, capability keys and import names; pids and byte sizes round-trip |
 | `routing_key` | arbitrary JSON or CBOR bodies and field names | hash routing's key reader never panics |
 | `wire_packet` | arbitrary bytes from a cluster member | as a hello, any agreed version is one both sides speak; as a packet, one that decodes round-trips through `encode` |
+| `dr_msg` | arbitrary bytes from a cluster member as a DR frame's body (ROADMAP DR2) | one that decodes round-trips through CBOR |
 | `failover_status` | arbitrary heartbeat payloads from the partner | a status that decodes encodes to 26 bytes that decode to the same status |
 | `http_reply` | arbitrary reply bodies from an app in the HTTP response format | the ingress driver's reading of a reply (`Response::from_reply`, then its hyper response) never panics and answers a valid status code |
 | `state_view` | arbitrary snapshot bytes from a guest | `bulkhead state`'s reader never panics, names a format, and its answer serializes as JSON |

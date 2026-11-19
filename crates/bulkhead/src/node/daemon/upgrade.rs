@@ -85,6 +85,7 @@ impl Node {
         bytes: &[u8],
         params: &RolloutParams,
     ) -> Result<UpgradeResponse, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         let upload = self.store.write_upload(bytes)?;
         let result = self.upgrade_upload(name, &upload, params).await;
@@ -279,6 +280,7 @@ impl Node {
         name: &str,
         params: &RolloutParams,
     ) -> Result<UpgradeResponse, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         {
             let st = self.st();

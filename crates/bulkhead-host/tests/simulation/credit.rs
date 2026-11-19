@@ -94,8 +94,11 @@ fn credit____none_configured____a_round_trip_each() {
     assert_eq!(seq, "last:10 errors:0");
 }
 
+/// Credit came with version 9; since version 10 a peer one release older
+/// speaks it, so it grants as a peer of this build does. A peer at 8, which
+/// granted none, can no longer connect.
 #[test]
-fn credit____peer_one_release_older____none_granted_and_every_cast_arrives() {
+fn credit____peer_one_release_older____granted_as_by_this_build() {
     let ((ok, ms), seq) = simulate(93, 2, |sim| async move {
         sim.mesh.set_version(2, wire::VERSION - 1);
         let (sender, target) = pair(&sim, None).await;
@@ -106,7 +109,7 @@ fn credit____peer_one_release_older____none_granted_and_every_cast_arrives() {
     });
 
     assert_eq!(ok, 10);
-    assert!(ms >= 200, "10 waited casts took {ms} ms");
+    assert!(ms < 60, "10 waited casts took {ms} ms");
     assert_eq!(seq, "last:10 errors:0");
 }
 

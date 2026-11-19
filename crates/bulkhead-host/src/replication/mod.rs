@@ -20,10 +20,12 @@
 //! what it returns.
 
 mod core;
+mod dr;
 mod log;
+mod ship;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
@@ -31,7 +33,10 @@ use tokio::time::Instant;
 
 pub(crate) use self::core::Refusal;
 use self::core::{Config, Effect, Lead, Msg, Replica, Waiter, Write};
+pub use self::dr::DrStatus;
+use self::dr::{DrEffect, DrReplica, DrTuning};
 pub(crate) use self::log::SPACE;
+use self::ship::{DrMsg, Shipper};
 use crate::error::HostError;
 use crate::failover::{FailoverConfig, Leadership, RunUntil, Standing};
 use crate::formats;
@@ -60,6 +65,8 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub(crate) struct Handle {
     partner: u32,
+    /// The DR node, and this node's side of shipping to it.
+    dr: Option<(u32, Arc<Mutex<Shipper>>)>,
     tx: mpsc::UnboundedSender<Input>,
 }
 
@@ -76,6 +83,8 @@ enum Input {
         reply: oneshot::Sender<Answer>,
     },
     Message(Msg),
+    /// From the DR node.
+    Dr(DrMsg),
     Recorded {
         epoch: u64,
         outdated: bool,
@@ -135,6 +144,58 @@ pub(crate) fn deliver(rt: &RuntimeInner, from: u32, body: &[u8]) {
     }
 }
 
+/// A frame of shipping to or from a DR node, from node `from`: to the DR
+/// task from a pair node, or to the replication task from the configured
+/// DR node.
+pub(crate) fn deliver_dr(rt: &RuntimeInner, from: u32, body: &[u8]) {
+    let kv = rt.services.keyvalue();
+    let to_dr = kv.dr().filter(|d| d.pair.contains(&from));
+    let to_pair = kv
+        .replication()
+        .filter(|h| h.dr.as_ref().is_some_and(|(n, _)| *n == from));
+    if to_dr.is_none() && to_pair.is_none() {
+        tracing::warn!(
+            from,
+            "DR frame from a node that is neither the DR node nor of its pair; dropped"
+        );
+        return;
+    }
+    match transport::wire::from_cbor::<DrMsg>(body) {
+        Ok(DrMsg::Deploys { body }) => match kv.dr_deploys.get() {
+            Some(tx) => {
+                if tx.try_send((from, body)).is_err() {
+                    tracing::warn!(from, "DR deployment message not taken in time; dropped");
+                }
+            }
+            None => tracing::debug!(
+                from,
+                "DR deployment message before the node listens; dropped"
+            ),
+        },
+        Ok(msg) => {
+            if let Some(d) = to_dr {
+                let _ = d.tx.send((from, msg));
+            } else if let Some(h) = to_pair {
+                let _ = h.tx.send(Input::Dr(msg));
+            }
+        }
+        Err(e) => tracing::warn!(from, error = %e, "malformed DR frame; dropped"),
+    }
+}
+
+/// Decode a DR frame's body as `deliver_dr` does and, if it decodes,
+/// check it encodes back to the same message: for the fuzz targets in
+/// `fuzz/` only.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn dr_body_for_fuzzing(body: &[u8]) {
+    if let Ok(msg) = transport::wire::from_cbor::<DrMsg>(body)
+        && let Ok(again) = transport::wire::to_cbor(&msg)
+    {
+        assert_eq!(transport::wire::from_cbor::<DrMsg>(&again).ok(), Some(msg));
+    }
+}
+
 /// Where the replicated log stands on this node (`bulkhead status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -179,6 +240,261 @@ impl Runtime {
     pub fn replication_updates(&self) -> Option<watch::Receiver<ReplicationStatus>> {
         self.inner().services.keyvalue().replication_status()
     }
+
+    /// On a pair node with a DR node: how long since the DR node last held
+    /// every entry this node had committed (since this node started, if
+    /// never).
+    #[must_use]
+    pub fn dr_lag(&self) -> Option<Duration> {
+        let kv = self.inner().services.keyvalue();
+        let (_, shipper) = kv.replication()?.dr.as_ref()?;
+        let shipper = shipper.lock().unwrap_or_else(PoisonError::into_inner);
+        Some(shipper.lag(Instant::now()))
+    }
+
+    /// On the DR node: where its copy of the pair's log stands.
+    #[must_use]
+    pub fn dr_status(&self) -> Option<DrStatus> {
+        let kv = self.inner().services.keyvalue();
+        let (status, since) = *kv.dr()?.status.borrow();
+        Some(DrStatus {
+            lag: Instant::now().duration_since(since),
+            ..status
+        })
+    }
+
+    /// The channel for the node's own DR messages about deployments
+    /// (ROADMAP DR3), carried inside DR frames: the messages from the
+    /// pair's nodes (on the DR node) or from the DR node (on a pair node),
+    /// each with its sender, and the way to send them. Once only; `None`
+    /// after the first call. Messages arriving before it are dropped.
+    #[must_use]
+    pub fn dr_deploys(&self) -> Option<(DrDeploySender, DrDeployInbox)> {
+        let (tx, rx) = mpsc::channel(64);
+        self.inner().services.keyvalue().dr_deploys.set(tx).ok()?;
+        Some((
+            DrDeploySender {
+                rt: Arc::downgrade(self.inner()),
+            },
+            rx,
+        ))
+    }
+
+    /// Keep a copy of HA pair `cfg.pair`'s replicated log on this node, the
+    /// disaster-recovery node (ROADMAP Phase 8): committed entries pulled
+    /// from either pair node, into this node's `cluster` buckets. Needs a
+    /// data directory; once only.
+    ///
+    /// # Errors
+    ///
+    /// Without a data directory, if the log cannot be opened, or if it is
+    /// already started.
+    pub fn start_dr(&self, cfg: DrConfig) -> Result<(), HostError> {
+        start_dr(self.inner(), &cfg)
+    }
+}
+
+/// The node's DR deployment messages, each with the node it came from
+/// ([`Runtime::dr_deploys`]).
+pub type DrDeployInbox = mpsc::Receiver<(u32, Vec<u8>)>;
+
+/// Sends the node's DR deployment messages ([`Runtime::dr_deploys`]).
+#[derive(Debug, Clone)]
+pub struct DrDeploySender {
+    rt: Weak<RuntimeInner>,
+}
+
+impl DrDeploySender {
+    /// Send `body` to node `to` in a DR frame: to a pair node from the DR
+    /// node, or to the DR node from a pair node. Whether it was sent; lost
+    /// if `to` is out of reach now, or is not one of those nodes.
+    pub fn send(&self, to: u32, body: Vec<u8>) -> bool {
+        let Some(rt) = self.rt.upgrade() else {
+            return false;
+        };
+        let kv = rt.services.keyvalue();
+        let peer = kv.dr().is_some_and(|d| d.pair.contains(&to))
+            || kv
+                .replication()
+                .is_some_and(|h| h.dr.as_ref().is_some_and(|(n, _)| *n == to));
+        if !peer {
+            tracing::warn!(
+                to,
+                "DR deployment message to a node that is no DR peer; not sent"
+            );
+            return false;
+        }
+        match transport::wire::to_cbor(&DrMsg::Deploys { body }) {
+            Ok(body) => transport::send(&rt, to, Frame::Dr { body }),
+            Err(e) => {
+                tracing::error!(error = %e, "DR frame not encoded");
+                false
+            }
+        }
+    }
+}
+
+/// A disaster-recovery node's configuration ([`Runtime::start_dr`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DrConfig {
+    /// The HA pair's nodes.
+    pub pair: [u32; 2],
+    /// Between rounds of asks once caught up.
+    pub poll: Duration,
+    /// About the most bytes of entries asked for at once.
+    pub batch_bytes: u64,
+    /// A warning is logged while the copy trails the pair by longer.
+    pub rpo_target: Duration,
+    /// The most bytes of entries its log keeps, and the age of the oldest,
+    /// as on the pair ([`FailoverConfig::replication_log_bytes`]).
+    pub log_bytes: u64,
+    /// See [`DrConfig::log_bytes`].
+    pub log_age: Duration,
+}
+
+impl DrConfig {
+    /// For pair `pair`: a round a second, batches of about 1 MiB, a
+    /// 5-minute target, and the pair's default log bounds.
+    #[must_use]
+    pub fn new(pair: [u32; 2]) -> Self {
+        Self {
+            pair,
+            poll: Duration::from_secs(1),
+            batch_bytes: 1 << 20,
+            rpo_target: Duration::from_secs(300),
+            log_bytes: 64 << 20,
+            log_age: Duration::from_secs(3600),
+        }
+    }
+}
+
+/// The way into the DR node's task, kept by the keyvalue store.
+#[derive(Debug, Clone)]
+pub(crate) struct DrHandle {
+    pair: [u32; 2],
+    tx: mpsc::UnboundedSender<(u32, DrMsg)>,
+    /// Its status, its lag left out, and since when it trails.
+    status: watch::Receiver<(DrStatus, Instant)>,
+}
+
+fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
+    let kv = rt.services.keyvalue().clone();
+    let disk = kv
+        .disk()
+        .ok_or_else(|| HostError::Engine("a DR node needs a data directory".into()))?;
+    let log = log::Log::open(disk).map_err(HostError::Storage)?;
+    let tuning = DrTuning {
+        pair: cfg.pair,
+        poll: cfg.poll,
+        batch_bytes: cfg.batch_bytes.min(ship::MAX_BATCH_BYTES),
+        rpo_target: cfg.rpo_target,
+        log_bytes: cfg.log_bytes,
+        log_age: cfg.log_age,
+    };
+    let now = Instant::now();
+    let replica = DrReplica::new(tuning, log, now).map_err(HostError::Storage)?;
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (status, status_rx) = watch::channel((replica.status(now), replica.behind_since()));
+    kv.set_dr(DrHandle {
+        pair: cfg.pair,
+        tx,
+        status: status_rx,
+    })
+    .map_err(|()| HostError::Engine("the DR copy is already started".into()))?;
+    let task = DrTask {
+        rt: Arc::downgrade(rt),
+        kv,
+        replica,
+        status,
+    };
+    // Ticks often enough for rounds a poll apart and for timeouts.
+    let tick = (cfg.poll / 2).clamp(Duration::from_millis(50), Duration::from_secs(1));
+    tokio::spawn(task.run(rx, tick));
+    Ok(())
+}
+
+/// The DR node's task: the copy fed ticks and the pair's answers.
+struct DrTask {
+    rt: Weak<RuntimeInner>,
+    kv: Arc<KvStore>,
+    replica: DrReplica,
+    status: watch::Sender<(DrStatus, Instant)>,
+}
+
+impl DrTask {
+    async fn run(mut self, mut rx: mpsc::UnboundedReceiver<(u32, DrMsg)>, tick: Duration) {
+        let mut ticker = tokio::time::interval(tick);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            let mut inputs = Vec::new();
+            let ticked = tokio::select! {
+                input = rx.recv() => match input {
+                    Some(i) => {
+                        inputs.push(i);
+                        false
+                    }
+                    None => return,
+                },
+                _ = ticker.tick() => true,
+            };
+            while let Ok(i) = rx.try_recv() {
+                inputs.push(i);
+            }
+            let Some(rt) = self.rt.upgrade() else {
+                return;
+            };
+            let effects = blocking(|| {
+                let now = Instant::now();
+                let mut out = Vec::new();
+                for (from, msg) in inputs {
+                    absorb_dr(self.replica.answer(from, msg, now), &mut out);
+                }
+                if ticked {
+                    absorb_dr(self.replica.tick(now), &mut out);
+                }
+                out
+            });
+            for effect in effects {
+                match effect {
+                    DrEffect::Send { to, msg } => match transport::wire::to_cbor(&msg) {
+                        // Lost if it cannot be sent now; asked again.
+                        Ok(body) => {
+                            transport::send(&rt, to, Frame::Dr { body });
+                        }
+                        Err(e) => tracing::error!(error = %e, "DR frame not encoded"),
+                    },
+                    DrEffect::Notify {
+                        bucket,
+                        changed,
+                        revision,
+                    } => {
+                        if bucket == formats::BUCKET
+                            && changed.iter().any(|k| k == formats::KEY)
+                            && let Some(disk) = self.kv.disk()
+                            && rt.formats_applied(&disk).is_some()
+                        {
+                            // The pair's version is newer than this build:
+                            // stop, so it holds nothing it may not read.
+                            self.replica.stop();
+                        }
+                        let key = (SPACE.to_string(), bucket);
+                        self.kv.watches.notify(&key, &changed, revision);
+                    }
+                }
+            }
+            let now = Instant::now();
+            self.status
+                .send_replace((self.replica.status(now), self.replica.behind_since()));
+        }
+    }
+}
+
+fn absorb_dr(result: Result<Vec<DrEffect>, String>, out: &mut Vec<DrEffect>) {
+    match result {
+        Ok(effects) => out.extend(effects),
+        Err(e) => tracing::error!(error = %e, "replication: the DR copy's storage failed"),
+    }
 }
 
 /// Start replication for this node's replicated buckets, following
@@ -204,9 +520,13 @@ pub(crate) fn start(
     let (tx, rx) = mpsc::unbounded_channel();
     let first = leadership.borrow().clone();
     let (status, status_rx) = watch::channel(status_of(&replica, &first));
+    let dr = cfg
+        .dr
+        .map(|node| (node, Arc::new(Mutex::new(Shipper::new(Instant::now())))));
     kv.set_replication(
         Handle {
             partner,
+            dr: dr.clone(),
             tx: tx.clone(),
         },
         status_rx,
@@ -226,6 +546,8 @@ pub(crate) fn start(
         next_forward: 0,
         reads: Vec::new(),
         status,
+        dr,
+        dr_out: Vec::new(),
     };
     tokio::spawn(task.run(rx, leadership, rt.liveness.interval()));
     Ok(())
@@ -283,6 +605,10 @@ struct Task {
     next_forward: u64,
     reads: Vec<PendingRead>,
     status: watch::Sender<ReplicationStatus>,
+    /// The DR node and this node's side of shipping to it.
+    dr: Option<(u32, Arc<Mutex<Shipper>>)>,
+    /// Answers to the DR node, sent after a step.
+    dr_out: Vec<DrMsg>,
 }
 
 /// What woke the task.
@@ -348,6 +674,7 @@ impl Task {
             };
             let partner_heard = rt.liveness.beats_from(self.partner).iter().any(|b| b.live);
             let effects = blocking(|| self.step(&rt, inputs, tick, partner_heard));
+            self.send_dr(&rt);
             if self.carry_out(&rt, effects).is_some() {
                 // A pair's version newer than this build: stop, so this
                 // node neither acknowledges nor serves what it may not
@@ -434,6 +761,7 @@ impl Task {
                         out.push(done(id, Err(Refusal::Unavailable)));
                     }
                 }
+                Input::Dr(msg) => self.answer_dr(msg, now),
                 Input::Message(Msg::Done { id, result }) => {
                     if let Some(f) = self.forwarded.remove(&id) {
                         let _ = f.reply.send(result);
@@ -450,9 +778,48 @@ impl Task {
             let r = self.replica.tick(now, partner_heard);
             absorb(r, &mut out);
             self.expire(rt, now);
+            if let Some((_, shipper)) = &self.dr {
+                shipper
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .tick(now);
+            }
         }
         self.serve_reads(now, &mut out);
         out
+    }
+
+    /// A message from the DR node, answered from this node's log.
+    fn answer_dr(&mut self, msg: DrMsg, now: Instant) {
+        let Some((_, shipper)) = &self.dr else {
+            return;
+        };
+        let standby = self.replica.is_standby();
+        let answer = shipper
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .answer(self.replica.log(), standby, msg, now);
+        match answer {
+            Ok(Some(reply)) => self.dr_out.push(reply),
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, "replication: a DR answer failed"),
+        }
+    }
+
+    /// Send the answers to the DR node; lost if they cannot go now, since
+    /// it asks again.
+    fn send_dr(&mut self, rt: &RuntimeInner) {
+        let Some((node, _)) = &self.dr else {
+            return;
+        };
+        for msg in std::mem::take(&mut self.dr_out) {
+            match transport::wire::to_cbor(&msg) {
+                Ok(body) => {
+                    transport::send(rt, *node, Frame::Dr { body });
+                }
+                Err(e) => tracing::error!(error = %e, "DR frame not encoded"),
+            }
+        }
     }
 
     fn waiter(&mut self, waiting: Waiting) -> Waiter {

@@ -30,8 +30,9 @@ use crate::failover::FailoverMsg;
 /// the witness (`Release`); version 8 carries a cast that waits on the
 /// receiving node for room in a full mailbox (`CastWait`); version 9 sends
 /// waited casts on credit (`CastCredited`, `Credit`, `CreditReturn`,
-/// `CreditVoid`).
-pub const VERSION: u16 = 9;
+/// `CreditVoid`); version 10 ships the replicated log to a
+/// disaster-recovery node (`Dr`).
+pub const VERSION: u16 = 10;
 
 /// The oldest protocol version this node speaks: the one before
 /// [`VERSION`]. A release raises [`VERSION`] by one at most, so a node and
@@ -105,6 +106,7 @@ pub fn since(frame: &Frame) -> u16 {
         | Frame::Credit { .. }
         | Frame::CreditReturn { .. }
         | Frame::CreditVoid { .. } => 9,
+        Frame::Dr { .. } => 10,
         Frame::Failover(msg) => match msg {
             FailoverMsg::Renew { .. }
             | FailoverMsg::Request { .. }
@@ -188,12 +190,18 @@ pub fn decode(version: u16, bytes: &[u8]) -> Result<Packet, WireError> {
     Ok(packet)
 }
 
-/// `Vec<u8>` as a CBOR byte string, not an array of integers.
-pub(crate) mod bytes {
+/// `Vec<u8>` as a CBOR byte string, not an array of integers: for
+/// `#[serde(with = "bulkhead_host::transport::wire::bytes")]`.
+pub mod bytes {
     use serde::de::{Error, SeqAccess, Visitor};
     use serde::{Deserializer, Serializer};
 
-    pub(crate) fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    /// Write `v` as a byte string.
+    ///
+    /// # Errors
+    ///
+    /// The serializer's.
+    pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_bytes(v)
     }
 
@@ -223,7 +231,12 @@ pub(crate) mod bytes {
         }
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+    /// Read a byte string, or an array of bytes.
+    ///
+    /// # Errors
+    ///
+    /// The deserializer's, or not bytes.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         d.deserialize_byte_buf(Bytes)
     }
 }
@@ -418,7 +431,12 @@ pub(crate) mod failover {
         wire.serialize(s)
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<FailoverMsg, D::Error> {
+    /// Read a byte string, or an array of bytes.
+    ///
+    /// # Errors
+    ///
+    /// The deserializer's, or not bytes.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<FailoverMsg, D::Error> {
         Ok(match Wire::deserialize(d)? {
             Wire::Renew { seq, epoch } => FailoverMsg::Renew { seq, epoch },
             Wire::Request {

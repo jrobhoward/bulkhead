@@ -125,6 +125,7 @@ impl Node {
         change: Traffic,
         params: &RolloutParams,
     ) -> Result<UpgradeResponse, NodeError> {
+        self.refuse_dr_copy()?;
         let _change = self.change.lock().await;
         let new = self
             .st()

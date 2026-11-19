@@ -299,13 +299,8 @@ async fn join_seed____peer_one_release_older____its_version_and_newer_frames_ref
         session: 0,
         frame,
     };
-    let refused = n2.quic.send(
-        1,
-        packet(Frame::CreditVoid {
-            from: a.pid(),
-            to: b.pid(),
-        }),
-    );
+    // The newest version's frame.
+    let refused = n2.quic.send(1, packet(Frame::Dr { body: vec![0] }));
     let back = ask(&b, &format!("call:{}:2000:echo:back", pid_text(a.pid()))).await;
 
     assert_eq!(n1.quic.version(2), Some(older));

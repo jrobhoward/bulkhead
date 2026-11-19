@@ -566,6 +566,33 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- A disaster-recovery copy of the pair's replicated log (ROADMAP DR2): a
+  node with `[dr] pair = [1, 2]`, the witness or one of its own, pulls
+  committed entries from either pair node over the cluster transport,
+  from the standby while it is close behind, and catches up from a
+  snapshot when the pair has compacted what it lacks. The pair never
+  waits for it; its nodes answer only the node their `[failover] dr`
+  names. `bulkhead dr` shows the copy on the DR node and `bulkhead
+  failover` a `dr:` line on a pair node; both report
+  `bulkhead_dr_lag_seconds`, the DR node also `bulkhead_dr_commit_index`,
+  and each warns once the lag passes `[dr] rpo_target_s` (300 by
+  default). `bulkhead release finalize` waits for the DR node as for the
+  witness. Checked on the in-memory mesh with 50 ms of delay and 5% loss
+  on the WAN (cuts, compaction past the copy, a failover, a DR node apart
+  from the witness) and between `bulkhead node` processes; not measured
+  over a real WAN. Activation and failback are DR4's.
+- The pair's deployments on the DR node (ROADMAP DR3): it pulls the
+  primary's deploy state and bundles (by SHA-256, in 1 MiB chunks) every
+  ten polls and holds them deployed and not started, built against its
+  own trusted keys, policy, secrets and buckets. `bulkhead dr` lists the
+  held apps that would not start there and those whose grant differs
+  from the primary's; `bulkhead_dr_apps` and `bulkhead_dr_apps_not_ready`
+  count them; `bulkhead list` shows held apps as `dr copy`. A DR node
+  refuses deploys and changes of its own, may hold apps when it is the
+  witness, and may declare the pair's `cluster` buckets.
+- The cluster protocol is version 10: it adds `Dr`. A node at version 9
+  neither sends nor answers it, and a node at 8 can no longer join.
+
 - Blobs documented (ROADMAP BL1, step 5): MANIFEST.md (`bulkhead:blobs`,
   `[blobs]`), DESIGN.md ("Blobs"), SECURITY.md (the blob boundary),
   OPERATIONS.md ("Blobs"), OBSERVABILITY.md, ARCHITECTURE.md,
@@ -2714,5 +2741,5 @@ unstable APIs and formats.
   listener, and `points` no longer registers `points-api`, answers
   queries or writes to devices (`control` does).
 
-[Unreleased]: https://github.com/jrobhoward/paddock/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/jrobhoward/paddock/releases/tag/v0.3.0
+[Unreleased]: https://github.com/jrobhoward/bulkhead/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jrobhoward/bulkhead/releases/tag/v0.3.0

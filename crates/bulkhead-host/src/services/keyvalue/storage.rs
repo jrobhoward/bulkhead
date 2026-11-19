@@ -34,7 +34,7 @@ use tokio::sync::watch;
 
 use super::watches::Watches;
 use crate::config::SharedBucket;
-use crate::replication::{Handle, Refusal, ReplicationStatus, SPACE};
+use crate::replication::{DrHandle, Handle, Refusal, ReplicationStatus, SPACE};
 
 /// Keys per `list-keys` page.
 pub(crate) const PAGE: usize = 256;
@@ -782,6 +782,11 @@ pub(crate) struct KvStore {
     pub(crate) watches: Watches,
     /// Replication, once started: its task, and where it stands.
     replication: OnceLock<(Handle, watch::Receiver<ReplicationStatus>)>,
+    /// On a DR node, its copy of the pair's log.
+    dr: OnceLock<DrHandle>,
+    /// Where DR deployment messages go, once the node took the channel
+    /// ([`crate::Runtime::dr_deploys`]).
+    pub(crate) dr_deploys: OnceLock<tokio::sync::mpsc::Sender<(u32, Vec<u8>)>>,
     /// Published buckets' snapshots ([`super::publish`]).
     pub(crate) publishers: super::publish::Publishers,
 }
@@ -1067,6 +1072,8 @@ impl KvStore {
             shared,
             watches: Watches::default(),
             replication: OnceLock::new(),
+            dr: OnceLock::new(),
+            dr_deploys: OnceLock::new(),
             publishers: super::publish::Publishers::default(),
         })
     }
@@ -1090,6 +1097,16 @@ impl KvStore {
     /// The replication task, once started.
     pub(crate) fn replication(&self) -> Option<&Handle> {
         self.replication.get().map(|(h, _)| h)
+    }
+
+    /// On a DR node: keep its copy's task; once only.
+    pub(crate) fn set_dr(&self, handle: DrHandle) -> Result<(), ()> {
+        self.dr.set(handle).map_err(|_| ())
+    }
+
+    /// The DR copy's task, once started.
+    pub(crate) fn dr(&self) -> Option<&DrHandle> {
+        self.dr.get()
     }
 
     /// Where replication stands, once started.

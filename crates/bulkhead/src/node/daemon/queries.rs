@@ -77,6 +77,10 @@ impl Node {
         let handle = self.apps.app(name);
         let (status, reason) = match (&handle, restore_error) {
             (Some(h), _) => status_text(&h.status()),
+            (None, _) if self.config.dr.is_some() => (
+                "dr copy".into(),
+                Some("the pair's deployment; starts when this node is activated".into()),
+            ),
             (None, _) if self.held(name) => (
                 "standby".into(),
                 Some("a singleton; runs while this node is primary".into()),

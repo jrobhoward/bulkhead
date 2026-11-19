@@ -91,6 +91,7 @@
 //! # only; the node's user needs the device's group, `dialout` on most
 //! # Linux systems). Both nodes set the same baud.
 //! serial = { device = "/dev/ttyUSB0", baud = 115200 }
+//! dr = 3                        # the DR node, with replication (may be the witness)
 //!
 //! # On the witness (cluster role "witness") instead:
 //! # [witness]
@@ -98,6 +99,17 @@
 //! # first = 1                   # primary at epoch 1
 //! # lease_ms = 3000             # as on the pair
 //! # margin_ms = 500
+//!
+//! # On the disaster-recovery node (the witness, or a node without
+//! # [failover]): a copy of the pair's replicated log, pulled from either,
+//! # and the primary's deployments, held and not started (every ten
+//! # polls). Keep the pair's trusted keys, policy, secrets and buckets
+//! # (its "cluster" ones too) here, so the held apps build.
+//! # [dr]
+//! # pair = [1, 2]
+//! # rpo_target_s = 300          # warn while the copy trails by longer
+//! # poll_ms = 1000
+//! # batch_bytes = "1MiB"
 //!
 //! # A driver app (ROADMAP DA1): the app named "ingress", deployed as any
 //! # app, gets listening sockets the node binds and keeps (it accepts on
@@ -241,6 +253,10 @@ pub struct NodeConfig {
     /// This node is the witness for an HA pair.
     #[serde(default)]
     pub witness: Option<WitnessBinding>,
+    /// This node keeps a disaster-recovery copy of an HA pair's replicated
+    /// log (ROADMAP Phase 8): the witness, or a node without `[failover]`.
+    #[serde(default)]
+    pub dr: Option<DrBinding>,
     /// Host-object limits per instance.
     #[serde(default)]
     pub limits: NodeLimits,
@@ -663,6 +679,49 @@ pub struct FailoverBinding {
     /// See `replication_log_max`.
     #[serde(default = "default_replication_log_age_s")]
     pub replication_log_age_s: u64,
+    /// With replication: the disaster-recovery node, which pulls committed
+    /// entries from either node of the pair (its `[dr]`). It may be the
+    /// witness. Set alike on both nodes.
+    #[serde(default)]
+    pub dr: Option<u32>,
+}
+
+/// The `[dr]` section: this node keeps a copy of an HA pair's replicated
+/// log, pulled from either pair node (ROADMAP Phase 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrBinding {
+    /// The pair's node ids; each names this node as `failover.dr`.
+    pub pair: [u32; 2],
+    /// A warning is logged while the copy trails the pair by longer, in
+    /// seconds.
+    #[serde(default = "default_rpo_target_s")]
+    pub rpo_target_s: u64,
+    /// Between rounds of asks once caught up, in milliseconds.
+    #[serde(default = "default_dr_poll_ms")]
+    pub poll_ms: u64,
+    /// About the most bytes of entries asked for at once (at most 4 MiB).
+    #[serde(default = "default_dr_batch")]
+    pub batch_bytes: ByteSize,
+    /// The most its log keeps, in bytes, and its oldest entry's age in
+    /// seconds, as the pair's `replication_log_max`.
+    #[serde(default = "default_replication_log_max")]
+    pub log_max: ByteSize,
+    /// See `log_max`.
+    #[serde(default = "default_replication_log_age_s")]
+    pub log_age_s: u64,
+}
+
+fn default_rpo_target_s() -> u64 {
+    300
+}
+
+fn default_dr_poll_ms() -> u64 {
+    1000
+}
+
+fn default_dr_batch() -> ByteSize {
+    ByteSize::mib(1)
 }
 
 fn default_replication_log_max() -> ByteSize {
@@ -1656,6 +1715,9 @@ impl NodeConfig {
             .failover
             .as_ref()
             .is_some_and(|f| f.arbiter == ArbiterKind::Witness);
+        // A DR node declares the pair's cluster buckets, held in its copy
+        // until it is activated (ROADMAP DR3).
+        let cluster_ok = witness_pair || config.dr.is_some();
         if let Some(f) = &config.failover
             && f.replication
             && f.arbiter != ArbiterKind::Witness
@@ -1675,8 +1737,8 @@ impl NodeConfig {
             } else if bucket.scope == BucketScope::Cluster && bucket.durability != Durability::Disk
             {
                 Some("scope \"cluster\" needs durability \"disk\"")
-            } else if bucket.scope == BucketScope::Cluster && !witness_pair {
-                Some("scope \"cluster\" needs [failover] with arbiter \"witness\"")
+            } else if bucket.scope == BucketScope::Cluster && !cluster_ok {
+                Some("scope \"cluster\" needs [failover] with arbiter \"witness\", or [dr]")
             } else if bucket.quota.is_some_and(|q| q.bytes() == 0) {
                 Some("quota must be more than 0")
             } else if bucket.publish_ms == Some(0) {
@@ -1833,6 +1895,32 @@ impl NodeConfig {
             if !timing_ok(f.lease_ms, f.margin_ms) {
                 return invalid(
                     "failover.margin_ms must be more than 0 and less than half of lease_ms",
+                );
+            }
+            if let Some(dr) = f.dr {
+                if dr == self.node || dr == f.partner {
+                    return invalid("failover.dr must be a third node");
+                }
+                if !self.replicates() {
+                    return invalid(
+                        "failover.dr needs replication (failover.replication or a cluster bucket)",
+                    );
+                }
+            }
+        }
+        if let Some(d) = &self.dr {
+            if self.failover.is_some() {
+                return invalid("a node of an HA pair cannot have [dr]");
+            }
+            if self.cluster.address.is_none() {
+                return invalid("[dr] needs cluster.address");
+            }
+            if d.pair[0] == d.pair[1] || d.pair.contains(&self.node) {
+                return invalid("dr.pair must be two other nodes");
+            }
+            if d.poll_ms == 0 || d.batch_bytes.bytes() == 0 || d.rpo_target_s == 0 {
+                return invalid(
+                    "dr.poll_ms, dr.batch_bytes and dr.rpo_target_s must be more than 0",
                 );
             }
         }

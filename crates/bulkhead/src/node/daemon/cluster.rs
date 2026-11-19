@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use crate::api::{Done, FailoverInfo, MemberInfo, ReleaseInfo, ReplicationInfo};
+use crate::api::{Done, DrInfo, FailoverInfo, MemberInfo, ReleaseInfo, ReplicationInfo};
+use bulkhead_host::DrConfig;
 use bulkhead_host::failover::{Arbiter, FailoverConfig, SwitchoverRefused, WitnessConfig};
 use bulkhead_host::transport::quic::{NodeIdentity, QuicConfig, QuicTransport};
 use bulkhead_host::transport::wire;
@@ -112,6 +113,18 @@ impl Node {
                 .map_err(|e| NodeError::Invalid(format!("witness: {e}")))?;
             tracing::info!(pair = ?w.pair, "serving as witness");
         }
+        if let Some(d) = &self.config.dr {
+            let mut cfg = DrConfig::new(d.pair);
+            cfg.poll = Duration::from_millis(d.poll_ms);
+            cfg.batch_bytes = d.batch_bytes.bytes();
+            cfg.rpo_target = Duration::from_secs(d.rpo_target_s);
+            cfg.log_bytes = d.log_max.bytes();
+            cfg.log_age = Duration::from_secs(d.log_age_s);
+            self.rt
+                .start_dr(cfg)
+                .map_err(|e| NodeError::Invalid(format!("dr: {e}")))?;
+            tracing::info!(pair = ?d.pair, "keeping a DR copy of the pair's replicated log");
+        }
         let (Some(f), Some(gate)) = (&self.config.failover, &self.gate) else {
             return Ok(());
         };
@@ -144,6 +157,7 @@ impl Node {
         cfg.replication_log_bytes = f.replication_log_max.bytes();
         cfg.replication_log_age = Duration::from_secs(f.replication_log_age_s);
         cfg.replication = f.replication;
+        cfg.dr = f.dr;
         let handle = self
             .rt
             .start_failover(cfg)
@@ -247,7 +261,33 @@ impl Node {
                 log_bytes: s.log_bytes,
                 partner_matched: s.partner_matched,
                 alone: s.alone,
+                dr_lag_ms: self.rt.dr_lag().map(millis),
             }),
+        })
+    }
+
+    /// This node's copy of its pair's replicated log, as the DR node.
+    ///
+    /// # Errors
+    ///
+    /// [`NodeError::NotFound`] without `[dr]`.
+    pub fn dr(&self) -> Result<DrInfo, NodeError> {
+        let (Some(d), Some(s)) = (&self.config.dr, self.rt.dr_status()) else {
+            return Err(NodeError::NotFound(
+                "this node has no [dr] in its config".into(),
+            ));
+        };
+        Ok(DrInfo {
+            pair: d.pair,
+            source: s.source,
+            commit: s.commit,
+            base: s.base,
+            log_bytes: s.log_bytes,
+            lag_ms: millis(s.lag),
+            rpo_target_ms: d.rpo_target_s.saturating_mul(1000),
+            snapshotting: s.snapshotting,
+            stopped: s.stopped,
+            deploys: Some(self.held_info()),
         })
     }
 
@@ -329,7 +369,11 @@ impl Node {
                 "this node has no [failover] in its config".into(),
             ));
         };
-        let peers: Vec<u32> = std::iter::once(f.partner).chain(f.witness).collect();
+        // The DR node holds a copy too, so it must read what is raised.
+        let mut peers: Vec<u32> = std::iter::once(f.partner).chain(f.witness).collect();
+        if let Some(dr) = f.dr.filter(|d| !peers.contains(d)) {
+            peers.push(dr);
+        }
         let done = self
             .rt
             .finalize_formats(&peers)
@@ -417,4 +461,8 @@ impl Node {
             },
         })
     }
+}
+
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }

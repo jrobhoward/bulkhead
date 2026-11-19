@@ -281,6 +281,61 @@ pub struct ReplicationInfo {
     pub partner_matched: Option<u64>,
     /// On the primary, whether it commits without the standby.
     pub alone: bool,
+    /// With a DR node (`[failover] dr`): milliseconds since it last held
+    /// every entry this node had committed.
+    #[serde(default)]
+    pub dr_lag_ms: Option<u64>,
+}
+
+/// A DR node's copy of its pair's replicated log (`[dr]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrInfo {
+    /// The pair's nodes.
+    pub pair: [u32; 2],
+    /// The pair node it pulls from.
+    pub source: u32,
+    /// The last entry it holds and applied.
+    pub commit: u64,
+    /// Entries up to here are compacted.
+    pub base: u64,
+    /// The encoded size of the entries in its log.
+    pub log_bytes: u64,
+    /// Milliseconds since it last held everything the pair had committed
+    /// (since it started, if never): about the writes an activation now
+    /// would lose.
+    pub lag_ms: u64,
+    /// The `[dr] rpo_target_s` it warns past, in milliseconds.
+    pub rpo_target_ms: u64,
+    /// It is catching up from a snapshot.
+    pub snapshotting: bool,
+    /// It stopped pulling: the pair was finalized at a version newer than
+    /// this build, or both pair nodes' logs differ from its copy.
+    pub stopped: bool,
+    /// The pair's deployments it holds (ROADMAP DR3).
+    #[serde(default)]
+    pub deploys: Option<DrDeploysInfo>,
+}
+
+/// The pair's deployments a DR node holds, deployed and not started.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrDeploysInfo {
+    /// The pair node (the primary) whose deployments it holds.
+    pub source: Option<u32>,
+    /// Apps held.
+    pub apps: u32,
+    /// Milliseconds since the primary last confirmed them, or they were
+    /// taken from it; `None` before it was ever heard.
+    pub checked_ms: Option<u64>,
+    /// The bundle being fetched, and how far.
+    pub fetching: Option<String>,
+    /// Apps that would not start here (a deploy would refuse them), with
+    /// why.
+    pub not_ready: BTreeMap<String, String>,
+    /// Apps whose grant from this node's policy differs from the
+    /// primary's, with how.
+    pub grants_differ: BTreeMap<String, String>,
+    /// Why the primary's last deploy state was refused.
+    pub refused: Option<String>,
 }
 
 /// What a deploy did.

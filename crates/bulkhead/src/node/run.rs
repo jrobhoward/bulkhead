@@ -103,6 +103,7 @@ fn fence(_debuggable: bool) -> anyhow::Result<()> {
 async fn serve(config: NodeConfig, ring: Arc<LogRing>) -> anyhow::Result<()> {
     let node = Arc::new(Node::open(config, ring).await?);
     node.start_quarantine();
+    node.start_dr_deploys();
     node.start_remote_admin().await?;
     #[cfg(unix)]
     reload_on_hangup(node.clone());

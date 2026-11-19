@@ -112,6 +112,10 @@ pub struct FailoverConfig {
     /// cannot be promoted until it catches up, so a pair without
     /// replicated buckets leaves this off.
     pub replication: bool,
+    /// The disaster-recovery node (ROADMAP Phase 8), with replication: its
+    /// requests for committed entries are answered, and no other node's.
+    /// It may be the witness.
+    pub dr: Option<u32>,
 }
 
 impl FailoverConfig {
@@ -128,6 +132,7 @@ impl FailoverConfig {
             replication_log_bytes: 64 << 20,
             replication_log_age: Duration::from_secs(3600),
             replication: false,
+            dr: None,
         }
     }
 }

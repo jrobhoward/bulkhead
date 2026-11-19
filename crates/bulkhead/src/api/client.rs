@@ -11,8 +11,9 @@ use hyper::{Method, Response, StatusCode};
 use serde::de::DeserializeOwned;
 
 use super::{
-    ApiError, AppDetail, AppSummary, DeployResponse, Done, Event, FailoverInfo, InstanceInfo,
-    LogLine, MemberInfo, ReleaseInfo, RolloutParams, StateResponse, Target, UpgradeResponse,
+    ApiError, AppDetail, AppSummary, DeployResponse, Done, DrInfo, Event, FailoverInfo,
+    InstanceInfo, LogLine, MemberInfo, ReleaseInfo, RolloutParams, StateResponse, Target,
+    UpgradeResponse,
 };
 
 /// How long a stream may go without a line, keepalives included, before
@@ -384,6 +385,15 @@ impl Client {
     /// Any [`ClientError`]; not found for a node without `[failover]`.
     pub async fn failover(&self) -> Result<FailoverInfo, ClientError> {
         self.json(Method::GET, "/v1/failover", None).await
+    }
+
+    /// The node's copy of its pair's replicated log, as a DR node.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; not found for a node without `[dr]`.
+    pub async fn dr(&self) -> Result<DrInfo, ClientError> {
+        self.json(Method::GET, "/v1/dr", None).await
     }
 
     /// The node's failover standing once its leadership has changed since

@@ -23,6 +23,7 @@ default = ["node", "http", "tls", "sql", "egress", "probes"]
 node = [
     "dep:bulkhead-host",
     "dep:bulkhead-priv-wire",
+    "dep:ring",
     "dep:tracing",
     "dep:tracing-subscriber",
     "tokio/rt-multi-thread",
@@ -54,6 +55,9 @@ http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 minisign = { workspace = true }
+# SHA-256 of bundles shipped to a DR node (ROADMAP DR3); in the tree
+# already, through rustls.
+ring = { workspace = true, optional = true }
 bulkhead-bundle = { workspace = true }
 bulkhead-keys = { workspace = true }
 bulkhead-host = { workspace = true, optional = true }

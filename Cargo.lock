@@ -274,6 +274,7 @@ dependencies = [
  "minisign",
  "proptest",
  "rcgen",
+ "ring",
  "rstest",
  "rustbridge-bundle",
  "rustix",

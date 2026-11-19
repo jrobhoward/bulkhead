@@ -14,7 +14,7 @@ A node reads its configuration, keys and policy from wherever its config file na
 | --- | --- | --- |
 | `state.json` | Deployed apps: versions, running or stopped, deploy order | yes |
 | `bundles/<app>/<version>.rbp` | The signed bundles of each app's current and previous version | yes |
-| `kv/` | Keyvalue data: each app's buckets and the shared buckets, and on a pair node the replicated log with its `cluster` buckets (redb) | yes, from a stopped node or a filesystem snapshot |
+| `kv/` | Keyvalue data: each app's buckets and the shared buckets, and on a pair node the replicated log with its `cluster` buckets (redb); on a DR node (`[dr]`) its copy of the pair's log and buckets | yes, from a stopped node or a filesystem snapshot |
 | `audit.log` | Every admin change, one JSON record per line | as policy requires |
 | `creation` | Raised on every start; part of every pid | never restore an older one (see below) |
 | `failover-epoch` | A pair node's highest failover epoch | never restore an older one |
@@ -119,7 +119,7 @@ A standby asks the operator to confirm only while it cannot hear its partner on 
 
 ### Upgrading the builds of a pair
 
-A node speaks its own wire protocol version and the one before, so the witness and the two nodes can be upgraded one at a time, each to the next release: the witness first, then the standby, a planned switchover, then the other node. `bulkhead release` shows the versions a node speaks, the version each connected member agreed on, and the version of the formats the pair keeps. Until the pair is finalized, either node can be rolled back to the build before. With every node on the new build, `bulkhead release finalize` on either node of a pair with `[failover] replication = true` raises the pair's version to the build's; it is refused unless the partner and the witness are connected at that version. From then on a node refuses to start a build older than the pair's version, naming both versions; one rolled back while it was cut off from the raise learns of it from its partner, logs `the pair was finalized at a version newer than this build`, and shuts down with the same message. Recorded in the audit log as `release_finalized`. Builds before 2026-10-21 do not check, so a rollback to one of those is not stopped. The keyvalue file (`kv/`) needs nothing either way: builds from 2026-10-25 on use redb 4 and earlier ones redb 3, and each opens and writes the other's files (checked with Bulkhead's tables in both directions, compaction included, 2026-10-25).
+A node speaks its own wire protocol version and the one before, so the witness and the two nodes can be upgraded one at a time, each to the next release: the witness first, then the standby, a planned switchover, then the other node. `bulkhead release` shows the versions a node speaks, the version each connected member agreed on, and the version of the formats the pair keeps. Until the pair is finalized, either node can be rolled back to the build before. With every node on the new build, `bulkhead release finalize` on either node of a pair with `[failover] replication = true` raises the pair's version to the build's; it is refused unless the partner and the witness, and a DR node (`[failover] dr`), are connected at that version. Upgrade a DR node with the witness, before the pair. From then on a node refuses to start a build older than the pair's version, naming both versions; one rolled back while it was cut off from the raise learns of it from its partner, logs `the pair was finalized at a version newer than this build`, and shuts down with the same message. Recorded in the audit log as `release_finalized`. Builds before 2026-10-21 do not check, so a rollback to one of those is not stopped. The keyvalue file (`kv/`) needs nothing either way: builds from 2026-10-25 on use redb 4 and earlier ones redb 3, and each opens and writes the other's files (checked with Bulkhead's tables in both directions, compaction included, 2026-10-25).
 
 Native apps are held to the same window: a node accepts apps built against its native protocol version (`bulkhead_native::protocol::VERSION`) and the one before, so the apps deployed keep running across one node upgrade. A release whose node changes that version twice since an app was built refuses the app at its start (`crashed: native protocol version N; this node accepts ...`); rebuild and redeploy apps before then. The CHANGELOG says when a release changes the version.
 
@@ -157,6 +157,28 @@ nc 127.0.0.1 47111 < /tmp/serial-line | nc 127.0.0.1 47112 > /tmp/serial-line
 ```
 
 Stopping the relay cuts the line and starting it again joins it; each node shows the path in `bulkhead failover` (`paths: link heard, serial heard`). For a line that stays up with no process on the host, give the two ports `type='udp'` instead, each with `<source mode='bind' host='127.0.0.1' service='<its port>'/>` and `<source mode='connect' host='127.0.0.1' service='<the other's port>'/>`; it cannot then be cut on its own (not tried here). [`scripts/vm-pair.sh`](../scripts/vm-pair.sh) runs a pair across a Linux and a FreeBSD VM this way, with the witness on the host, and cuts the network, the line and a node in turn (ROADMAP FB5, 2026-11-17).
+
+### A disaster-recovery copy
+
+A third node at a second site can keep a copy of the pair's replicated log and buckets, about a poll interval behind while the WAN is up (under a second in the simulation, with 50 ms of delay and 5% loss each way; not measured over a real WAN). ROADMAP Phase 8: DR2 ships it, activating it is DR4. It is the witness or a node of its own, without `[failover]`:
+
+```toml
+# On the DR node (the witness here):
+[dr]
+pair = [1, 2]
+rpo_target_s = 300      # warn while the copy trails by longer
+poll_ms = 1000          # between rounds once caught up
+batch_bytes = "1MiB"    # entries asked for at once (at most 4 MiB)
+# log_max = "64MiB", log_age_s = 3600: its log's bounds, as the pair's
+
+# On both pair nodes, beside replication:
+[failover]
+dr = 3
+```
+
+The DR node pulls committed entries from either pair node over the cluster transport, so the pair nodes need it among their peers and it needs them. A node of its own puts the pair's addresses in `seeds`. `bulkhead dr` on the DR node shows the node it pulls from, its commit index and its lag; `bulkhead failover` on a pair node adds a `dr:` line with the same lag as that node sees it. Both report `bulkhead_dr_lag_seconds` (OBSERVABILITY.md), and each logs a warning once the lag passes `rpo_target_s`. The lag grows while the WAN is down whether or not anything is written: it is the time since the copy last held everything committed, not a count of writes. Node config, the cluster key, the peers file and policy are not shipped: keep them at site 2. A node at cluster protocol version 9 neither answers nor sends the frames, so a pair and its DR node ship once all three run this build; `bulkhead release finalize` waits for the DR node too ("Upgrading the builds of a pair"). A DR copy that applies a pair's version newer than its build stops pulling, as a standby stops replicating.
+
+The DR node holds the primary's deployments too (ROADMAP DR3): every ten polls (10 s with the default `poll_ms`) it asks both pair nodes for their deploy state, follows the primary's, fetches the bundles it lacks a 1 MiB chunk at a time by SHA-256, and takes the primary's apps, versions and blue-green sides as its own, deployed and not started (`bulkhead list` there shows them as `dr copy`); they start when the node is activated (DR4). An app removed or upgraded on the primary is removed or upgraded there. Each held app is built as a deploy would build it, against the DR node's own trusted keys, policy, secrets, datasources, buckets and volumes, so keep those at site 2 as on the pair, the pair's `cluster` buckets included (`[buckets.<name>]` with `scope = "cluster"`, allowed on a DR node for this). An app that would not start there is reported, with why, as is one whose grant from site 2's policy differs from the primary's: `bulkhead dr` lists them (`not ready:`, `grants:`), `bulkhead_dr_apps_not_ready` counts them and each is logged as a warning. A DR node takes no deploys of its own: deploy, upgrade, rollback, traffic, start, stop and remove are refused there.
 
 ## Misbehaving apps and quarantine
 

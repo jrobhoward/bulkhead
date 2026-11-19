@@ -217,6 +217,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "minisign",
+ "ring",
  "rustbridge-bundle",
  "rustix",
  "rustyline",

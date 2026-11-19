@@ -319,6 +319,9 @@ enum Command {
         #[command(subcommand)]
         action: Option<FailoverCommand>,
     },
+    /// Show this node's disaster-recovery copy of its pair's replicated log
+    /// (`[dr]`): where it stands and how far it trails.
+    Dr,
     /// Show the protocol versions this node speaks, the version each
     /// connected member agreed on, and the pair's version for what is kept.
     Release {
@@ -851,6 +854,7 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
             action: Some(FailoverCommand::Switchover),
             ..
         } => done(json, client.switchover().await),
+        Command::Dr => print(json, &client.dr().await?, format::dr),
         Command::Release { action: None } => print(json, &client.release().await?, format::release),
         Command::Release {
             action: Some(ReleaseCommand::Finalize),

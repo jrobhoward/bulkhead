@@ -52,6 +52,22 @@ async fn changes____one_in_progress____the_next_waits_for_it() {
 }
 
 #[test]
+fn dr_metrics____pair_node_and_dr_node____lag_and_the_copy_s_index() {
+    let pair = dr_metrics(Some(Duration::from_millis(2500)), None);
+    let dr = dr_metrics(Some(Duration::from_secs(1)), Some(77));
+    let none = dr_metrics(None, None);
+
+    assert!(pair.contains("\nbulkhead_dr_lag_seconds 2.500\n"), "{pair}");
+    assert!(!pair.contains("commit_index"), "{pair}");
+    assert!(dr.contains("\nbulkhead_dr_commit_index 77\n"), "{dr}");
+    assert!(
+        dr.contains("# TYPE bulkhead_dr_lag_seconds gauge\n"),
+        "{dr}"
+    );
+    assert!(none.is_empty());
+}
+
+#[test]
 fn replication_metrics____primary____indexes_lag_and_alone() {
     let primary = replication_metrics(40, 42, Some(30), true);
     let standby = replication_metrics(40, 40, None, false);
@@ -100,4 +116,13 @@ fn cluster_metrics____two_peers____queued_bytes_and_refused_per_node() {
         text.contains("# TYPE bulkhead_cluster_send_queue_bytes gauge\n"),
         "{text}"
     );
+}
+
+#[test]
+fn dr_apps_metrics____held_and_not_ready____both_gauges() {
+    let text = dr_apps_metrics(3, 1);
+
+    assert!(text.contains("\nbulkhead_dr_apps 3\n"), "{text}");
+    assert!(text.contains("\nbulkhead_dr_apps_not_ready 1\n"), "{text}");
+    assert!(text.contains("# TYPE bulkhead_dr_apps_not_ready gauge"));
 }

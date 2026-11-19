@@ -79,7 +79,7 @@ Code areas and their interfaces are listed in ROADMAP.md, "Code areas".
 | Services | `services::{config, keyvalue, groups, logging, secrets, metrics, egress, sockets, sql, blobs, modbus, extension}`, `metrics`, `names` | What apps reach, on the `Service` pattern; extensions from other crates; `names` (`Names`, `RuntimeConfig::resolver`), host names to addresses for sockets, egress and SQL connections, through the resolver driver |
 | I/O | `routes`, `listener` | The HTTP route table the ingress driver serves (set by the node, sent as the `routes` event, its owners the apps the driver may call), and listeners (connections passed to the app's instances, many each) |
 | Native apps | `native::{port, cgroup, memory, convert, os, helper}`, `in_process` (feature `test-apps`) | An instance's process through `bulkhead-runner`, its limits, memory reporting and the conversions to the protocol's types; `native::os`, what differs between Linux and FreeBSD (a module per system); `native::helper`, the node's connection to the privileged helper, which starts the process instead under `[priv]`; apps that run in the instance's task for tests |
-| Cluster | `transport::{liveness, membership, wire, quic, memory, lane}`, `failover::{node, witness}`, `replication::{core, log}`, `handover`, `formats` | Frames between nodes, heartbeats and sessions, joining, QUIC with pinned keys, the in-memory mesh for tests, the HA pair and witness, replicated buckets, singletons moved with their state, the pair's version for what is kept |
+| Cluster | `transport::{liveness, membership, wire, quic, memory, lane}`, `failover::{node, witness}`, `replication::{core, log, ship, dr}`, `handover`, `formats` | Frames between nodes, heartbeats and sessions, joining, QUIC with pinned keys, the in-memory mesh for tests, the HA pair and witness, replicated buckets, singletons moved with their state, the pair's version for what is kept |
 | Observability | `probe`, `metrics` | USDT probes on the message path; Prometheus text |
 
 `delivery` is the one place a pid is routed: a live local instance, a dead local pid (`noproc`), or another node (a frame on the transport, or `noconnection`). Process-core code goes through it, never the process table directly.
@@ -403,6 +403,7 @@ sequenceDiagram
 - **What replicates:** `cluster` buckets from node config, apps' buckets declared `replicated` (kept as `<app>/<bucket>` in the `@cluster` namespace), and the reserved records `@handover` and `@release`. Replication runs on a pair with `[failover] replication = true`.
 - **`KvStore`** sends a write to a replicated bucket (`Durability::Replicated`) to the replication task and waits for its answer; reads are local, from this node's copy. `get-linearizable` goes to the task too, which serves it on the primary (or forwards it).
 - **The replication task** (`replication::Task`) owns the replica, a state machine named after spike S20's actions (`replication::core`), over the log (`replication::log`), which lives in the same redb file as the disk buckets: entries, and the commit index applied with the data in one transaction. It follows the failover leadership, takes frames from the partner (`Frame::Replication`), forwards the standby's writes and linearizable reads to the primary, asks the failover task to set or clear the witness's record (`failover::record_partner`), and ticks each heartbeat interval to resend, send the commit index and compact. It publishes `ReplicationStatus` for the gate and `bulkhead failover`. Its redb work runs under `block_in_place`.
+- **Shipping to a DR node** (ROADMAP DR2): the DR node's task (`replication::DrTask`, from `Runtime::start_dr`) owns its copy, a state machine (`replication::dr`) over a log of its own in the same place, and pulls: `Frame::Dr` asks to both pair nodes, answered by each node's replication task from its log (`replication::ship::Shipper`), committed entries only, or a snapshot in chunks. `transport` hands a `Dr` frame to `replication::deliver_dr`, which passes it on only from the configured nodes. Deployments (DR3) ride in the same frames as an opaque body (`DrMsg::Deploys`) for the node, which takes the channel with `Runtime::dr_deploys`: `daemon/dr_deploys.rs` serves a pair node's deploy state and bundles, and on the DR node pulls the primary's, fetches bundles by SHA-256, and under the change lock keeps them, builds each app without starting it and takes the state as its own.
 
 The rules are spike S20's R1 to R7, mapped to the code in `docs/tla/VERIFICATION.md` with the witness's record (R13).
 
@@ -443,6 +444,8 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Serial path | 1 per configured device | `node/serial_path.rs` | stop |
 | Failover node loop | 1 on a pair member | `Runtime::start_failover` | runtime drop |
 | Replication task; a record request to the failover loop | 1 on a pair member with replication; 1 per request | `Runtime::start_failover` | runtime drop; answer |
+| DR copy task | 1 on a DR node (`[dr]`) | `Runtime::start_dr` | runtime drop |
+| DR deployments task: serving on a pair node, pulling on the DR node | 1 on a pair node with `failover.dr` or a DR node | daemon (`dr_deploys.rs`, `Node::start_dr_deploys`) | node stop |
 | QUIC accept, new-member dialer | 1 each | `QuicTransport` | stop |
 | QUIC per connection: 2 writers, 2 readers, close watcher | 5 per peer | connection setup | connection close |
 | QUIC redial | 1 per lost peer or seed | connection loss | reconnected or stop |
@@ -475,6 +478,8 @@ A node runs one tokio multi-threaded runtime, one worker per core by default.
 | Failover inbox; the witness's record and its persistence | `failover::Shared` | std `Mutex` each |
 | Services' shared state: buckets (memory, and the redb handle), watches, groups, log rate buckets, metric series, secret sources, egress caps and allow sets per app (the pools are in the drivers), socket counts per app, SQL caps per app and datasource (the pools are in the drivers), the blob table | `services::Shared` | per service |
 | The replica: role, mode, the partner's match index, writes waiting to commit, a snapshot in transfer | `replication::Task` (owned by its task, no lock) | none |
+| A pair node's side of shipping: a snapshot being sent to the DR node, when it last found it caught up | `replication::ship::Shipper`, shared by the replication task and `Runtime::dr_lag` | std `Mutex` |
+| The DR copy: the pair nodes' commit indexes, the node pulled from, a snapshot arriving, its lag | `replication::DrTask` (owned by its task; its status in a `watch`) | none |
 | A moved singleton's snapshot taken for its start | `RuntimeInner::handovers` (`handover::Pending`) | std `Mutex` |
 | Failover role for `hot-standby` instances | `RuntimeInner::failover_role` | std `RwLock` |
 
@@ -503,6 +508,7 @@ An app's state lives only in its process. A crash or restart starts from `init`;
 | Connection apps and their listeners | std `Mutex` |
 | HTTP route table | `routes::RouteTable` (the driver keeps its copy, and the TLS certificates) |
 | Held singletons | `gate::Gate` (std `Mutex`, and a tokio `Mutex` serializing starts and stops) |
+| On a DR node, the pair's deployments held: the source, when last confirmed, a fetch under way, apps not ready or with differing grants | `dr_deploys::Held` (std `Mutex`), shared with the metrics; the fetch itself is the pulling task's |
 | Event subscribers | `node/events.rs` (a broadcast channel) |
 | Recent log records | `LogRing` (10,000 records) |
 
@@ -514,8 +520,9 @@ An app's state lives only in its process. A crash or restart starts from `init`;
 ├── bundles/<app>/<version>.rbp
 ├── priv/<app>/<version>/...   files the app sees at /priv
 ├── compiled/<app>/<version>/  the programs of deployed apps (.native)
-├── kv/                        disk buckets and the replicated log with its replicated buckets (one redb file)
-├── tmp/                       uploads being verified
+├── kv/                        disk buckets and the replicated log with its replicated buckets (one redb file); a DR node's copy
+├── tmp/                       uploads being verified; on a DR node, bundles being fetched
+├── dr-shipped.json            on a DR node, the primary's deploy state it holds, with the primary's grants
 ├── creation                   raised on every start; part of every pid
 ├── failover-epoch             the highest epoch reached; written and synced before acting
 ├── witness-state              a witness's epoch, promoted node and record; synced before a grant or record change
