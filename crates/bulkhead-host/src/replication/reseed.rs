@@ -19,10 +19,11 @@ use tokio::time::Instant;
 
 use super::core::merge;
 use super::log::{Log, Snapshot};
-use super::ship::{DrMsg, MAX_BATCH_BYTES};
+use super::ship::{CHUNK_TIMEOUT, DrMsg, MAX_BATCH_BYTES};
 use crate::services::keyvalue::storage::BucketDump;
 
-/// How long an answer is waited for before the ask is sent again.
+/// How long an answer of entries is waited for before the ask is sent
+/// again (a snapshot chunk's, `CHUNK_TIMEOUT`).
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Between asks once caught up.
@@ -65,6 +66,14 @@ pub(crate) struct Reseed {
     next_ask: Instant,
     /// The DR node's commit index, from its last answer.
     source_commit: Option<u64>,
+    /// Whether the DR node has answered on the current session. Until it
+    /// has, only a probe is sent, asked again every `TIMEOUT`: an ask sent
+    /// before the two nodes heard each other (just started) is dropped,
+    /// with no change of session to tell, and a probe's answer is small,
+    /// so copies of it cost nothing. Once answered, the session's stream
+    /// is known to deliver, and a snapshot chunk is asked again only when
+    /// the session changes, or after `CHUNK_TIMEOUT`.
+    heard: bool,
 }
 
 type Out = Result<Vec<ReseedEffect>, String>;
@@ -78,6 +87,7 @@ impl Reseed {
             asked_at: None,
             next_ask: now,
             source_commit: None,
+            heard: false,
         }
     }
 
@@ -96,11 +106,24 @@ impl Reseed {
         matches!(self.phase, Phase::Entries) && self.source_commit.is_some_and(|c| log.last() >= c)
     }
 
+    /// The session with the DR node changed: whatever was asked on the
+    /// old one is lost, so ask again at the next tick.
+    pub(crate) fn reconnected(&mut self, now: Instant) {
+        self.heard = false;
+        if self.asked_at.take().is_some() {
+            self.next_ask = now;
+        }
+    }
+
     /// Ask again if an answer is overdue, or once a poll has passed.
     pub(crate) fn tick(&mut self, log: &Log, now: Instant) -> Out {
         let mut out = Vec::new();
+        let timeout = match self.phase {
+            Phase::Snapshot { .. } if self.heard => CHUNK_TIMEOUT,
+            _ => TIMEOUT,
+        };
         let due = match self.asked_at {
-            Some(at) => now.duration_since(at) >= TIMEOUT,
+            Some(at) => now.duration_since(at) >= timeout,
             None => now >= self.next_ask,
         };
         if due {
@@ -111,6 +134,17 @@ impl Reseed {
 
     fn ask(&mut self, log: &Log, now: Instant, out: &mut Vec<ReseedEffect>) {
         self.asked_at = Some(now);
+        if !self.heard {
+            // Answered with no entries (or `Behind`), whatever the DR node
+            // holds; nothing in it is taken.
+            out.push(ReseedEffect::Send(DrMsg::Ask {
+                after: 0,
+                after_epoch: 0,
+                max_bytes: 0,
+                rpo_target_ms: u64::MAX,
+            }));
+            return;
+        }
         let msg = match &self.phase {
             Phase::Snapshot {
                 index, next_chunk, ..
@@ -132,6 +166,13 @@ impl Reseed {
     /// An answer from the DR node.
     pub(crate) fn answer(&mut self, log: &mut Log, msg: DrMsg, now: Instant) -> Out {
         let mut out = Vec::new();
+        if !self.heard {
+            // The probe's answer (or a late one to an ask before it): the
+            // session delivers; ask for what is needed now.
+            self.heard = true;
+            self.ask(log, now, &mut out);
+            return Ok(out);
+        }
         match msg {
             DrMsg::Snapshot {
                 index,

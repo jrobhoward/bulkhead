@@ -12,6 +12,8 @@ The method: layered specifications, each giving up one simplification of the one
 | --- | --- | --- |
 | `FailoverL1.tla` | 1 | Roles, epochs, the witness, the lease. Atomic steps; channels up or down as a whole; the lease abstracted as "it runs out only while its holder cannot renew". Spike S16's model, unchanged. |
 | `FailoverL2.tla` | 2 | The code with time: ticks; a FIFO queue per link direction that can be up, held or lost; heartbeats carrying status and an echo, read as they arrive and going stale; the witness answering each request at once with no pending state; the cancel and stand-down rules; crashes, witness crashes, lost replies; epochs not kept across restarts. |
+| `DrFailover.tla` | 2, with a DR node | `FailoverL2.tla` with the witness as disaster-recovery node: the site cut and the loss of both pair nodes, fencing, activation, and the site lease as a switch. Spike S38's model, moved here with ROADMAP DR4 ("Disaster recovery", below). |
+| `DrReplication.tla` | S20's, with a DR node | Spike S20's `PairReplication.tla` with a replica at the DR node: shipping committed entries, activation from the copy, writes there, and failback (reseed and hand-back). Also S38's. |
 
 Layer 2 keeps every time as an age or a countdown, capped where larger values change nothing, so its state space is finite. It runs in rounds: each tick has phases (faults, delivery of every frame due in a fixed link order, one node's turn and then the other's, either node first), and in its turn a node may beat, step, both in either order, or neither. A frame sent in one round arrives in the next unless its link holds or loses it. The rounds keep the interleavings that change the outcome (which node acts first, beat before or after step, skipped beats) and drop those that only reorder independent deliveries within a tick; the Rust simulation (`crates/paddock-host/tests/simulation/failover.rs`) runs on real interleavings and covers what rounds drop.
 
@@ -304,6 +306,43 @@ Differences, and what each needs:
 
 Checking conformance mechanically (trace validation) is not adopted for now. Every modelled action matched; both defects found sit outside the model (the operator's confirmation, the gate and pauses), where a trace check against the model could not have found them. Covering those in the model comes first. Revisit if `failover/` changes often (R5).
 
+## Disaster recovery (ROADMAP Phase 8)
+
+Spike S38 (`spikes/s38/README.md`) built `DrFailover.tla` and `DrReplication.tla`, each a copy of its parent with the DR node behind switches, so that with them off each has its parent's states exactly (`DrF_Off1` 288,754,513, as `L2_Crashes_Fixed1`; `DrR_Off1` 82,040,501, as S20's `Eager1`). Its results, both remedies and the vacuity checks, are in its README. ROADMAP DR4 (2026-11-19) built one of them, operator fencing, on a DR node that is also the witness (decided with the user that day), and moved the models here; their configs, both remedies, stay as checked history. `dr-mkcfg.sh` writes the configs, `dr-run.sh` runs them into `~/tla-runs/dr-<date>`.
+
+The configs of the design as built are `DrF_Operator_Site1` and `DrR_Operator_Site1` (one site fault, exhaustive), and `DrF_Operator1`, `DrF_Operator2`, `DrR_Operator1` and `DrR_Operator2` (every fault, one or two, by random simulation). The properties: `AtMostOneRunningSites`; `DrPrefix` and `DrNoConflict` (the copy holds only acknowledged writes, and never one that contradicts one); `NoLostWriteDr` (what clients were told only grows, but at an activation, which keeps exactly the copy); `StaleInert` (a stale node neither runs nor serves a read); and S20's properties over the nodes that are not stale.
+
+Rerun from `docs/tla` after the move (2026-11-19, TLC 2026.02.28, OpenJDK 21, the 16-core machine, the two at once, so their times are not comparable with S38's):
+
+| Config | Distinct states | Result |
+| --- | --- | --- |
+| `DrF_Operator_Site1` | 278,140,883 (447,458,457 generated) | pass, depth 335, 37 min on 12 workers: S38's count exactly |
+| `DrR_Operator_Site1` | 81,711,997 (496,070,229 generated) | pass, depth 48, 57 min on 4 workers: S38's count exactly |
+
+### Conformance with the code (DR4)
+
+Checked by reading (2026-11-19): each DR action against `failover/witness.rs`, `failover/node.rs`, `failover/mod.rs` (`Runtime::dr_activate`, `Runtime::dr_failback`), `replication/dr.rs`, `replication/reseed.rs` and `replication/mod.rs`.
+
+| Model | Code | Matches |
+| --- | --- | --- |
+| `Ship(n)`: a pair node sends the DR node its next committed entry, or its prefix when compacted | `Shipper::answer` on a pair node, to the DR node's pull (`DrReplica`) | yes. The DR node pulls, from either node (DR2); committed entries only, as `ShipCommittedOnly` |
+| `DrFence`: the witness renews nothing and refuses every request | `Witness::fence`; while fencing, `Witness::handle` answers `Renew` and `Record` with `Fenced`, `Request` with `Refused` | yes |
+| `DrWaited` without the site lease: the pair's lease gone as the witness knows it, the operator right (`OperatorRight`) | `Witness::fence` returns the last renewal of either pair node plus lease and margin (a restarted witness counts as just renewed); `bulkhead dr activate --site-1-down` is the operator's word (A9) | yes, and longer: the model waits from the promoted node's last renewal, the code from either node's |
+| `DrActivate`: a new epoch, the DR node promoted; the copy becomes what clients were told | `Witness::activate`, kept on disk before it applies (as R10); `DrReplica::lead` appends a no-op of the new epoch (`DNoOp`) | yes |
+| `DWrite`, `DCommit`: the DR node writes and commits alone | `DrReplica::write`: append and commit at once | yes, each write committed as it is taken |
+| A pair node's renewal after the activation is fenced | `Witness::handle` answers `DrActive` (its epoch and the DR node) to anything from the pair; `State::on_message` steps a primary down and keeps a down node down, asking again each lease | yes. `DrActive` carries the epoch `Fenced` would, and also tells the node it is stale |
+| `stale` set at the activation | `Leadership::dr_active`, then `Log::set_stale`, kept on disk before the reseed starts | yes, set when the node hears the witness rather than at the activation: until then it is down or cut off, and runs nothing (the operator's word) |
+| `StaleInert` | a stale node is `Down` (no singletons); `KvStore` refuses its `cluster` buckets' reads and writes | yes |
+| `Reseed(n)`: a stale node takes the DR node's committed log | `Reseed`: a full snapshot of the DR node's buckets (`Log::install`, which drops every entry and lowers the commit index), then its entries after it | yes in effect. The model's node becomes the DR node's standby; the code's stays down and pulls. S20 checks the catch-up mechanics, as the model's comment says |
+| `HandBack(n)`: everything committed, both pair nodes caught up, the witness promotes `n` at a new epoch | `Runtime::dr_failback`: the DR node's apps stopped, writes refused (`DrReplica::freeze`), both pair nodes' asks at its last entry (`DrStatus::reseeded`), then `Witness::hand_back`, kept on disk | yes. The model promotes `n` atomically; the code's `n` takes the grant when it next asks, and nothing runs anywhere meanwhile |
+| The other node rejoins | S20's `Rejoin`: a down node hears the new primary and becomes its standby; its log is a prefix of the new primary's | yes |
+
+Differences, and what each needs:
+
+- **An activation is abandoned if a pair node is heard while fencing** (`Witness::activate`, `ActivateRefused::Heard`). Not in the model, where the operator is always right; it only removes runs, so it cannot break a property. It catches an operator who is wrong while site 1 still reaches the witness.
+- **A DR node apart from the witness** is not modelled and not built: `bulkhead dr activate` refuses there (ROADMAP DR4b).
+- **More than one activation, clock drift between sites, held frames through a site cut exhaustively**: not covered (S38's README, "Not covered").
+
 ## Running the specifications
 
 ```sh
@@ -319,6 +358,14 @@ java -XX:+UseParallelGC -Xmx40g -jar ~/tla/tla2tools.jar -workers auto -checkpoi
 # Layer 2, random simulation (minutes): the Code configs find bug 1 in seconds.
 java -XX:+UseParallelGC -jar ~/tla/tla2tools.jar -simulate num=100000000 -depth 400 -deadlock \
     -workers auto -config L2_Links_Code.cfg FailoverL2.tla
+```
+
+Disaster recovery, from `docs/tla`:
+
+```sh
+bash dr-mkcfg.sh                                      # writes every DrF_* and DrR_* config
+DR_WORKERS=12 ./dr-run.sh DrF_Operator_Site1          # exhaustive, with checkpoints
+DR_SIMULATE=30 ./dr-run.sh DrF_Operator2              # random traces for 30 minutes
 ```
 
 TLC 1.8 or later (`tla2tools.jar` from https://github.com/tlaplus/tlaplus/releases), Java 11 or later. None of this runs in CI.

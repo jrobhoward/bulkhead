@@ -379,3 +379,77 @@ fn leading____the_pair_answers_and_ticks____nothing_taken_or_asked() {
     assert!(answered.is_empty());
     assert_eq!(dr.log.last(), 1);
 }
+
+#[test]
+fn leading____both_pair_nodes_take_a_snapshot_at_once____neither_starts_the_other_over() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.lead(7).unwrap();
+    // Three values of 600 KiB: a snapshot of more than one chunk.
+    for key in ["a", "b", "c"] {
+        let (answer, _) = dr.write(
+            "points".into(),
+            None,
+            Op::Set(key.into(), vec![0; 600 << 10]),
+        );
+        answer.unwrap();
+    }
+    let ask = |index, chunk| DrMsg::AskSnapshot { index, chunk };
+    let first = |out: Vec<DrEffect>| match out.into_iter().next() {
+        Some(DrEffect::Send {
+            msg: DrMsg::Snapshot { index, chunk, .. },
+            ..
+        }) => (index, chunk),
+        other => panic!("not a snapshot chunk: {other:?}"),
+    };
+
+    let (index_1, _) = first(dr.answer(1, ask(0, 0), now).unwrap());
+    // A write between the two, then node 2's snapshot of its own.
+    let (answer, _) = dr.write("points".into(), None, Op::Set("d".into(), b"v".to_vec()));
+    answer.unwrap();
+    let (index_2, _) = first(dr.answer(2, ask(0, 0), now).unwrap());
+    let next_1 = first(dr.answer(1, ask(index_1, 1), now).unwrap());
+    let next_2 = first(dr.answer(2, ask(index_2, 1), now).unwrap());
+
+    assert_ne!(index_1, index_2);
+    assert_eq!(next_1, (index_1, 1));
+    assert_eq!(next_2, (index_2, 1));
+}
+
+#[test]
+fn reconnected____taking_a_snapshot_from_that_node____chunk_asked_again_at_once() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    let mut out = Vec::new();
+    dr.ask_snapshot(0, 0, now, &mut out);
+    dr.answer(
+        1,
+        DrMsg::Snapshot {
+            index: 10,
+            index_epoch: 1,
+            chunk: 0,
+            last: false,
+            buckets: Vec::new(),
+        },
+        now,
+    )
+    .unwrap();
+
+    let other = dr.reconnected(1, now);
+    let again = dr.reconnected(0, now);
+    // Nothing more until the backstop.
+    let waited = dr.tick(now + Duration::from_secs(10)).unwrap();
+
+    assert!(other.is_empty());
+    assert_eq!(
+        again,
+        [DrEffect::Send {
+            to: 1,
+            msg: DrMsg::AskSnapshot {
+                index: 10,
+                chunk: 1
+            }
+        }]
+    );
+    assert!(waited.is_empty(), "{waited:?}");
+}

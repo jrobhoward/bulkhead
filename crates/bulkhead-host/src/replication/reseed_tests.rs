@@ -8,7 +8,7 @@ use redb::ReadableDatabase;
 
 use super::*;
 use crate::replication::log::{Command, Entry, SPACE};
-use crate::replication::ship::Shipper;
+use crate::replication::ship::{CHUNK_TIMEOUT, Shipper};
 use crate::services::keyvalue::storage::{Disk, Op};
 
 fn set(epoch: u64, key: &str) -> Entry {
@@ -40,6 +40,25 @@ fn keys(log: &Log) -> Vec<String> {
         .collect();
     keys.sort();
     keys
+}
+
+/// The probe's answer: the DR node holds nothing yet.
+fn probe_answer() -> DrMsg {
+    DrMsg::Entries {
+        standby: false,
+        commit: 0,
+        after: 0,
+        entries: Vec::new(),
+    }
+}
+
+fn probe() -> ReseedEffect {
+    ReseedEffect::Send(DrMsg::Ask {
+        after: 0,
+        after_epoch: 0,
+        max_bytes: 0,
+        rpo_target_ms: u64::MAX,
+    })
 }
 
 /// Deliver the reseed's asks to the DR node's shipper over `dr_log`, and
@@ -121,6 +140,7 @@ fn reseed____behind_or_mismatch____starts_over_from_a_snapshot() {
     let now = Instant::now();
     let mut reseed = Reseed::new(3, now);
     let _ = reseed.tick(&log, now).unwrap();
+    let _ = reseed.answer(&mut log, probe_answer(), now).unwrap();
     let dr = dr_log();
     let snapshot = Shipper::new(now)
         .answer(&dr, false, DrMsg::AskSnapshot { index: 0, chunk: 0 }, now)
@@ -150,15 +170,35 @@ fn reseed____behind_or_mismatch____starts_over_from_a_snapshot() {
 }
 
 #[test]
-fn tick____answer_overdue____asked_again() {
+fn tick____unanswered_on_this_session____only_a_probe_asked_again_soon() {
     let log = log_of(&[], 0);
     let now = Instant::now();
     let mut reseed = Reseed::new(3, now);
-    let _ = reseed.tick(&log, now).unwrap();
 
+    let first = reseed.tick(&log, now).unwrap();
     let soon = reseed.tick(&log, now + Duration::from_millis(500)).unwrap();
-    let late = reseed.tick(&log, now + TIMEOUT).unwrap();
+    let again = reseed.tick(&log, now + TIMEOUT).unwrap();
 
+    assert_eq!(first, [probe()]);
+    assert!(soon.is_empty());
+    assert_eq!(again, [probe()]);
+}
+
+#[test]
+fn tick____snapshot_chunk_overdue____asked_again_only_after_the_chunk_timeout() {
+    let mut log = log_of(&[], 0);
+    let now = Instant::now();
+    let mut reseed = Reseed::new(3, now);
+    let _ = reseed.tick(&log, now).unwrap();
+    let asked = reseed.answer(&mut log, probe_answer(), now).unwrap();
+
+    // A chunk on its way over a slow link is not asked for again (a second
+    // copy would only queue behind it).
+    let soon = reseed.tick(&log, now + TIMEOUT).unwrap();
+    let late = reseed.tick(&log, now + CHUNK_TIMEOUT).unwrap();
+
+    let chunk = ReseedEffect::Send(DrMsg::AskSnapshot { index: 0, chunk: 0 });
+    assert_eq!(asked, [chunk]);
     assert!(soon.is_empty());
     assert_eq!(
         late,
@@ -167,4 +207,19 @@ fn tick____answer_overdue____asked_again() {
             chunk: 0
         })]
     );
+}
+
+#[test]
+fn reconnected____chunk_asked____probe_again_at_the_next_tick() {
+    let mut log = log_of(&[], 0);
+    let now = Instant::now();
+    let mut reseed = Reseed::new(3, now);
+    let _ = reseed.tick(&log, now).unwrap();
+    let _ = reseed.answer(&mut log, probe_answer(), now).unwrap();
+    let later = now + Duration::from_secs(1);
+
+    reseed.reconnected(later);
+    let again = reseed.tick(&log, later).unwrap();
+
+    assert_eq!(again, [probe()]);
 }

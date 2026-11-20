@@ -3,6 +3,7 @@
 pub(crate) mod chaos;
 pub(crate) mod check;
 pub(crate) mod cluster;
+pub(crate) mod dr;
 pub(crate) mod events;
 pub(crate) mod failover;
 pub(crate) mod memory;
@@ -92,6 +93,25 @@ enum Command {
         /// Length of each episode of faults before everything is healed.
         #[arg(long, default_value_t = 60)]
         episode_s: u64,
+        #[arg(long, default_value_t = 200)]
+        heartbeat_ms: u64,
+        #[arg(long, default_value_t = 1000)]
+        node_timeout_ms: u64,
+        #[arg(long, default_value_t = 2000)]
+        lease_ms: u64,
+        #[arg(long, default_value_t = 300)]
+        margin_ms: u64,
+    },
+    /// The disaster-recovery drill (ROADMAP DR5): the pair and its witness,
+    /// also the DR node, with delay, jitter and loss on the WAN between
+    /// them; cycles of writes, site 1 lost, activation, writes at site 2,
+    /// reseed and failback. Fails when the singleton runs on two nodes at
+    /// once, a write acknowledged longer ago than the lag reported is not
+    /// in the DR copy, site 1 lacks a write after failback, or a refused
+    /// write appears.
+    Dr {
+        #[command(flatten)]
+        run: Run,
         #[arg(long, default_value_t = 200)]
         heartbeat_ms: u64,
         #[arg(long, default_value_t = 1000)]
@@ -257,6 +277,31 @@ async fn execute(command: Command) -> anyhow::Result<bool> {
             })
             .await
         }
+        Command::Dr {
+            run,
+            heartbeat_ms,
+            node_timeout_ms,
+            lease_ms,
+            margin_ms,
+        } => {
+            let (dir, root, bulkhead, seed, minutes) = prepare(run)?;
+            dr::run(&failover::Args {
+                dir,
+                root,
+                bulkhead,
+                seed,
+                minutes,
+                episode: Duration::ZERO,
+                timings: failover::Timings {
+                    heartbeat_ms,
+                    node_timeout_ms,
+                    lease_ms,
+                    margin_ms,
+                },
+                serial: None,
+            })
+            .await
+        }
         Command::Cluster {
             run,
             episode_s,
@@ -306,6 +351,7 @@ impl Command {
             Self::Failover { run, .. }
             | Self::Replication { run, .. }
             | Self::Scada { run, .. }
+            | Self::Dr { run, .. }
             | Self::Cluster { run, .. }
             | Self::Chaos { run, .. } => Some(&run.dir),
             Self::Check { .. } => None,

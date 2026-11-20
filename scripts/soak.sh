@@ -21,6 +21,14 @@
 #             switchover's hand-over, or when, after a heal, other than one
 #             node runs `control`, the acknowledged alarm is lost, or the
 #             release does not converge
+#   dr        the disaster-recovery drill (ROADMAP DR5): the pair and its
+#             witness, also the DR node, with delay, jitter and loss on the
+#             WAN between them; cycles of writes, site 1 lost, activation,
+#             writes at site 2, reseed and failback (bulkhead-soak dr);
+#             fails when the singleton runs on two nodes at once, a write
+#             acknowledged longer ago than the lag reported is not in the DR
+#             copy, site 1 lacks a write after failback, or a refused write
+#             appears
 #   cluster   three member nodes behind the same proxies, their instances
 #             linking, monitoring and killing each other at random under the
 #             same faults (bulkhead-soak cluster); fails when, after a heal,
@@ -45,10 +53,12 @@
 #   --replication-minutes M  length of each replication run (default 10);
 #                         it uses --serial too
 #   --scada-minutes M     length of each scada run (default 10)
+#   --dr-minutes M        length of each dr run (default 10); one cycle takes
+#                         about 2 minutes
 #   --cluster-minutes M   length of each cluster run (default 10)
 #   --chaos-minutes M     length of each chaos run (default 5)
 #   --sim-seeds N         random scenarios per sim run (default 200)
-#   --only KIND           run only sim, failover, replication, scada,
+#   --only KIND           run only sim, failover, replication, scada, dr,
 #                         cluster or chaos
 #   --keep                keep the directories of runs that passed
 #
@@ -58,7 +68,7 @@
 # resident memory after its first minute; memory.csv in --dir has every
 # sample (run, seconds into the run, node, pid, KiB), taken every 10 s.
 # Each run starts its own nodes, so creep over hours needs one long run
-# (--only chaos --chaos-minutes 120, say). Rerun a failover, replication, scada, cluster or
+# (--only chaos --chaos-minutes 120, say). Rerun a failover, replication, scada, dr, cluster or
 # chaos run
 # with the same seed:
 #   target/release/bulkhead-soak failover --dir DIR --seed SEED
@@ -86,6 +96,7 @@ failover_minutes=10
 serial=""
 replication_minutes=10
 scada_minutes=10
+dr_minutes=10
 cluster_minutes=10
 chaos_minutes=5
 sim_seeds=200
@@ -100,6 +111,7 @@ while [ "$#" -gt 0 ]; do
         --serial) serial=${2:-}; shift ;;
         --replication-minutes) replication_minutes=${2:-}; shift ;;
         --scada-minutes) scada_minutes=${2:-}; shift ;;
+        --dr-minutes) dr_minutes=${2:-}; shift ;;
         --cluster-minutes) cluster_minutes=${2:-}; shift ;;
         --chaos-minutes) chaos_minutes=${2:-}; shift ;;
         --sim-seeds) sim_seeds=${2:-}; shift ;;
@@ -115,9 +127,9 @@ if [ -z "$hours" ]; then
     exit 2
 fi
 case "$only" in
-    "") kinds="sim failover replication scada cluster chaos" ;;
-    sim | failover | replication | scada | cluster | chaos) kinds=$only ;;
-    *) echo "soak: --only takes sim, failover, replication, scada, cluster or chaos" >&2; exit 2 ;;
+    "") kinds="sim failover replication scada dr cluster chaos" ;;
+    sim | failover | replication | scada | dr | cluster | chaos) kinds=$only ;;
+    *) echo "soak: --only takes sim, failover, replication, scada, dr, cluster or chaos" >&2; exit 2 ;;
 esac
 [ -n "$dir" ] || dir=target/soak/$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$dir"
@@ -185,6 +197,10 @@ while [ "$(now)" -lt "$deadline" ]; do
             scada)
                 target/release/bulkhead-soak scada --dir "$run" --seed "$seed" \
                     --minutes "$(fit "$scada_minutes")" > "$run/output.txt" 2>&1
+                ;;
+            dr)
+                target/release/bulkhead-soak dr --dir "$run" --seed "$seed" \
+                    --minutes "$(fit "$dr_minutes")" > "$run/output.txt" 2>&1
                 ;;
             cluster)
                 target/release/bulkhead-soak cluster --dir "$run" --seed "$seed" \

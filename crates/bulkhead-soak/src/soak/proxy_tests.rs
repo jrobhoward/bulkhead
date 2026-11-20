@@ -102,3 +102,53 @@ async fn proxy____drop_all____nothing_delivered() {
 
     assert_eq!(got, None);
 }
+
+#[tokio::test]
+async fn proxy____wan____delivered_after_the_delay() {
+    let p = pair().await;
+    p.faults
+        .set(
+            1,
+            2,
+            Mode::Wan {
+                delay_ms: 300,
+                jitter_ms: 0,
+                per_mille: 0,
+            },
+        )
+        .await;
+
+    let sent = std::time::Instant::now();
+    p.node1.send(b"late").await.unwrap();
+    let early = receive(&p.node2).await;
+    let mut buf = [0u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(2), p.node2.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(early, None, "within 200 ms of 300");
+    assert_eq!(&buf[..n], b"late");
+    assert!(sent.elapsed() >= Duration::from_millis(300));
+}
+
+#[tokio::test]
+async fn proxy____wan_dropping_all____nothing_delivered() {
+    let p = pair().await;
+    p.faults
+        .set(
+            1,
+            2,
+            Mode::Wan {
+                delay_ms: 10,
+                jitter_ms: 10,
+                per_mille: 1000,
+            },
+        )
+        .await;
+
+    p.node1.send(b"lost").await.unwrap();
+    let got = receive(&p.node2).await;
+
+    assert_eq!(got, None);
+}

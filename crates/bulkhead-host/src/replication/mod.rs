@@ -510,6 +510,8 @@ fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
         kv,
         replica,
         status,
+        pair: cfg.pair,
+        sessions: cfg.pair.map(|n| rt.liveness.session(n)),
     };
     // Ticks often enough for rounds a poll apart and for timeouts.
     let tick = (cfg.poll / 2).clamp(Duration::from_millis(50), Duration::from_secs(1));
@@ -529,6 +531,10 @@ struct DrTask {
     kv: Arc<KvStore>,
     replica: DrReplica,
     status: watch::Sender<(DrStatus, Instant)>,
+    pair: [u32; 2],
+    /// The session with each pair node when last looked: a change means
+    /// what was asked on the old one is lost (`ship::CHUNK_TIMEOUT`).
+    sessions: [u64; 2],
 }
 
 impl DrTask {
@@ -553,9 +559,15 @@ impl DrTask {
             let Some(rt) = self.rt.upgrade() else {
                 return;
             };
+            let sessions = self.pair.map(|n| rt.liveness.session(n));
             let effects = blocking(|| {
                 let now = Instant::now();
                 let mut out = Vec::new();
+                for (i, session) in sessions.into_iter().enumerate() {
+                    if std::mem::replace(&mut self.sessions[i], session) != session {
+                        out.extend(self.replica.reconnected(i, now));
+                    }
+                }
                 for input in inputs {
                     match input {
                         DrInput::Pair(from, msg) => {
@@ -682,6 +694,7 @@ pub(crate) fn start(
         next_forward: 0,
         reads: Vec::new(),
         status,
+        dr_session: dr.as_ref().map_or(0, |(n, _)| rt.liveness.session(*n)),
         dr,
         dr_out: Vec::new(),
         reseed,
@@ -750,6 +763,9 @@ struct Task {
     dr_out: Vec<DrMsg>,
     /// Stale, reseeding from the active DR node (DR4).
     reseed: Option<Reseed>,
+    /// The session with the DR node when last looked: a change means what
+    /// the reseed asked on the old one is lost (`ship::CHUNK_TIMEOUT`).
+    dr_session: u64,
 }
 
 /// What woke the task.
@@ -851,6 +867,14 @@ impl Task {
             partner_outdated: self.lead.partner_outdated,
         };
         self.follow_dr(now);
+        if let Some((node, _)) = &self.dr {
+            let session = rt.liveness.session(*node);
+            if std::mem::replace(&mut self.dr_session, session) != session
+                && let Some(r) = self.reseed.as_mut()
+            {
+                r.reconnected(now);
+            }
+        }
         absorb(self.replica.leadership(lead, now), &mut out);
         let mut writes = Vec::new();
         for input in inputs {

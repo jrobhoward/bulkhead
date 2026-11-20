@@ -26,6 +26,14 @@ pub(crate) enum Mode {
     Drop(u64),
     /// Kept, then delivered in order when the mode changes.
     Hold,
+    /// A WAN link: each datagram delayed by `delay_ms` and up to
+    /// `jitter_ms` more (so some arrive out of order), and dropped
+    /// `per_mille` times in a thousand (ROADMAP DR5).
+    Wan {
+        delay_ms: u64,
+        jitter_ms: u64,
+        per_mille: u64,
+    },
 }
 
 impl std::fmt::Display for Mode {
@@ -35,6 +43,11 @@ impl std::fmt::Display for Mode {
             Self::Cut => write!(f, "cut"),
             Self::Drop(p) => write!(f, "drop {p}/1000"),
             Self::Hold => write!(f, "hold"),
+            Self::Wan {
+                delay_ms,
+                jitter_ms,
+                per_mille,
+            } => write!(f, "wan {delay_ms}+{jitter_ms} ms, drop {per_mille}/1000"),
         }
     }
 }
@@ -126,6 +139,26 @@ impl Faults {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .chance(p),
+            Mode::Wan {
+                delay_ms,
+                jitter_ms,
+                per_mille,
+            } => {
+                let (dropped, wait) = {
+                    let mut rng = self.rng.lock().unwrap_or_else(PoisonError::into_inner);
+                    (
+                        rng.chance(per_mille),
+                        delay_ms + rng.range(0, jitter_ms + 1),
+                    )
+                };
+                if !dropped {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+                        datagram.send().await;
+                    });
+                }
+                return;
+            }
             Mode::Hold => {
                 let mut state = self.state();
                 // The mode may have changed since it was read; deliver then.

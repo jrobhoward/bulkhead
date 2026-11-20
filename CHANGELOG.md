@@ -8,6 +8,37 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A disaster-recovery drill (ROADMAP DR5): `bulkhead-soak dr` and
+  `scripts/soak.sh --only dr` (`--dr-minutes`, and in the default set).
+  The pair and its witness, also the DR node, with 50 ms (and up to
+  20 ms more) of delay and 5% loss each way on the WAN between them
+  (the proxy's new `Mode::Wan`) and cuts now and then, run cycles: writes
+  through site 1 (an activation asked meanwhile must be refused), site 1
+  killed while writing, activation, writes at site 2, site 1 back and
+  reseeding, failback to a pair node chosen at random. It fails when the
+  singleton runs on two nodes at once (all three asked a few times a
+  second), a write acknowledged longer ago than the lag the DR node
+  reported is not in its copy, a pair node lacks a write after failback,
+  or a refused write appears. Also tutorial chapter 7,
+  `examples/tutorial/07-disaster-recovery.sh`, the same drill by hand.
+  The drill's first hour found reseeds slowing as the bucket grew, until
+  one missed the drill's two minutes after 30 cycles: a snapshot chunk
+  not answered within two seconds was asked for again, and over the
+  lossy WAN, where a 1 MiB chunk takes 10 to 20 s, the copies queued
+  faster than they went, ahead of the answers after them. Frames between
+  two nodes go on one ordered stream, so an ask is lost only when the
+  session ends: a chunk is now asked again when the session with the node
+  asked changes, or after 60 s (`ship::CHUNK_TIMEOUT`), on a reseeding
+  pair node and on the DR node taking a snapshot from the pair. A
+  reseeding node first sends a probe (an ask for no entries) every two
+  seconds until the DR node answers on the session, since an ask sent
+  before the two have heard each other is dropped with no change of
+  session to tell. The active DR node also keeps a snapshot for each pair
+  node, so two reseeding at once never start each other's over. The
+  drill waits a second after killing site 1 before it activates: asked
+  within the WAN's delay, an activation met a renewal still in flight
+  and was abandoned, as the witness is meant to.
+
 - Failing back from the active disaster-recovery node (ROADMAP DR4,
   second part). A pair node told by the witness that the DR node is
   active (`FailoverMsg::DrActive`, in cluster protocol version 10,

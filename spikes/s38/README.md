@@ -31,6 +31,8 @@
 
 ## Model
 
+**Moved:** the models, their configs and the scripts are in `docs/tla` since ROADMAP DR4 (2026-11-19): `DrFailover.tla`, `DrReplication.tla`, `DrF_*.cfg`, `DrR_*.cfg`, `dr-mkcfg.sh` (was `mkcfg.sh`) and `dr-run.sh` (was `run.sh`, its variables `DR_*` for `S38_*`). The conformance of the code DR4 built is in `docs/tla/VERIFICATION.md`, "Disaster recovery".
+
 Two models, each a copy of its parent with the DR node behind switches. With the switches off, each has its parent's states exactly (the `Off` configs below).
 
 - **`DrFailover.tla`** is `docs/tla/FailoverL2.tla`, with time.
@@ -101,11 +103,13 @@ Checked on 2026-11-17 and 18 with TLC 2026.02.28 (OpenJDK 21) on the 16-core dev
 
 ```sh
 # Requires Java 11+ and tla2tools.jar at ~/tla/tla2tools.jar.
-cd spikes/s38
-bash mkcfg.sh                                  # writes every config
-./run.sh DrF_Proposal DrF_Vac_Run              # into ~/tla-runs/s38-<date>
-S38_WORKERS=12 ./run.sh DrF_SiteLease_Site1    # exhaustive, with checkpoints
-S38_SIMULATE=30 ./run.sh DrF_SiteLease2        # random traces for 30 minutes
+cd docs/tla
+bash dr-mkcfg.sh                                  # writes every config
+./dr-run.sh DrF_Proposal DrF_Vac_Run              # into ~/tla-runs/dr-<date>
+DR_WORKERS=12 ./dr-run.sh DrF_SiteLease_Site1     # exhaustive, with checkpoints
+DR_SIMULATE=30 ./dr-run.sh DrF_SiteLease2         # random traces for 30 minutes
 ```
+
+The runs above were made from `spikes/s38` with the old names, into `~/tla-runs/s38-<date>`.
 
 `DrF_*` configs check `DrFailover.tla`, and `DrR_*` configs check `DrReplication.tla`. `-deadlock` is passed because both models stop once their bounds are reached.

@@ -129,6 +129,10 @@ pub(crate) struct Setup {
     pub failover_config: String,
     /// The pair's operator policy, if the apps need grants.
     pub policy: Option<String>,
+    /// Added to the witness's (node 3's) config before its `[cluster]`
+    /// table, with the policy too when set: a `[dr]` table makes it the
+    /// DR node (ROADMAP DR5).
+    pub witness_config: String,
 }
 
 /// An app of a [`Setup`]: its name, manifest and program.
@@ -152,6 +156,7 @@ fn singleton(args: &Args) -> anyhow::Result<Setup> {
         pair_config: [String::new(), String::new()],
         failover_config: String::new(),
         policy: None,
+        witness_config: String::new(),
     })
 }
 
@@ -277,6 +282,14 @@ impl Cluster {
                 extra += &setup.pair_config[i];
                 config = config.replacen("[cluster]\n", &format!("{extra}[cluster]\n"), 1);
             }
+            if n == 3 && !setup.witness_config.is_empty() {
+                let mut extra = String::new();
+                if setup.policy.is_some() {
+                    let _ = writeln!(extra, "policy = {:?}", dir.join("policy.toml"));
+                }
+                extra += &setup.witness_config;
+                config = config.replacen("[cluster]\n", &format!("{extra}[cluster]\n"), 1);
+            }
             if n == 3 {
                 config += "role = \"witness\"\n[witness]\npair = [1, 2]\nfirst = 1\n";
             } else {
@@ -339,7 +352,7 @@ impl Cluster {
         &mut self.nodes[usize::try_from(n - 1).unwrap_or(0)]
     }
 
-    async fn set_link(&self, from: u32, to: u32, mode: Mode) {
+    pub(crate) async fn set_link(&self, from: u32, to: u32, mode: Mode) {
         self.faults.set(from, to, mode).await;
         self.events.record(
             from,

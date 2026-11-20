@@ -406,6 +406,7 @@ pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
         ],
         failover_config: "replication = true\n".into(),
         policy: Some(POLICY.into()),
+        witness_config: String::new(),
     };
     let fake = root.join("target/release/examples/fake_device");
     let devices = Devices(

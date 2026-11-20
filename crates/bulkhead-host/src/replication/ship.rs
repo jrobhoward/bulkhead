@@ -31,6 +31,18 @@ pub(crate) const MAX_BATCH_BYTES: u64 = 4 << 20;
 /// About the most bytes of a snapshot chunk.
 pub(crate) const CHUNK_BYTES: usize = 1 << 20;
 
+/// How long a snapshot chunk is waited for before it is asked again, if
+/// the session with the node asked has not changed meanwhile. Frames
+/// between two nodes go on one ordered stream that QUIC delivers whole, and
+/// a frame from an ended session is discarded, so an ask is lost only when
+/// the session ends: the asker asks again then, at once. On a live
+/// session asking again only queues another copy of the chunk behind the
+/// first: over DR5's drill's WAN (50 ms each way, 5% loss) a 1 MiB chunk
+/// took 10 to 20 s, and chunks asked again every two seconds piled up
+/// faster than they went, holding up the answers behind them. This is only
+/// the backstop.
+pub(crate) const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// How long a snapshot being sent is kept after its last chunk was asked.
 const SNAPSHOT_KEPT: Duration = Duration::from_secs(60);
 

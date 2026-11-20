@@ -344,7 +344,8 @@ impl Node {
             json!({ "epoch": epoch, "commit": status.commit, "lag_ms": millis(status.lag) }),
         );
         self.restore().await;
-        let started = self.apps.names().len();
+        let deployed: Vec<String> = self.st().desired.apps.keys().cloned().collect();
+        let started = deployed.iter().filter(|name| self.running(name)).count();
         Ok(Done {
             message: format!(
                 "activated at epoch {epoch}: this node leads from entry {} (writes site 1 \

@@ -20,7 +20,7 @@ use tokio::time::Instant;
 
 use super::core::{Refusal, merge};
 use super::log::{Command, Entry, Log, Snapshot};
-use super::ship::{DrMsg, Shipper};
+use super::ship::{CHUNK_TIMEOUT, DrMsg, Shipper};
 use crate::services::keyvalue::storage::{BucketDump, Op, Outcome};
 
 /// The standby is pulled from while its commit index is within this many
@@ -130,8 +130,9 @@ pub(crate) struct DrReplica {
     leading: Option<u64>,
     /// Handing back: no writes.
     frozen: bool,
-    /// Answers the pair's nodes as they reseed from it, while it leads.
-    shipper: Shipper,
+    /// Answers each pair node as it reseeds from it, while it leads: one
+    /// each, so the two never replace the snapshot the other is taking.
+    shippers: [Shipper; 2],
     /// How far each pair node has reseeded (see [`DrStatus::reseeded`]).
     reseeded: [Option<u64>; 2],
 }
@@ -158,7 +159,7 @@ impl DrReplica {
             stopped: false,
             leading: None,
             frozen: false,
-            shipper: Shipper::new(now),
+            shippers: [Shipper::new(now), Shipper::new(now)],
             reseeded: [None; 2],
         })
     }
@@ -251,7 +252,7 @@ impl DrReplica {
         }
         let reply = match msg {
             DrMsg::Ask { .. } | DrMsg::AskSnapshot { .. } => {
-                self.shipper.answer(&self.log, false, msg, now)?
+                self.shippers[i].answer(&self.log, false, msg, now)?
             }
             _ => None,
         };
@@ -333,12 +334,14 @@ impl DrReplica {
             self.log.compact(to)?;
         }
         if self.leading.is_some() {
-            self.shipper.tick(now);
+            for shipper in &mut self.shippers {
+                shipper.tick(now);
+            }
             return Ok(out);
         }
         let timeout = self.timeout();
         if let Some(r) = &mut self.receiving {
-            if now.duration_since(r.asked_at) >= timeout {
+            if now.duration_since(r.asked_at) >= timeout.max(CHUNK_TIMEOUT) {
                 r.misses += 1;
                 if r.misses >= 2 {
                     // The other node starts a snapshot of its own.
@@ -430,6 +433,22 @@ impl DrReplica {
             });
         }
         self.next_round = now + self.cfg.poll;
+    }
+
+    /// The session with pair node `i` changed: a snapshot chunk asked of
+    /// it on the old one is lost, so ask for it again now (entries are
+    /// asked again within a poll anyway).
+    pub(crate) fn reconnected(&mut self, i: usize, now: Instant) -> Vec<DrEffect> {
+        let mut out = Vec::new();
+        if self.leading.is_none()
+            && let Some(r) = &self.receiving
+            && r.from == i
+            && i == self.pulling
+        {
+            let (index, chunk) = (r.index, r.next_chunk);
+            self.ask_snapshot(index, chunk, now, &mut out);
+        }
+        out
     }
 
     fn ask_snapshot(&mut self, index: u64, chunk: u32, now: Instant, out: &mut Vec<DrEffect>) {

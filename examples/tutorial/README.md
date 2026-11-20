@@ -17,6 +17,7 @@ examples/tutorial/03-hot-standby.sh
 examples/tutorial/04-database.sh             # needs Postgres's server programs
 examples/tutorial/05-replicated.sh
 examples/tutorial/06-hot-upgrade.sh
+examples/tutorial/07-disaster-recovery.sh
 AUTO=1 examples/tutorial/02-failover.sh    # no pauses: kills node 1 itself
 ```
 
@@ -285,3 +286,27 @@ part: `bulkhead-sdk`'s `#[derive(Snapshot)]` versions the format and hands
 older ones to a `migrate` function (WRITING_APPS.md, "State across
 upgrades"). An app whose state lives outside the instance, as the board's
 does, needs none of this and upgrades in `restart` or `blue-green` mode.
+
+## Chapter 7: disaster recovery
+
+`07-disaster-recovery.sh` runs chapter 5's pair with the witness at a
+second site that is also the disaster-recovery node (`[dr]`): it keeps a
+copy of the pair's replicated board, a poll behind, and holds the board
+app, deployed and not started (OPERATIONS.md, "A disaster-recovery
+copy").
+
+The script kills both site-1 nodes. Node 3 does not take over by itself:
+`bulkhead dr activate` is refused until `--site-1-down` confirms that site
+1 is down and stays down, since a site 1 that still ran and heard itself
+would go on running the board beside it. Activated, node 3 leads from its
+copy at a new epoch and serves the board with the count it had. The
+script writes there, then starts site 1 again: both nodes find node 3
+active, mark their copies stale and reseed from a full snapshot of it
+(`bulkhead failover` there says `stale:` and then `caught up`). `bulkhead
+dr failback --to 1` stops the board on node 3, and once both site-1 nodes
+hold its last entry, node 1 leads again with node 3's count and node 2
+rejoins as its standby.
+
+What this shows: a second site keeps the data and the apps ready, losing
+only what came after its last poll; you decide when site 1 is gone, and
+coming back loses nothing written at site 2.

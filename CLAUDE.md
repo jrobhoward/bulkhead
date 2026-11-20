@@ -279,7 +279,13 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   (ROADMAP DR2, spike S38): `ship.rs` is a pair node's side and the
   messages, `dr.rs` the DR node's copy as a state machine (it pulls
   committed entries only), and `tests/simulation/dr.rs` runs both over
-  a lossy WAN. Deployments to it (DR3) are the node's:
+  a lossy WAN. Activation and failback (DR4): the witness fences and
+  promotes the DR node (`witness.rs`, `Runtime::dr_activate`), its copy
+  leads (`dr.rs`), a stale pair node reseeds from it (`reseed.rs`), and
+  `Runtime::dr_failback` hands back; their actions are those of
+  `docs/tla/DrFailover.tla` and `DrReplication.tla`, so a change there
+  updates the matching action and reruns `DrF_Operator_Site1` and
+  `DrR_Operator_Site1` (VERIFICATION.md, "Disaster recovery"). Deployments to it (DR3) are the node's:
   `crates/bulkhead/src/node/daemon/dr_deploys.rs`, through
   `Runtime::dr_deploys`. The rules are S20's R1 to R7
   and R13 in `docs/tla/VERIFICATION.md`; `tests/simulation/replication.rs`
@@ -360,7 +366,11 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   between every node's `ps` links and monitors, `scada` the failover
   cluster running `examples/scada` against fake devices with HTTP probes, between
   fault episodes releasing `control` across the pair and switching over
-  (Phase 3's exit), `chaos` the chaos example on
+  (Phase 3's exit), `dr` the disaster-recovery drill (ROADMAP DR5: the
+  witness also the DR node, the WAN given delay and loss by the proxy's
+  `Mode::Wan`, cycles of writes, site 1 killed, activation, reseed and
+  failback, a watcher asking all three nodes which runs the singleton),
+  `chaos` the chaos example on
   one node, and `check` reads a failover run's events and node logs for
   any moment when both nodes ran the singleton. It reads the gate's
   `singleton starting`, `singleton killed` and `singleton stopped` log
@@ -377,7 +387,8 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   with a serial line between them, the witness on the host; the test
   machines only, `--help`).
 - `docs/`: design and plan. `docs/tla/`: TLA+ specifications of failover
-  and their results (`VERIFICATION.md`); run with TLC, not in CI.
+  and disaster recovery, and their results (`VERIFICATION.md`); run with
+  TLC, not in CI.
 - `spikes/`: throwaway programs that answered design questions
   (`spikes/s16` is a TLA+ model, run with TLC; its README has the commands). Excluded from
   the main workspace, from the conventions below, and from the Definition of
