@@ -83,9 +83,6 @@ pub struct Spawn {
     pub memory_max: u64,
     /// Most processes and threads.
     pub pids_max: u32,
-    /// Most CPU, in thousandths of a core (ROADMAP PS6); 0 for none asked,
-    /// when the helper applies its own `cpu_max`, if any.
-    pub cpu_millis: u32,
     /// The runner's arguments.
     pub args: Vec<String>,
     /// The runner's environment: names the helper allows only.
@@ -280,7 +277,6 @@ impl Request {
                 w.str(&s.app);
                 w.u64(s.memory_max);
                 w.u32(s.pids_max);
-                w.u32(s.cpu_millis);
                 w.len(s.args.len());
                 for a in &s.args {
                     w.str(a);
@@ -331,7 +327,6 @@ impl Request {
                 let app = r.str()?;
                 let memory_max = r.u64()?;
                 let pids_max = r.u32()?;
-                let cpu_millis = r.u32()?;
                 let n = r.count(MAX_ARGS)?;
                 let args = (0..n).map(|_| r.str()).collect::<Option<Vec<_>>>()?;
                 let n = r.count(MAX_ENV)?;
@@ -354,7 +349,6 @@ impl Request {
                     app,
                     memory_max,
                     pids_max,
-                    cpu_millis,
                     args,
                     env,
                     binds,

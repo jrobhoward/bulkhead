@@ -2882,7 +2882,7 @@ Raspberry Pi 5 (Linux 7.0), idle (load under 0.3 at each start):
 | 64 calls in flight (calls a second) | 119,397, 118,682 | 99,824, 100,966 |
 
 - **A start takes about 1.3 ms longer** under the helper: S36 measured 1.8 ms for the helper's request, the cgroup, the namespaces and the root together.
-- **A call from the host costs 2.7 µs more, and one between instances (two calls) 4.6 µs more.** That is more than S36's 0.7 to 1.0 µs for a cgroup on a blocking round trip; not attributed yet (the `cpu` controller, the namespaces, and the instance's cgroup against none are the candidates).
+- **A call from the host costs 2.7 µs more, and one between instances (two calls) 4.6 µs more.** That is more than S36's 0.7 to 1.0 µs for a cgroup on a blocking round trip; not attributed yet (the `cpu` controller, the namespaces, and the instance's cgroup against none are the candidates). Attributed on 2026-11-19 (PS1c): the `cpu` controller.
 - **What stays inside the app does not change:** a request to the node, a bucket get and a read from a published snapshot cost the same.
 - **Throughput with calls in flight falls 10% (16) to 15% (64);** casts to one instance by 2%.
 - **Not measured:** the 16-core machine, whose `sudo` needs a password; `cluster_throughput` under the helper.
@@ -3133,12 +3133,139 @@ One connection, p50 (the node's in the same run):
 - **Far past it** (64 devices every millisecond), the driver stores three to nine times the updates (five to nine on the 16-core machine, three to five on the Pi) and drops a quarter of the casts or fewer: the extension polled on the node's own four workers, so the polling and the casts it could not deliver took the time the pool's instance tasks needed; in a process of its own the polling no longer competes with them. Neither keeps up with 64,000 polls a second; the pool and its bucket are the limit (WRITING_APPS.md, "Many small updates").
 - **What it buys:** no Modbus device reply or master's request is parsed in the node (DESIGN.md, SECURITY.md).
 
+## 2026-11-19: a call under the helper, attributed (PS1c)
+
+`native_cost 4` on the Raspberry Pi 5 (Linux 7.0.0-1023-raspi, rustc 1.100.0, commit 621698d), idle: load under 0.3 at each start. Seven variants, two rounds each, run in turn:
+- **Directly,** with no helper and no cgroups.
+- **Under the helper as built:**
+  - a cgroup per instance with the `memory`, `pids` and `cpu` controllers on and no CPU limit set;
+  - five namespaces and a minimal root;
+  - the helper's own seccomp filter (PS1b), which the node and every instance inherit on top of the runner's;
+  - each instance under its app's user.
+- **Under the helper with one part removed:** its seccomp filter, the `cpu` controller, or the namespaces and minimal root. Then all three removed, leaving a user and a cgroup (`memory`, `pids`) per instance. These variants used throwaway switches in the helper, not kept.
+- **The node's own cgroups** (`[native] cgroup`, no helper), which also turn on all three controllers. This used a delegated systemd scope and a throwaway switch in `native_cost`.
+
+The same release builds were used throughout, copied into one directory the helper shares. Under the helper the instances are its children, so `native_cost`'s CPU per call is the node's alone there and is left out.
+
+| | start, to the first reply (p50, ms) | call from the host (p50, µs) | call between instances (p50, µs) | casts to one instance (per second) | 16 calls in flight (per second) | 64 calls in flight (per second) |
+| --- | --- | --- | --- | --- | --- | --- |
+| directly | 5.0, 5.0 | 17.9, 17.7 | 43.3, 43.4 | 427,815, 429,337 | 120,070, 118,455 | 122,483, 120,939 |
+| helper | 5.9, 5.9 | 21.0, 20.6 | 50.1, 49.0 | 400,135, 376,098 | 100,481, 96,561 | 102,147, 104,240 |
+| helper, no seccomp filter of its own | 6.3, 6.3 | 20.6, 21.5 | 49.2, 61.3 | 410,639, 405,064 | 100,577, 99,424 | 103,141, 103,449 |
+| helper, no `cpu` controller | 5.8, 5.8 | 18.3, 18.2 | 44.3, 44.6 | 441,395, 442,083 | 106,789, 114,486 | 115,518, 114,748 |
+| helper, no namespaces or root | 4.7, 4.6 | 21.1, 21.0 | 50.1, 49.9 | 411,629, 410,386 | 100,595, 99,636 | 102,491, 95,390 |
+| helper, none of the three | 4.9, 5.0 | 18.8, 18.6 | 58.3, 45.6 | 439,975, 435,067 | 116,053, 112,868 | 116,968, 109,068 |
+| node's own cgroups, no helper | 5.3, 5.4 | 20.8, 21.0 | 48.9, 49.2 | 421,466, 418,576 | 103,254, 101,016 | 86,081, 100,088 |
+
+- **The cost is the `cpu` controller's.**
+  - **Calls:** with the controller off, a call from the host under the helper costs 0.3 to 0.6 µs more than directly. That is within S36's 0.7 to 1.0 µs for a cgroup. With it on, the call costs 2.7 to 3.3 µs more.
+  - **The node's own cgroups:** they turn the controller on too and cost the same (20.8 to 21.0 µs) with no helper at all.
+  - **Calls in flight:** with the controller off they recover to 107,000 to 116,000 a second, against 97,000 to 104,000 with it and 118,000 to 122,000 directly.
+  - **The node's own CPU per call:** it falls too, from 19.7 to 20.9 µs at 16 in flight to 16.0 to 16.4 µs. The node's cgroup sits under the same controller.
+  - **The controller is on for every instance,** though no CPU limit is set. A wake-up under it does the group scheduler's work at each level of the cgroup tree, and a call is two wake-ups; that explanation is not profiled. ROADMAP PS6b removes the CPU limits, and the controller with them (decided 2026-11-19).
+- **The helper's seccomp filter costs nothing measurable.** Every system call of the node and of each instance passes it as well as the runner's own.
+- **The namespaces and the minimal root cost nothing for calls.** Without them a start is about 1.2 ms faster: 4.6 to 4.7 ms against 5.9 ms.
+- **Two single-round outliers** did not repeat in the other round: a call between instances at 61.3 µs (no seccomp filter) and 58.3 µs (none of the three).
+- **Requests and bucket reads from inside an app** (not shown) cost the same in every variant: 2.9 to 3.1 µs, 1.4 to 1.5 µs, and 0.09 to 0.11 µs from a published snapshot.
+
+`cluster_throughput 4` across two processes on the Pi over loopback, two rounds each. Node 2 (`serve`) was started directly or as the helper's node, its 16 instances then under the helper with the `cpu` controller on; node 1 (`connect`) was started directly. Only the two-node rows involve node 2:
+
+| two nodes | node 2 directly | node 2 under the helper |
+| --- | --- | --- |
+| sequential calls (p50, µs) | 116.6, 118.9 | 115.8, 119.4 |
+| 16 callers (calls a second) | 30,382, 30,038 | 29,171, 29,039 |
+| 64 callers (calls a second) | 46,185, 45,481 | 43,016, 42,637 |
+| 1 KiB bodies, 16 callers (calls a second) | 24,084, 23,808 | 23,157, 23,050 |
+| 64 KiB bodies, 16 callers (calls a second) | 1,535, 1,596 | 1,508, 1,520 |
+| from instances, 16 callers (calls a second) | 19,625, 19,398 | 18,706, 18,633 |
+| casts from instances that wait (handled a second) | 85,012, 84,377 | 75,097, 74,598 |
+
+- **Between nodes the helper costs 3 to 7% of concurrent calls and 11% of waited casts.** Sequential calls do not change: the QUIC round trip of about 117 µs hides the 3 µs.
+- **Not measured:**
+  - the 16-core machine under the helper, whose `sudo` needs its owner's password;
+  - `cluster_throughput` with the `cpu` controller off.
+
+## 2026-11-19: the Raspberry Pi 5 after Phase 6
+
+`scripts/bench.sh native kv cluster cluster-pair` on the Raspberry Pi 5 (Linux 7.0.0-1023-raspi, rustc 1.100.0, commit 621698d), one round, load 0.27 at the start, against T11's Pi figures (2026-11-06, medians of eight rounds at nice 10 and idle I/O priority; this run at normal priority).
+
+What changed between the two runs:
+- **The runner's seccomp allow-list** (PS4, 2026-11-11);
+- **Sender channels** (AP1);
+- **The misbehaviour counters and quarantine** (PS5);
+- **CPU limits:** PS6, which applies only with cgroups, and these runs use none;
+- **Ending what an instance forked** (PS7);
+- **The drive:** a new NVMe drive with `/home` on ZFS. These groups use memory buckets only, so none of their figures is bound by the disk.
+
+Within a node (`cluster-pair`'s one-node rows, `native_cost`):
+
+| | Pi: T11 | 2026-11-19 |
+| --- | --- | --- |
+| call from outside, p50 / p99 µs | 3.7 / 10.7 | 3.8 / 10.5 |
+| call from an instance, p50 / p99 µs | 5.0 / 13.9 | 4.8 / 12.7 |
+| 16 / 64 callers from outside, calls/s | 0.15M / 0.20M | 0.15M / 0.20M |
+| 16 instances calling, calls/s | 0.12M | 0.12M |
+| casts from outside, handled/s | 0.43M | 0.43M |
+| casts from instances, handled/s | 0.21M | 0.21M |
+| 1 KiB / 64 KiB bodies, calls/s | 130,000 / 4,100 | 133,000 / 5,800 |
+| a request from a callback (`native_cost`) | 2.8 µs | 3.0 µs |
+| a bucket get from a callback (`native_cost`) | 1.3 µs | 1.4 µs |
+| 16 / 64 calls in flight (`native_cost`), calls/s; CPU per call | 115,000 / 118,000; 30 µs | 114,000 / 118,000; 29 to 31 µs |
+
+Keyvalue (`kv_cost 4`), ns per operation from inside the app (100,000 keys and 16 B values unless the row says), and operations per second across 16 instances; T11's `read_concurrency` off column:
+
+| | Pi: T11 | 2026-11-19 |
+| --- | --- | --- |
+| get, 1,000 keys | 1,427 | 1,462 |
+| get | 2,315 | 2,248 |
+| a missing key, 1,000 keys | 1,368 | 1,414 |
+| overwrite | 2,897 | 2,844 |
+| `get_many` of 100, per key | 1,893 | 1,753 |
+| `next`, one key at a time | 7,913 | 7,882 |
+| dependent reads along a chain | 2,288 | 2,223 |
+| 95 reads in 100, 16 instances, ops/s | 0.42M | 0.43M |
+| 50 reads in 100, 16 instances, ops/s | 0.37M | 0.39M |
+| every write to one key, 16 instances, ops/s | 0.48M | 0.50M |
+| 16 readers beside one writer: reads/s, writes/s | 0.40M, 24,400 | 0.40M, 25,400 |
+| a published bucket: get; reads/s, 16 instances | 359; 4.7M | 345; 5.5M |
+
+Between two node processes on the Pi (`cluster-pair`'s two-node rows): a native call from the host 120 µs (T11: 133), app to app 147 µs (156), 16 callers 29,000 calls a second (27,800).
+
+- **Phase 6 cost nothing measurable without the helper.** Every single operation and every throughput within a node is within 5% of T11's, the runner's allow-list included (PS4 measured it alone: no change on the Pi).
+- **Three figures moved more, all faster:**
+  - **64 KiB bodies:** 5,800 calls a second against 4,100, and 5,600 to 5,900 in each of PS1c's direct runs.
+  - **A published bucket's 16 readers:** 5.5 million reads a second against 4.7 million.
+  - **Calls between two node processes:** 7 to 10% quicker.
+
+  None of the three is attributed. T11 ran at nice 10 and idle I/O priority, and this run did not, which may account for part of it.
+- **With the helper,** a call costs 2.4 to 3.3 µs more, from its `cpu` controller (PS1c, the section before this one).
+- **One round only.** T11's figures are medians of eight. Not measured again: the 16-core machine (its one change in this path, PS4's allow-list, was measured there when it landed).
+
+## 2026-11-19: the helper without the `cpu` controller (PS6b)
+
+`native_cost 4` on the Raspberry Pi 5 again, idle (load under 0.3 at each start), once PS6b removed the CPU limits and the `cpu` controller with them: commit 621698d with PS6b's changes, the same machine and build settings as PS1c's runs above. Three variants, two rounds each:
+- directly;
+- under the helper (a cgroup per instance with `memory` and `pids` only, namespaces, a minimal root, its seccomp filter, a user per app);
+- the node's own cgroups (`[native] cgroup`, no helper).
+
+| | start, to the first reply (p50, ms) | call from the host (p50, µs) | call between instances (p50, µs) | casts to one instance (per second) | 16 calls in flight (per second) | 64 calls in flight (per second) |
+| --- | --- | --- | --- | --- | --- | --- |
+| directly | 4.9, 5.0 | 17.6, 17.6 | 42.9, 43.0 | 433,386, 431,787 | 110,238, 117,014 | 119,756, 119,707 |
+| helper | 5.8, 5.8 | 17.9, 18.1 | 43.8, 43.4 | 445,474, 445,623 | 105,091, 115,042 | 115,459, 114,502 |
+| node's own cgroups, no helper | 4.9, 5.0 | 17.8, 17.5 | 43.3, 43.1 | 443,799, 441,643 | 119,499, 121,944 | 123,188, 123,884 |
+
+- **A call under the helper costs 0.3 to 0.5 µs more than directly,** against 2.7 to 3.3 µs with the controller on (PS1c, above: 20.6 to 21.0 µs). That is PS1c's "no `cpu` controller" variant (18.2 to 18.3 µs), as expected.
+- **Calls between instances** went from 49.0 to 50.1 µs under the helper to 43.4 to 43.8 µs, within 1 µs of directly.
+- **Calls in flight under the helper** are 105,000 to 115,000 a second, against 97,000 to 104,000 with the controller; directly, 110,000 to 120,000.
+- **The node's own cgroups now cost nothing measurable:** 17.5 to 17.8 µs a call, against 20.8 to 21.0 µs with the controller.
+- **A start under the helper** is still about 0.9 ms slower than directly (5.8 against 4.9 to 5.0 ms): namespaces and the minimal root, as PS1c found.
+
 ## Not measured yet
 
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 
-- Where the 2.7 µs a native call costs more under the privileged helper goes (PS1), and the helper on the 16-core machine.
+- The privileged helper on the 16-core machine (PS1c attributed the Pi's 2.7 µs to the `cpu` controller, which PS6b removed, 2026-11-19).
 
 - Spinning that adapts to the machine: less, or none, while the node's cores are busy, where on the Pi it costs throughput (T1). A sender channel's node side at 50 µs would take another 15% off one client through a driver, and cost 10 to 20% of a loaded driver's requests on the Pi (DA1b); a spin that stops when a yield shows other native instances running would also stop for the called instance's own spin, which shares the worker with one client's request.
 - Why a single native request on the 16-core machine takes one of two times from run to run (a bucket get about 2.2 or about 3.0 µs), and the Pi's does not (T10, T11); thread placement across the Threadripper's dies is a guess, not measured.

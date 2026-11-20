@@ -23,6 +23,14 @@
 //! # On one machine: serve at 127.0.0.1:7400, connect at 127.0.0.1:7401.
 //! ```
 //!
+//! Under the privileged helper (ROADMAP PS1c): start `serve` as the
+//! helper's node (its configuration's `node` this example, `node_args` the
+//! worker count, `serve`, `DIR` and the address; `binds` a directory
+//! holding copies of `bulkhead-runner` and `bulkhead-fixture-msgbench`
+//! that `BULKHEAD_BENCH_DIR` names, and the helper's `runner` the copy),
+//! and `connect` directly: node 2's instances are then the helper's
+//! children, each under its app's user.
+//!
 //! Arguments: tokio worker threads (default 4), shared by both nodes in one
 //! process; then nothing, `keys DIR` (write `node-1.key`, `node-2.key` and
 //! `peers.toml`), `serve DIR ADDR:PORT` (node 2 with its instances, until
@@ -71,7 +79,7 @@ use bulkhead_host::transport::quic::{
 };
 use bulkhead_host::{
     CallError, Envelope, InstanceHandle, InstanceSpec, LoadedApp, NativeCode, NativeConfig, Pid,
-    Runtime, RuntimeConfig,
+    PrivHelper, Runtime, RuntimeConfig,
 };
 
 const LONG: Duration = Duration::from_secs(30);
@@ -138,12 +146,21 @@ fn main() {
 
 const TARGET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target");
 
+/// A release build's program: in `BULKHEAD_BENCH_DIR` if set (copies the
+/// helper may share), else in `target/release`.
+fn release(name: &str) -> PathBuf {
+    match std::env::var_os("BULKHEAD_BENCH_DIR") {
+        Some(dir) => PathBuf::from(dir).join(name),
+        None => Path::new(TARGET).join("release").join(name),
+    }
+}
+
 /// The fixture's native program.
 struct Code(PathBuf);
 
 impl Code {
     fn find() -> Self {
-        let path = Path::new(TARGET).join("release/bulkhead-fixture-msgbench");
+        let path = release("bulkhead-fixture-msgbench");
         assert!(path.exists(), "{}: build it first", path.display());
         Self(path)
     }
@@ -196,9 +213,15 @@ fn free_udp() -> SocketAddr {
         .unwrap()
 }
 
-fn node(n: u32, address: SocketAddr, dir: &Path) -> (Runtime, QuicTransport) {
+fn node(
+    n: u32,
+    address: SocketAddr,
+    dir: &Path,
+    helper: Option<PrivHelper>,
+) -> (Runtime, QuicTransport) {
     let mut native = NativeConfig::default();
-    native.runner = Some(Path::new(TARGET).join("release/bulkhead-runner"));
+    native.runner = Some(release("bulkhead-runner"));
+    native.helper = helper;
     // `NATIVE_SPIN_US`: the node's `[native] spin_us` (T1); unset, 20.
     if let Some(us) = std::env::var("NATIVE_SPIN_US")
         .ok()
@@ -383,8 +406,8 @@ async fn local(workers: usize, code: &Code) {
     let dir = tempfile::tempdir().unwrap();
     write_keys(dir.path());
     let (a1, a2) = (free_udp(), free_udp());
-    let (rt1, quic1) = node(1, a1, dir.path());
-    let (rt2, quic2) = node(2, a2, dir.path());
+    let (rt1, quic1) = node(1, a1, dir.path(), None);
+    let (rt2, quic2) = node(2, a2, dir.path(), None);
     quic2.join_seed(a1).await.unwrap();
     joined(&rt1).await;
     joined(&rt2).await;
@@ -408,7 +431,11 @@ async fn local(workers: usize, code: &Code) {
 /// Node 2 at `bind` with its instances, their pids in `dir/pids`, until
 /// killed.
 async fn serve(dir: &Path, bind: SocketAddr, code: &Code) {
-    let (rt, _quic) = node(2, bind, dir);
+    let helper = PrivHelper::inherited().expect("the helper's socket");
+    if helper.is_some() {
+        println!("cluster_throughput: node 2's instances under the privileged helper");
+    }
+    let (rt, _quic) = node(2, bind, dir, helper);
     let handles = instances(&rt, code).await;
     let pids: String = handles.iter().map(|h| format!("{}\n", h.pid())).collect();
     std::fs::write(dir.join("pids"), &pids).unwrap();
@@ -428,7 +455,7 @@ async fn connect(workers: usize, dir: &Path, bind: SocketAddr, seed: SocketAddr,
         .lines()
         .map(|l| l.parse().unwrap())
         .collect();
-    let (rt, quic) = node(1, bind, dir);
+    let (rt, quic) = node(1, bind, dir, None);
     quic.join_seed(seed).await.unwrap();
     joined(&rt).await;
     let local = instances(&rt, code).await;

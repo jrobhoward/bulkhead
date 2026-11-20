@@ -420,16 +420,12 @@ pub fn spawn(
     };
     // `vmemoryuse`, the jail's address space, is refused at its limit;
     // `memoryuse` (resident) is only paged out towards it.
-    let mut rules = vec![
+    let rules = [
         format!("jail:{name}:vmemoryuse:deny={}", s.memory_max),
         format!("jail:{name}:memoryuse:deny={}", s.memory_max),
         format!("jail:{name}:maxproc:deny={}", s.pids_max),
         format!("jail:{name}:nthr:deny={}", s.pids_max),
     ];
-    // Percent of one core; `deny` on `pcpu` throttles (ROADMAP PS6).
-    if let Some(m) = crate::check::cpu(config, s) {
-        rules.push(format!("jail:{name}:pcpu:deny={}", (m / 10).max(1)));
-    }
     for rule in &rules {
         let added = CString::new(rule.as_str())
             .map_err(io::Error::other)

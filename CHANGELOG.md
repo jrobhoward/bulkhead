@@ -36,6 +36,25 @@ All notable changes are recorded here. The format follows
   finds the nodes and their resident memory through `ps` there, as
   `/proc` is Linux's. An hour on the FreeBSD VM passed on 2026-11-16.
 
+### Removed
+
+- CPU limits per instance (ROADMAP PS6b, decided 2026-11-19; PS6 above
+  added them). The cgroup `cpu` controller cost every call from the host
+  2.4 to 3.3 µs on a Raspberry Pi 5 (about 21 µs against 18 µs), a fifth
+  of the calls in flight and 3 to 5 µs of the node's CPU per call, on
+  every instance whether a limit was set or not (ROADMAP PS1c,
+  BASELINE.md, 2026-11-19); its throttling is abrupt, a quota per 100 ms
+  period, and FreeBSD's `pcpu` coarser. Neither the helper nor
+  `[native] cgroup` enables the `cpu` controller any more: an instance's
+  cgroup has `memory` and `pids` only, and its FreeBSD jail no `pcpu`
+  rule. The manifest's `limits.cpu`, node config's `[limits] cpu` and
+  `priv.conf`'s `cpu_max` are refused as unknown keys;
+  `bulkhead_bundle::manifest::Millicores`, the helper's
+  `Spawn::cpu_millis` (the wire frame changes; node and helper ship
+  together), `InstanceSpec::cpu_millis`, `NativeConfig::cpu` and the
+  `cpu:` line of `bulkhead status` are gone. CPU limits are parked as an
+  optional, later requirement (ROADMAP, Parked).
+
 ### Fixed
 
 - The soak's failover check reported a false overlap (found by FB4's

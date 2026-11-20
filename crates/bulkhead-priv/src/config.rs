@@ -14,7 +14,6 @@
 //! state = /var/lib/bulkhead-priv                    # the helper's own state (0700, root)
 //! binds = /var/lib/bulkhead, /srv/bulkhead          # what an instance's directories may be under
 //! memory_max = 8GiB                                 # ceilings on what a spawn may ask
-//! cpu_max = 4                                       # cores: the most a spawn may ask, and what one asking none gets
 //! pids_max = 4096
 //! ports = 80, 443                                   # ports below 1024 the node may have bound
 //! cgroup = /sys/fs/cgroup/system.slice/bulkhead.service  # Linux: a cgroup delegated to the helper
@@ -49,10 +48,6 @@ pub struct Config {
     pub memory_max: u64,
     /// The most processes and threads a spawn may ask for one instance.
     pub pids_max: u32,
-    /// The most CPU a spawn may ask for one instance, in thousandths of a
-    /// core, and what one asking for none gets (ROADMAP PS6); `None`: no
-    /// ceiling.
-    pub cpu_max: Option<u32>,
     /// The ports the node may ask the helper to bind.
     pub ports: Vec<u16>,
     /// Linux: the cgroup v2 directory delegated to the helper; required
@@ -142,14 +137,6 @@ impl Config {
         if pids_max == 0 || memory_max == 0 {
             return Err("memory_max and pids_max must be above 0".into());
         }
-        let cpu_max = kv
-            .get("cpu_max")
-            .map(|v| {
-                cores(v)
-                    .filter(|m| *m >= crate::check::MIN_CPU)
-                    .ok_or("cpu_max is not a number of cores of at least 0.01")
-            })
-            .transpose()?;
         Ok(Self {
             node: path("node")?,
             node_args: get("node_args")?
@@ -164,7 +151,6 @@ impl Config {
             binds,
             memory_max,
             pids_max,
-            cpu_max,
             ports,
             cgroup,
             tmp_size: match kv.get("tmp_size") {
@@ -205,7 +191,7 @@ impl Config {
     }
 }
 
-const KEYS: [&str; 15] = [
+const KEYS: [&str; 14] = [
     "node",
     "node_args",
     "node_uid",
@@ -216,31 +202,11 @@ const KEYS: [&str; 15] = [
     "binds",
     "memory_max",
     "pids_max",
-    "cpu_max",
     "ports",
     "cgroup",
     "tmp_size",
     "devfs_ruleset",
 ];
-
-/// A number of cores (`2`, `0.5`, at most three decimals) in thousandths
-/// of a core.
-fn cores(v: &str) -> Option<u32> {
-    let (whole, frac) = v.trim().split_once('.').unwrap_or((v.trim(), ""));
-    if whole.is_empty()
-        || !whole.bytes().all(|b| b.is_ascii_digit())
-        || frac.len() > 3
-        || !frac.bytes().all(|b| b.is_ascii_digit())
-    {
-        return None;
-    }
-    let frac = format!("{frac:0<3}");
-    whole
-        .parse::<u32>()
-        .ok()?
-        .checked_mul(1000)?
-        .checked_add(frac.parse().ok()?)
-}
 
 fn list(v: &str) -> impl Iterator<Item = &str> {
     v.split(',').map(str::trim).filter(|s| !s.is_empty())

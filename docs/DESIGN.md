@@ -14,7 +14,7 @@ The model is coarse-grained: tens to a few thousand long-lived instances per nod
 ## Goals
 
 - Run apps as native processes, one per instance, written in Rust with `bulkhead-sdk` (other languages are not planned, 2026-11-07).
-- Give each app enforced limits on memory, CPU time, filesystem, and network.
+- Give each app enforced limits on memory, processes, a callback's wall time, filesystem, and network.
 - Let apps send each other messages with call (request/reply with timeout) and cast (fire and forget), locally or across nodes.
 - Detect crashed or unresponsive apps, restart them under supervision, and notify linked and monitoring apps.
 - Deploy, upgrade, roll back, and remove apps on a running cluster, with explicit state migration.
@@ -183,7 +183,7 @@ Every instance is its own process, restricted by `bulkhead-runner` before the ap
 | Resource | Mechanism | Notes |
 | --- | --- | --- |
 | Memory | A delegated cgroup's `memory.max`, no swap, or `RLIMIT_DATA` without one: memory_max | Over the cgroup's limit the process is killed; under `RLIMIT_DATA` an allocation fails and the app aborts. |
-| CPU, wall clock | A deadline per callback (callback_deadline_ms): wall time less time answering requests, then a kill | A blown deadline ends the instance with reason `timeout`. CPU is capped per instance by `limits.cpu` where the node has cgroups or the privileged helper (ROADMAP PS6). |
+| CPU, wall clock | A deadline per callback (callback_deadline_ms): wall time less time answering requests, then a kill | A blown deadline ends the instance with reason `timeout`. CPU itself is not capped: limits (PS6) were removed for the `cpu` controller's cost on every call (ROADMAP PS6b, 2026-11-19). |
 | Threads and processes | The cgroup's `pids.max`; an instance handles one callback at a time | Scale with instance pools. |
 | Mailbox | mailbox_max messages and mailbox_max_bytes of bodies per instance (64 MiB by default, ROADMAP I6); message_max_bytes | When full: cast is dropped and counted, call fails fast with `overloaded`. |
 | Link to another node | `[cluster] send_buffer_bytes` of messages queued per peer (64 MiB by default) | When full: the same rule as a full mailbox. Link and monitor notices are queued past it. |

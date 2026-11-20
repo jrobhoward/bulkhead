@@ -898,22 +898,7 @@ impl Runtime {
         id: u64,
         incarnation: u32,
     ) -> Result<InstanceHandle, HostError> {
-        let mut spec = self.inner.with_driver(spec);
-        spec.cpu_millis = self
-            .inner
-            .config
-            .native
-            .cpu_for(spec.cpu_millis, spec.driver.is_some())
-            .map_err(HostError::HostObjectsAboveNode)?;
-        if let Some(cpu) = spec.cpu_millis
-            && !self.inner.config.native.enforces_cpu()
-        {
-            tracing::warn!(
-                app = %spec.app,
-                cpu = %bulkhead_bundle::manifest::Millicores(cpu),
-                "the CPU limit is not enforced: it needs [native] cgroup or [priv]"
-            );
-        }
+        let spec = self.inner.with_driver(spec);
         if let Some(p) = spec.preopens.iter().find(|p| !p.host.is_dir()) {
             return Err(HostError::Preopen(format!(
                 "{} (for {}) is not a directory",

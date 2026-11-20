@@ -54,7 +54,6 @@ fn detail____app_holding_blobs____shows_them() {
         instance_list: vec![],
         listeners: vec![],
         runs_as: String::new(),
-        cpu: String::new(),
         blobs: Some((2, 4096)),
     };
 
@@ -77,7 +76,6 @@ fn detail____failed_app____shows_reason_and_denied() {
         instance_list: vec![],
         listeners: vec![],
         runs_as: "its own user".into(),
-        cpu: "0.5 cores".into(),
         blobs: None,
     };
 
@@ -85,7 +83,6 @@ fn detail____failed_app____shows_reason_and_denied() {
 
     assert!(out.contains("reason:    crashed: max restart intensity"));
     assert!(out.contains("runs as:   its own user"));
-    assert!(out.contains("cpu:       0.5 cores"));
     assert!(out.contains("denied:    bulkhead:keyvalue"));
     assert!(out.contains("warning:   observability.metrics"));
 }
@@ -164,7 +161,6 @@ fn detail____connection_handler____lists_listeners() {
             idle_closed: 5,
         }],
         runs_as: String::new(),
-        cpu: String::new(),
         blobs: None,
     };
 

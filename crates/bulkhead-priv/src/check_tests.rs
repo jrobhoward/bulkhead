@@ -11,7 +11,7 @@ fn config() -> Config {
     Config::parse(
         "node = /b/bulkhead\nnode_args = node\nnode_uid = 990\nnode_gid = 990\n\
          runner = /b/bulkhead-runner\nuids = 60000-60009\nstate = /var/lib/p\n\
-         binds = /var/lib/bulkhead, /srv/v\nmemory_max = 1GiB\npids_max = 256\ncpu_max = 4\nports = 443\n",
+         binds = /var/lib/bulkhead, /srv/v\nmemory_max = 1GiB\npids_max = 256\nports = 443\n",
     )
     .unwrap()
 }
@@ -22,7 +22,6 @@ fn spawn() -> Spawn {
         app: "orders".into(),
         memory_max: 64 << 20,
         pids_max: 64,
-        cpu_millis: 0,
         args: vec![
             "--executable".into(),
             "/var/lib/bulkhead/compiled/orders/1/p".into(),
@@ -42,18 +41,6 @@ fn spawn() -> Spawn {
     }
 }
 
-#[rstest]
-#[case::none_asked(0, Some(4000))]
-#[case::asked(500, Some(500))]
-fn cpu____a_spawn____its_own_or_the_ceiling(#[case] asked: u32, #[case] gets: Option<u32>) {
-    let s = Spawn {
-        cpu_millis: asked,
-        ..spawn()
-    };
-
-    assert_eq!(cpu(&config(), &s), gets);
-}
-
 #[test]
 fn spawn____within_every_bound____accepted() {
     assert_eq!(super::spawn(&config(), &spawn(), 6), Ok(()));
@@ -65,8 +52,6 @@ fn spawn____within_every_bound____accepted() {
 #[case::memory_under(|s: &mut Spawn| s.memory_max = 1, "memory_max")]
 #[case::pids_zero(|s: &mut Spawn| s.pids_max = 0, "pids_max")]
 #[case::pids_over(|s: &mut Spawn| s.pids_max = 257, "pids_max")]
-#[case::cpu_under(|s: &mut Spawn| s.cpu_millis = 5, "cpu")]
-#[case::cpu_over(|s: &mut Spawn| s.cpu_millis = 4001, "cpu")]
 #[case::env(|s: &mut Spawn| s.env.push(("LD_PRELOAD".into(), "/x.so".into())), "LD_PRELOAD")]
 #[case::fd_zero(|s: &mut Spawn| s.fds[0] = 0, "outside")]
 #[case::fd_high(|s: &mut Spawn| s.fds[0] = 16, "outside")]

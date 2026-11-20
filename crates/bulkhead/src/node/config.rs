@@ -130,7 +130,6 @@
 //! groups_max = 1000
 //! watches_max = 1000
 //! senders_max = 8
-//! cpu = 2            # cores per instance (ROADMAP PS6); unset: no default, no ceiling
 //! refusals_max = 100  # refusals per instance within refusals_period_ms (ROADMAP PS5)
 //! refusals_period_ms = 10000
 //! requests_per_sec = 0          # 0: none
@@ -328,11 +327,6 @@ pub struct NodeLimits {
     /// The window `quarantine_after` counts over.
     #[serde(default = "default_quarantine_period")]
     pub quarantine_period_ms: u64,
-    /// CPU per instance, in cores (ROADMAP PS6): the limit of an app whose
-    /// manifest sets none, and the most one may ask for. Unset: neither.
-    /// The node's own drivers take no default.
-    #[serde(default)]
-    pub cpu: Option<bulkhead_bundle::manifest::Millicores>,
 }
 
 impl Default for NodeLimits {
@@ -351,7 +345,6 @@ impl Default for NodeLimits {
             requests_per_sec: 0,
             quarantine_after: default_quarantine_after(),
             quarantine_period_ms: default_quarantine_period(),
-            cpu: None,
         }
     }
 }
@@ -1795,16 +1788,6 @@ impl NodeConfig {
                  more than 0"
                     .into(),
             ));
-        }
-        if let Some(cpu) = limits.cpu {
-            use bulkhead_bundle::manifest::Millicores;
-            if !(Millicores::MIN..=Millicores::MAX).contains(&cpu) {
-                return Err(NodeError::Invalid(format!(
-                    "node config: limits.cpu must be between {} and {} cores",
-                    Millicores::MIN,
-                    Millicores::MAX
-                )));
-            }
         }
         Ok(config)
     }

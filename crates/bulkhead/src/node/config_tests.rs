@@ -120,26 +120,10 @@ fn NodeConfig____limits____read_with_defaults() {
 }
 
 #[test]
-fn NodeConfig____limits_cpu____read_as_thousandths() {
-    let config = NodeConfig::from_toml_str("data_dir = \"/d\"\n[limits]\ncpu = 1.5\n").unwrap();
+fn NodeConfig____limits_cpu_removed____refused_as_unknown() {
+    let err = NodeConfig::from_toml_str("data_dir = \"/d\"\n[limits]\ncpu = 1.5\n").unwrap_err();
 
-    assert_eq!(
-        config
-            .limits
-            .cpu
-            .map(bulkhead_bundle::manifest::Millicores::millis),
-        Some(1500)
-    );
-}
-
-#[rstest::rstest]
-#[case::zero("0")]
-#[case::too_many("2000")]
-#[case::four_decimals("0.0001")]
-fn NodeConfig____limits_cpu_out_of_range____refused(#[case] cpu: &str) {
-    let toml = format!("data_dir = \"/d\"\n[limits]\ncpu = {cpu}\n");
-
-    assert!(NodeConfig::from_toml_str(&toml).is_err());
+    assert!(err.to_string().contains("unknown field `cpu`"), "{err}");
 }
 
 #[test]

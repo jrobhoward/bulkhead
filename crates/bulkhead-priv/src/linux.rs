@@ -35,7 +35,9 @@ use crate::sys::{self, Exec, Forked};
 
 /// The controllers the helper turns on for instances, those of them the
 /// kernel has.
-const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
+/// The `cpu` controller stays off: it cost every call 2.4 to 3.3 µs on a
+/// Raspberry Pi 5, a limit or not (ROADMAP PS6b).
+const CONTROLLERS: [&str; 2] = ["memory", "pids"];
 
 /// The host name an instance sees (its own UTS namespace).
 const HOSTNAME: &[u8] = b"bulkhead-app";
@@ -273,12 +275,6 @@ fn make_cgroup(config: &Config, st: &State, s: &Spawn) -> io::Result<PathBuf> {
             std::fs::write(leaf.join("memory.swap.max"), "0")?;
         }
         std::fs::write(leaf.join("pids.max"), s.pids_max.to_string())?;
-        // A quota of the 100 ms period (ROADMAP PS6).
-        let cpu = match crate::check::cpu(config, s) {
-            Some(m) => format!("{} 100000", u64::from(m) * 100),
-            None => "max 100000".to_string(),
-        };
-        std::fs::write(leaf.join("cpu.max"), cpu)?;
         // The node may end the instance, and all it forked, by writing
         // this one file: no capability and no round trip (S36).
         std::os::unix::fs::chown(leaf.join("cgroup.kill"), Some(config.node_uid), None)

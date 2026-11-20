@@ -221,96 +221,38 @@ fn instance_pid(started: &Started) -> u32 {
     out.split_whitespace().next().unwrap().parse().unwrap()
 }
 
-/// CPU time an instance has used, in microseconds: its cgroup's
-/// `cpu.stat`.
-#[cfg(target_os = "linux")]
-fn cpu_used_us(pid: u32) -> u64 {
-    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).unwrap();
-    let path = cgroup.lines().find_map(|l| l.strip_prefix("0::")).unwrap();
-    let stat = std::fs::read_to_string(format!("/sys/fs/cgroup{}/cpu.stat", path.trim())).unwrap();
-    stat.lines()
-        .find_map(|l| l.strip_prefix("usage_usec "))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap()
-}
-
-/// CPU time a process has used, in microseconds: `ps`'s `time`
-/// (minutes, seconds and hundredths).
-#[cfg(target_os = "freebsd")]
-fn cpu_used_us(pid: u32) -> u64 {
-    let time = output("ps", &["-o", "time=", "-p", &pid.to_string()]);
-    let (min, sec) = time.trim().split_once(':').unwrap();
-    let min: u64 = min.parse().unwrap();
-    let sec: f64 = sec.parse().unwrap();
-    min * 60_000_000 + (sec * 1e6) as u64
-}
-
-/// How long a spinning instance runs before it is measured, and for how
-/// long. Linux's `cpu.max` holds it within each 100 ms period; FreeBSD's
-/// rctl throttles about once a second on a decaying average, so it
-/// starts at a whole core and settles over seconds, in bursts.
-#[cfg(target_os = "linux")]
-const SPIN: (Duration, Duration) = (Duration::from_millis(500), Duration::from_secs(2));
-#[cfg(target_os = "freebsd")]
-const SPIN: (Duration, Duration) = (Duration::from_secs(2), Duration::from_secs(8));
-
-/// The most share of a core a spinning instance limited to a fifth of
-/// one may show over [`SPIN`]'s window, with room for a busy machine.
-#[cfg(target_os = "linux")]
-const FIFTH_AT_MOST: f64 = 0.35;
-#[cfg(target_os = "freebsd")]
-const FIFTH_AT_MOST: f64 = 0.45;
-
-/// An instance spinning in a callback, with `cpu` thousandths of a core:
-/// the share of a core it used over [`SPIN`]'s window (ROADMAP PS6).
-async fn spinning_share(cpu: Option<u32>) -> Option<f64> {
-    let started = helper("helper____cpu")?;
+/// No CPU limit reaches an instance (ROADMAP PS6b): on Linux its cgroup
+/// has no `cpu` controller, on FreeBSD its jail no `pcpu` rule.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____an_instance____no_cpu_controller_or_rule() {
+    let Some(started) = helper("helper____no_cpu") else {
+        return;
+    };
     let rt = runtime(&started);
     let app = program(&started, &rt);
-    let i = rt
-        .spawn(
-            &app,
-            InstanceSpec {
-                cpu_millis: cpu,
-                callback_deadline: Duration::from_secs(20),
-                ..spec("alpha")
-            },
-        )
-        .unwrap();
+    let i = rt.spawn(&app, spec("alpha")).unwrap();
     let _ = ask(&i, "echo up").await;
     let pid = instance_pid(&started);
-    let spinning = i.clone();
-    let spin = tokio::spawn(async move { spinning.call(text("spin"), LONG).await });
-    tokio::time::sleep(SPIN.0).await;
 
-    let (used, at) = (cpu_used_us(pid), Instant::now());
-    tokio::time::sleep(SPIN.1).await;
-    let share = (cpu_used_us(pid) - used) as f64 / at.elapsed().as_micros() as f64;
-
-    eprintln!("cpu {cpu:?}: {share:.2} of a core");
+    #[cfg(target_os = "linux")]
+    {
+        let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).unwrap();
+        let path = cgroup.lines().find_map(|l| l.strip_prefix("0::")).unwrap();
+        let leaf = std::path::Path::new("/sys/fs/cgroup").join(path.trim().trim_start_matches('/'));
+        let parent =
+            std::fs::read_to_string(leaf.parent().unwrap().join("cgroup.subtree_control")).unwrap();
+        assert!(leaf.join("memory.max").exists(), "{}", leaf.display());
+        assert!(!leaf.join("cpu.max").exists(), "{}", leaf.display());
+        assert!(!parent.split_whitespace().any(|c| c == "cpu"), "{parent}");
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        let rules = output("rctl", &[]);
+        assert!(rules.contains("vmemoryuse"), "{rules}");
+        assert!(!rules.contains("pcpu"), "{rules}");
+    }
+    let _ = pid;
     i.kill();
-    let _ = spin.await;
-    Some(share)
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn helper____cpu_limit____held_to_its_share() {
-    let Some(share) = spinning_share(Some(200)).await else {
-        return;
-    };
-
-    assert!(share < FIFTH_AT_MOST, "{share}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn helper____no_cpu_limit____a_whole_core() {
-    let Some(share) = spinning_share(None).await else {
-        return;
-    };
-
-    assert!(share > 0.6, "{share}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

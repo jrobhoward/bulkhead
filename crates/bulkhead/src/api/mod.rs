@@ -95,12 +95,6 @@ pub struct AppDetail {
     /// user"`. Empty from a node older than this field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub runs_as: String,
-    /// The app's CPU limit per instance (ROADMAP PS6): `"0.5 cores"`,
-    /// with `", not enforced (…)"` on a node without cgroups or the
-    /// privileged helper, or `"unlimited"`. Empty from a node older than
-    /// this field.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cpu: String,
     /// The app's blobs the node holds (`bulkhead:blobs`, ROADMAP BL1): how
     /// many and their bytes. Absent with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
