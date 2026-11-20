@@ -160,7 +160,7 @@ Stopping the relay cuts the line and starting it again joins it; each node shows
 
 ### A disaster-recovery copy
 
-A third node at a second site can keep a copy of the pair's replicated log and buckets, about a poll interval behind while the WAN is up (under a second in the simulation, with 50 ms of delay and 5% loss each way; not measured over a real WAN). ROADMAP Phase 8: DR2 ships it, activating it is DR4. It is the witness or a node of its own, without `[failover]`:
+A third node at a second site can keep a copy of the pair's replicated log and buckets, about a poll interval behind while the WAN is up (under a second in the simulation, with 50 ms of delay and 5% loss each way; not measured over a real WAN). ROADMAP Phase 8: DR2 ships it, DR4 activates it (below). It is the witness or a node of its own, without `[failover]`:
 
 ```toml
 # On the DR node (the witness here):
@@ -179,6 +179,24 @@ dr = 3
 The DR node pulls committed entries from either pair node over the cluster transport, so the pair nodes need it among their peers and it needs them. A node of its own puts the pair's addresses in `seeds`. `bulkhead dr` on the DR node shows the node it pulls from, its commit index and its lag; `bulkhead failover` on a pair node adds a `dr:` line with the same lag as that node sees it. Both report `bulkhead_dr_lag_seconds` (OBSERVABILITY.md), and each logs a warning once the lag passes `rpo_target_s`. The lag grows while the WAN is down whether or not anything is written: it is the time since the copy last held everything committed, not a count of writes. Node config, the cluster key, the peers file and policy are not shipped: keep them at site 2. A node at cluster protocol version 9 neither answers nor sends the frames, so a pair and its DR node ship once all three run this build; `bulkhead release finalize` waits for the DR node too ("Upgrading the builds of a pair"). A DR copy that applies a pair's version newer than its build stops pulling, as a standby stops replicating.
 
 The DR node holds the primary's deployments too (ROADMAP DR3): every ten polls (10 s with the default `poll_ms`) it asks both pair nodes for their deploy state, follows the primary's, fetches the bundles it lacks a 1 MiB chunk at a time by SHA-256, and takes the primary's apps, versions and blue-green sides as its own, deployed and not started (`bulkhead list` there shows them as `dr copy`); they start when the node is activated (DR4). An app removed or upgraded on the primary is removed or upgraded there. Each held app is built as a deploy would build it, against the DR node's own trusted keys, policy, secrets, datasources, buckets and volumes, so keep those at site 2 as on the pair, the pair's `cluster` buckets included (`[buckets.<name>]` with `scope = "cluster"`, allowed on a DR node for this). An app that would not start there is reported, with why, as is one whose grant from site 2's policy differs from the primary's: `bulkhead dr` lists them (`not ready:`, `grants:`), `bulkhead_dr_apps_not_ready` counts them and each is logged as a warning. A DR node takes no deploys of its own: deploy, upgrade, rollback, traffic, start, stop and remove are refused there.
+
+**Activating it** (ROADMAP DR4) is for when site 1 is lost, and only on a DR node that is also the pair's witness (a DR node of its own refuses; ROADMAP DR4b). First make sure both site-1 nodes are down and stay down: powered off, or cut off from everything they serve and from each other. That judgement is yours. A site-1 pair that still hears itself keeps renewing its lease through its own heartbeats and goes on running its singletons and taking writes beside site 2, whatever the witness says (spike S38). Then:
+
+```sh
+bulkhead dr                         # how far the copy trails: about the writes you will lose
+bulkhead dr activate --site-1-down
+```
+
+- **The witness is fenced first.** It renews and grants nothing, then waits out the pair's lease as it last saw it renewed (`lease_ms` plus `margin_ms`, a few seconds), counted from its own start if it restarted since.
+- **A site-1 node heard meanwhile abandons the activation** ("site 1 is not down"), and the pair is answered as before. Fence that node and ask again.
+- **The new epoch.** The witness makes this node primary at a new epoch, kept on disk. This node then leads the replicated buckets from its copy: it takes writes, committed at once since no other copy waits, and serves linearizable reads. It also starts the pair's apps it holds, singletons included.
+- **What is lost:** writes site 1 committed after the copy's last entry.
+- **`bulkhead dr`** shows `active: epoch N`. The audit records are `dr_activate_asked` and `dr_activate`.
+- **While active,** deploys on this node are its own. The pair's deployments are no longer followed.
+- **Survives a restart:** the activation is in the witness's kept state, and the apps start again.
+- **A site-1 node that comes back** is fenced by the witness: an older epoch, never granted. It stays `down` and runs no singletons.
+
+Failback is ROADMAP DR4's second part; until it lands, keep site 1's nodes stopped after an activation.
 
 ## Misbehaving apps and quarantine
 

@@ -381,10 +381,8 @@ pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply 
         (&Method::GET, ["v1", "metrics"]) => metrics_text(node.metrics()),
         (&Method::GET, ["v1", "cluster"]) => json(StatusCode::OK, &node.members()),
         (&Method::POST, ["v1", "tls", "reload"]) => respond(node.reload_tls().await),
-        (&Method::GET, ["v1", "failover"]) => failover(node, &q).await,
-        (&Method::GET, ["v1", "dr"]) => respond(node.dr()),
-        (&Method::POST, ["v1", "failover", "confirm"]) => respond(node.confirm_failover()),
-        (&Method::POST, ["v1", "failover", "switchover"]) => respond(node.switchover().await),
+        (_, ["v1", "failover", rest @ ..]) => failover(node, &method, rest, &q).await,
+        (_, ["v1", "dr", rest @ ..]) => dr(node, &method, rest, &q).await,
         (&Method::GET, ["v1", "release"]) => respond(node.release().await),
         (&Method::POST, ["v1", "release", "finalize"]) => respond(node.finalize_release().await),
         (&Method::POST, ["v1", "instances", pid, "kill"]) => respond(node.kill(pid).await),
@@ -443,12 +441,40 @@ fn events(node: &Node) -> Reply {
     )
 }
 
+/// `GET /v1/dr`, the DR copy (ROADMAP DR2), and
+/// `POST /v1/dr/activate?site_1_down=true` (DR4).
+async fn dr(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)]) -> Reply {
+    match (method, rest) {
+        (&Method::GET, []) => respond(node.dr()),
+        (&Method::POST, ["activate"]) => match param::<bool>(q, "site_1_down") {
+            Ok(confirmed) => respond(node.dr_activate(confirmed.unwrap_or(false)).await),
+            Err(e) => error(&e),
+        },
+        _ => error(&NodeError::NotFound(format!(
+            "no route for {method} /v1/dr/{}",
+            rest.join("/")
+        ))),
+    }
+}
+
 /// Longest `wait_ms` a failover long poll may ask for.
 const FAILOVER_WAIT_MAX: Duration = Duration::from_secs(60);
 
 /// `GET /v1/failover`, or with `after` (and `wait_ms`, 30 s by default) a
-/// long poll for the next leadership change.
-async fn failover(node: &Node, q: &[(String, String)]) -> Reply {
+/// long poll for the next leadership change; `POST /v1/failover/confirm`
+/// and `/v1/failover/switchover`.
+async fn failover(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)]) -> Reply {
+    match (method, rest) {
+        (&Method::GET, []) => {}
+        (&Method::POST, ["confirm"]) => return respond(node.confirm_failover()),
+        (&Method::POST, ["switchover"]) => return respond(node.switchover().await),
+        _ => {
+            return error(&NodeError::NotFound(format!(
+                "no route for {method} /v1/failover/{}",
+                rest.join("/")
+            )));
+        }
+    }
     let params =
         param::<u64>(q, "after").and_then(|after| Ok((after, param::<u64>(q, "wait_ms")?)));
     match params {

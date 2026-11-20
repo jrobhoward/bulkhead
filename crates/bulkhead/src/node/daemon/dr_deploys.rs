@@ -409,7 +409,8 @@ impl Node {
 
     /// Refuse a change of deployments on a DR node: it holds the primary's.
     pub(super) fn refuse_dr_copy(&self) -> Result<(), NodeError> {
-        if self.config.dr.is_some() {
+        // Once activated (DR4), its deployments are its own until failback.
+        if self.config.dr.is_some() && self.rt.dr_active().is_none() {
             return Err(NodeError::Refused(
                 "this node keeps the pair's deployments as its DR copy; deploy to the pair".into(),
             ));
@@ -755,6 +756,15 @@ async fn pull(
             },
             _ = ticker.tick() => None,
         };
+        // Activated (DR4): the pair is fenced, and its deployments no
+        // longer replace this node's.
+        if puller
+            .node
+            .upgrade()
+            .is_none_or(|n| n.rt.dr_active().is_some())
+        {
+            continue;
+        }
         match got {
             Some((from, body)) => match from_cbor::<DeployMsg>(&body) {
                 Ok(msg) => puller.answer(from, msg).await,

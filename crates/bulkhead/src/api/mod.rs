@@ -308,6 +308,10 @@ pub struct DrInfo {
     /// The pair's deployments it holds (ROADMAP DR3).
     #[serde(default)]
     pub deploys: Option<DrDeploysInfo>,
+    /// Activated (ROADMAP DR4): the epoch it leads at, running the pair's
+    /// apps and taking writes; site 1 is fenced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_epoch: Option<u64>,
 }
 
 /// The pair's deployments a DR node holds, deployed and not started.

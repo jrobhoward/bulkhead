@@ -340,3 +340,44 @@ fn dr_deploys____between_dr_node_and_pair____both_ways_and_no_other() {
     assert!(!to_other);
     assert!(again);
 }
+
+/// Site 1 lost (each pair node cut off from everything) over a lossy WAN:
+/// the witness, as DR node, is activated (ROADMAP DR4); it keeps exactly
+/// its copy (S38's `NoLostWriteDr`) and takes writes of its own. A DR
+/// node apart from the witness refuses (DR4b).
+#[test]
+fn dr____site_1_lost_then_activated____copy_kept_and_writes_taken() {
+    use bulkhead_host::failover::ActivateRefused;
+    let root = tempfile::tempdir().unwrap();
+    let (copy_before, epoch, after, written_here, apart) =
+        simulate_with(206, 4, configure(root.path()), |sim| async move {
+            lossy_wan(&sim, 3);
+            let _handles = start(&sim, 3, 64 << 20);
+            let mut own = DrConfig::new([1, 2]);
+            own.poll = Duration::from_millis(200);
+            sim.node(4).rt.start_dr(own).unwrap();
+            let p = primary(&sim).await;
+            let kv = sim.node(p).spawn_kv(BUCKET);
+            for i in 0..10 {
+                assert_eq!(set(&kv, &format!("k{i:02}")).await, "ok");
+            }
+            caught_up(&sim, 3, p).await;
+            for (a, b) in [(1, 2), (1, 3), (2, 3), (1, 4), (2, 4)] {
+                sim.mesh.partition(a, b);
+            }
+            let copy_before = keys(&sim, 3).await;
+
+            let epoch = sim.node(3).rt.dr_activate().await.unwrap();
+            let kv3 = sim.node(3).spawn_kv(BUCKET);
+            let written_here = set(&kv3, "site2").await;
+            let after = keys(&sim, 3).await;
+            let apart = sim.node(4).rt.dr_activate().await.unwrap_err();
+            (copy_before, epoch, after, written_here, apart)
+        });
+
+    assert_eq!(copy_before, written(10));
+    assert!(epoch >= 2, "{epoch}");
+    assert_eq!(written_here, "ok");
+    assert_eq!(after, format!("{},site2", written(10)));
+    assert!(matches!(apart, ActivateRefused::NotHere(_)), "{apart:?}");
+}

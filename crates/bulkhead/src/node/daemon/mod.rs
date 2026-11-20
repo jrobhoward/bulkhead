@@ -346,6 +346,11 @@ impl Node {
             node.shutdown().await;
             return Err(e);
         }
+        if node.config.dr.is_some() && node.rt.dr_active().is_some() {
+            // Activated before it stopped (DR4): its witness state says so,
+            // known only once the witness is served.
+            node.restore().await;
+        }
         Ok(node)
     }
 

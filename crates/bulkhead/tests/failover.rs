@@ -1575,3 +1575,209 @@ async fn release_upgrade____primary_lost_between_steps____rerun_finishes_on_the_
         p.child.kill().await.unwrap();
     }
 }
+
+/// The witness, as DR node, activated when site 1 is lost (ROADMAP DR4):
+/// refused without the operator's confirmation, then it leads from its
+/// copy, runs the pair's singleton and takes writes; a site-1 node that
+/// comes back is fenced and runs nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____site_1_lost_and_activated____copy_serves_writes_and_site_1_is_fenced() {
+    let dir = tempfile::Builder::new()
+        .prefix("pda")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3) = (free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n").unwrap();
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 3\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let dr = format!(
+        "policy = {policy:?}\n{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_singleton(&signer))
+            .await
+            .unwrap();
+    }
+    until("node 1 runs the singleton", || {
+        let c = n1.client.clone();
+        async move {
+            c.status("vault")
+                .await
+                .is_ok_and(|d| d.summary.status == "running")
+        }
+    })
+    .await;
+    for i in 0..10 {
+        assert_eq!(
+            call_text(&n1.client, "vault", &format!("set:state:k{i}:v{i}")).await,
+            "ok"
+        );
+    }
+    let committed = n1
+        .client
+        .failover()
+        .await
+        .unwrap()
+        .replication
+        .unwrap()
+        .commit;
+    until_long("the DR node holds the copy and the app", || {
+        let c = w.client.clone();
+        async move {
+            c.dr().await.is_ok_and(|d| {
+                d.commit >= committed
+                    && d.deploys
+                        .is_some_and(|h| h.apps == 1 && h.fetching.is_none())
+            })
+        }
+    })
+    .await;
+    // Site 1 is lost.
+    for p in [&mut n1, &mut n2] {
+        p.child.kill().await.unwrap();
+    }
+
+    let unconfirmed = w.client.dr_activate(false).await.unwrap_err();
+    let activated = w.client.dr_activate(true).await.unwrap();
+    until("the DR node runs the singleton", || {
+        let c = w.client.clone();
+        async move {
+            c.status("vault")
+                .await
+                .is_ok_and(|d| d.summary.status == "running")
+        }
+    })
+    .await;
+    let old = call_text(&w.client, "vault", "get:state:k9").await;
+    let written = call_text(&w.client, "vault", "set:state:new:site2").await;
+    let new = call_text(&w.client, "vault", "get:state:new").await;
+    let info = w.client.dr().await.unwrap();
+    let again = w.client.dr_activate(true).await.unwrap_err();
+    // A site-1 node comes back: the witness fences it.
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let back = n1.client.failover().await.unwrap();
+    let back_vault = n1.client.status("vault").await.unwrap().summary;
+
+    assert_eq!(common::kind(&unconfirmed), "refused");
+    assert!(
+        unconfirmed.to_string().contains("--site-1-down"),
+        "{unconfirmed}"
+    );
+    assert!(
+        activated.message.contains("activated at epoch"),
+        "{}",
+        activated.message
+    );
+    assert_eq!(old, "v9");
+    assert_eq!(written, "ok");
+    assert_eq!(new, "site2");
+    assert!(info.active_epoch.is_some(), "{info:?}");
+    assert_eq!(common::kind(&again), "conflict");
+    assert_eq!(back.role, "down", "{back:?}");
+    assert!(!back.may_run, "{back:?}");
+    assert_ne!(back_vault.status, "running", "{back_vault:?}");
+
+    // The DR node restarts: still active, its apps and writes with it.
+    w.child.kill().await.unwrap();
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    until("the restarted DR node runs the singleton", || {
+        let c = w.client.clone();
+        async move {
+            c.status("vault")
+                .await
+                .is_ok_and(|d| d.summary.status == "running")
+        }
+    })
+    .await;
+    let after_restart = w.client.dr().await.unwrap();
+    let kept = call_text(&w.client, "vault", "get:state:new").await;
+
+    assert_eq!(after_restart.active_epoch, info.active_epoch);
+    assert_eq!(kept, "site2");
+    for p in [&mut n1, &mut w] {
+        p.child.kill().await.unwrap();
+    }
+}
+
+/// An activation while site 1 is alive and reaches the witness is
+/// abandoned (ROADMAP DR4): the operator's confirmation was wrong, and the
+/// pair goes on as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____activated_while_site_1_reaches_the_witness____abandoned_and_pair_runs_on() {
+    let dir = tempfile::Builder::new()
+        .prefix("pdb")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3) = (free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n").unwrap();
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 3\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let dr = format!(
+        "policy = {policy:?}\n{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_singleton(&signer))
+            .await
+            .unwrap();
+    }
+    until("node 1 runs the singleton", || {
+        let c = n1.client.clone();
+        async move {
+            c.status("vault")
+                .await
+                .is_ok_and(|d| d.summary.status == "running")
+        }
+    })
+    .await;
+
+    let refused = w.client.dr_activate(true).await.unwrap_err();
+    until_long("the pair runs the singleton again", || {
+        let (c1, c2) = (n1.client.clone(), n2.client.clone());
+        async move {
+            let r1 = c1.failover().await.is_ok_and(|f| f.may_run);
+            let r2 = c2.failover().await.is_ok_and(|f| f.may_run);
+            r1 || r2
+        }
+    })
+    .await;
+    let info = w.client.dr().await.unwrap();
+
+    assert_eq!(common::kind(&refused), "conflict");
+    assert!(
+        refused.to_string().contains("site 1 is not down"),
+        "{refused}"
+    );
+    assert_eq!(info.active_epoch, None, "{info:?}");
+    for p in [&mut n1, &mut n2, &mut w] {
+        p.child.kill().await.unwrap();
+    }
+}

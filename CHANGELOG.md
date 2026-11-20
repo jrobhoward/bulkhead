@@ -8,6 +8,22 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Activating the disaster-recovery node (ROADMAP DR4, first part), with
+  operator fencing as decided with the user on 2026-11-19 (spike S38):
+  `bulkhead dr activate --site-1-down`, on a DR node that is also the
+  pair's witness (a DR node of its own refuses; DR4b). The witness
+  renews and grants nothing, waits out the pair's lease as it last saw
+  it renewed, and grants this node a new epoch, kept on disk; a site-1
+  node heard meanwhile abandons the activation. The node then leads the
+  replicated buckets from its copy (writes commit at once, linearizable
+  reads are served) and starts the pair's apps it holds, singletons
+  included; both survive a restart. A site-1 node that comes back is
+  fenced by the epoch rules alone and stays `down`. `bulkhead dr` shows
+  `active: epoch N` (`DrInfo::active_epoch`); audit records
+  `dr_activate_asked` and `dr_activate`; `Runtime::dr_activate` and
+  `Runtime::dr_active` in `bulkhead-host`. Failback is DR4's second
+  part.
+
 - A failover pair across systems (ROADMAP FB5): `scripts/vm-pair.sh`
   runs node 1 on a Linux VM and node 2 on a FreeBSD VM, with the witness
   on the host and a serial line between the guests (each VM's second

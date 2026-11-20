@@ -125,6 +125,25 @@ enum FailoverCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum DrCommand {
+    /// Activate this DR node when site 1 is lost (ROADMAP DR4): the
+    /// witness, which this node must be, stops renewing and granting, waits
+    /// out the pair's lease, and makes this node primary at a new epoch;
+    /// it then serves the replicated buckets from its copy, taking writes,
+    /// and runs the pair's apps. Writes site 1 committed after the copy's
+    /// last entry are lost (`bulkhead dr` shows how far it trails). Refused
+    /// unless --site-1-down confirms that both site-1 nodes are down or
+    /// fenced and stay so: a site-1 pair that still hears itself goes on
+    /// running beside this node. Abandoned if a site-1 node reaches the
+    /// witness meanwhile.
+    Activate {
+        /// Both site-1 nodes are down or fenced, and stay so until failback.
+        #[arg(long)]
+        site_1_down: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ReleaseCommand {
     /// The last step of a release across an HA pair, once both nodes and
     /// the witness run the new build: from then on the pair writes what it
@@ -321,7 +340,10 @@ enum Command {
     },
     /// Show this node's disaster-recovery copy of its pair's replicated log
     /// (`[dr]`): where it stands and how far it trails.
-    Dr,
+    Dr {
+        #[command(subcommand)]
+        action: Option<DrCommand>,
+    },
     /// Show the protocol versions this node speaks, the version each
     /// connected member agreed on, and the pair's version for what is kept.
     Release {
@@ -854,7 +876,10 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
             action: Some(FailoverCommand::Switchover),
             ..
         } => done(json, client.switchover().await),
-        Command::Dr => print(json, &client.dr().await?, format::dr),
+        Command::Dr { action: None } => print(json, &client.dr().await?, format::dr),
+        Command::Dr {
+            action: Some(DrCommand::Activate { site_1_down }),
+        } => done(json, client.dr_activate(site_1_down).await),
         Command::Release { action: None } => print(json, &client.release().await?, format::release),
         Command::Release {
             action: Some(ReleaseCommand::Finalize),

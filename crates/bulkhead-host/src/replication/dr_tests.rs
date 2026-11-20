@@ -309,3 +309,73 @@ fn answer____from_a_node_not_of_the_pair____ignored() {
     assert!(out.is_empty());
     assert_eq!(dr.log.commit(), 0);
 }
+
+// --------------------------------------------- activation (DR4)
+
+#[test]
+fn write____not_leading____unavailable_and_nothing_written() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+
+    let (answer, out) = dr.write("points".into(), None, Op::Set("k".into(), b"v".to_vec()));
+
+    assert_eq!(answer, Err(Refusal::Unavailable));
+    assert!(out.is_empty());
+    assert_eq!(dr.log.last(), 0);
+}
+
+#[test]
+fn lead____after_the_copy____noop_of_the_new_epoch_then_writes_commit_at_once() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    let mut nodes = [Node::new(log(3, 3), false), Node::new(log(3, 3), true)];
+    let effects = dr.tick(now).unwrap();
+    exchange(&mut dr, &mut nodes, effects, now);
+
+    dr.lead(7).unwrap();
+    let (answer, out) = dr.write("points".into(), None, Op::Set("new".into(), b"v".to_vec()));
+
+    assert!(answer.is_ok(), "{answer:?}");
+    assert!(matches!(&out[..], [DrEffect::Notify { bucket, .. }] if bucket == "points"));
+    assert_eq!(dr.log.commit(), 5);
+    assert_eq!(dr.log.epoch_at(4), Some(7));
+    assert_eq!(keys(&dr.log).len(), 4);
+    assert_eq!(dr.status(now).leading, Some(7));
+    assert_eq!(dr.lag(now + Duration::from_secs(600)), Duration::ZERO);
+}
+
+#[test]
+fn lead____again_after_a_restart____no_second_noop() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.lead(7).unwrap();
+
+    dr.lead(7).unwrap();
+
+    assert_eq!(dr.log.last(), 1);
+}
+
+#[test]
+fn leading____the_pair_answers_and_ticks____nothing_taken_or_asked() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.lead(7).unwrap();
+
+    let ticked = dr.tick(now + Duration::from_secs(5)).unwrap();
+    let answered = dr
+        .answer(
+            1,
+            DrMsg::Entries {
+                standby: false,
+                commit: 9,
+                after: 1,
+                entries: vec![set(1, "stale")],
+            },
+            now,
+        )
+        .unwrap();
+
+    assert!(ticked.is_empty());
+    assert!(answered.is_empty());
+    assert_eq!(dr.log.last(), 1);
+}

@@ -337,3 +337,132 @@ async fn Witness____released_then_resumed____the_grant_clears_the_release() {
         "{partner:?}"
     );
 }
+
+// ------------------------------------------------- DR activation (DR4)
+
+fn renew(witness: &mut Witness, from: u32, epoch: u64) -> Option<FailoverMsg> {
+    answer(witness, from, FailoverMsg::Renew { seq: 9, epoch })
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____fenced____waits_out_the_last_renewal_and_answers_nothing_granted() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(None));
+    assert_eq!(
+        renew(&mut witness, 1, 1),
+        Some(FailoverMsg::LeaseOk { seq: 9 })
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+
+    let gone = witness.fence(Instant::now()).unwrap();
+
+    // Lease (3 s) and margin (0.5 s) from the renewal, a second ago.
+    assert_eq!(gone - Instant::now(), Duration::from_millis(2_500));
+    assert_eq!(witness.fence(Instant::now()), Err(ActivateRefused::Fencing));
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____fenced_never_renewed____gone_now() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(None));
+
+    let gone = witness.fence(Instant::now()).unwrap();
+
+    assert_eq!(gone, Instant::now());
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____restarted_then_fenced____waits_a_lease_from_the_restart() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(Some((4, 1))));
+
+    let gone = witness.fence(Instant::now()).unwrap();
+
+    assert_eq!(gone - Instant::now(), Duration::from_millis(3_500));
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____activated____new_epoch_and_the_pair_is_stale() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(None));
+    witness.fence(Instant::now()).unwrap();
+
+    let grant = witness.activate(3).unwrap();
+    witness.apply(grant);
+
+    assert_eq!((witness.epoch, witness.promoted), (2, 3));
+    assert!(witness.activated());
+    assert_eq!(
+        renew(&mut witness, 1, 1),
+        Some(FailoverMsg::Fenced { epoch: 2 })
+    );
+    assert_eq!(
+        answer(
+            &mut witness,
+            1,
+            FailoverMsg::Request {
+                seq: 1,
+                resume: true,
+                epoch: 1,
+                confirmed_ago_ms: 60_000
+            }
+        ),
+        Some(FailoverMsg::Refused { epoch: 2 })
+    );
+    tokio::time::advance(Duration::from_secs(60)).await;
+    assert_eq!(
+        request(&mut witness),
+        Some(FailoverMsg::Refused { epoch: 2 })
+    );
+    assert_eq!(
+        witness.fence(Instant::now()),
+        Err(ActivateRefused::Active(2))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____a_pair_node_heard_while_fenced____refused_then_abandoned() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(None));
+    witness.fence(Instant::now()).unwrap();
+
+    let renewed = renew(&mut witness, 1, 1);
+    let requested = request(&mut witness);
+    let activated = witness.activate(3);
+
+    assert_eq!(renewed, Some(FailoverMsg::Fenced { epoch: 1 }));
+    assert_eq!(requested, Some(FailoverMsg::Refused { epoch: 1 }));
+    assert_eq!(activated, Err(ActivateRefused::Heard(2)));
+    // Fencing ends with it: the pair is answered as before.
+    assert_eq!(
+        renew(&mut witness, 1, 1),
+        Some(FailoverMsg::LeaseOk { seq: 9 })
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____activation_not_kept____fencing_ends() {
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let mut witness = Witness::start(config(None));
+    witness.fence(Instant::now()).unwrap();
+    let _grant = witness.activate(3).unwrap();
+
+    witness.abandon();
+
+    assert_eq!((witness.epoch, witness.promoted), (1, 1));
+    assert_eq!(
+        renew(&mut witness, 1, 1),
+        Some(FailoverMsg::LeaseOk { seq: 9 })
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____resumed_activated____stays_active() {
+    let mut witness = Witness::start(config(Some((5, 3))));
+
+    assert!(witness.activated());
+    assert_eq!(
+        renew(&mut witness, 2, 4),
+        Some(FailoverMsg::Fenced { epoch: 5 })
+    );
+}

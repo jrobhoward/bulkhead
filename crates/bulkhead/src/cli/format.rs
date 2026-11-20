@@ -365,6 +365,19 @@ pub(crate) fn failover(f: &bulkhead::api::FailoverInfo) -> String {
 
 /// `bulkhead dr`: a DR node's copy of its pair's log.
 pub(crate) fn dr(d: &bulkhead::api::DrInfo) -> String {
+    if let Some(epoch) = d.active_epoch {
+        let mut out = format!(
+            "active:     epoch {epoch}, leading from this copy (site 1 fenced); pair {} and {}\ncopy:       commit {}, log {} KiB",
+            d.pair[0],
+            d.pair[1],
+            d.commit,
+            d.log_bytes.div_ceil(1024),
+        );
+        if let Some(h) = &d.deploys {
+            out.push_str(&dr_deploys(h));
+        }
+        return out;
+    }
     let mut out = format!(
         "pair:       {} and {}, pulling from {}\ncopy:       commit {}, log {} KiB\nlag:        {} (target {})",
         d.pair[0],

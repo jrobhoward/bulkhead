@@ -60,6 +60,7 @@ mod node;
 mod witness;
 
 use node::Node;
+pub use witness::ActivateRefused;
 use witness::{Decision, Grant, Record, Witness};
 
 use crate::error::HostError;
@@ -892,6 +893,99 @@ impl Runtime {
         *slot = Some(Witness::start(cfg));
         Ok(())
     }
+}
+
+impl Runtime {
+    /// Activate this node, the pair's witness and its disaster-recovery
+    /// node, once an operator has confirmed that site 1 is down or fenced
+    /// (ROADMAP DR4, spike S38's operator fencing): the witness renews and
+    /// grants nothing, waits out the pair's lease as it knows it, then
+    /// grants this node a new epoch, kept on disk; the DR copy then leads
+    /// the replicated log from what it holds. The new epoch.
+    ///
+    /// It runs to the end even if the caller stops waiting, so the witness
+    /// never stays fenced.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivateRefused`]: this node is not both the witness and the DR
+    /// node, is active already or fencing, a pair node was heard while it
+    /// fenced, or the new epoch could not be kept.
+    pub async fn dr_activate(&self) -> Result<u64, ActivateRefused> {
+        let rt = self.inner().clone();
+        let task = tokio::spawn(async move {
+            if rt.services.keyvalue().dr().is_none() {
+                return Err(ActivateRefused::NotHere(
+                    "this node keeps no DR copy of the pair ([dr])".into(),
+                ));
+            }
+            let gone = {
+                let mut witness = rt
+                    .failover
+                    .witness
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let w = witness.as_mut().ok_or_else(|| {
+                    ActivateRefused::NotHere(
+                        "this node is not the pair's witness; only a DR node that is also the \
+                         witness can be activated (ROADMAP DR4b)"
+                            .into(),
+                    )
+                })?;
+                w.fence(Instant::now())?
+            };
+            tracing::warn!(
+                wait_ms = u64::try_from(gone.saturating_duration_since(Instant::now()).as_millis())
+                    .unwrap_or(u64::MAX),
+                "DR activation: the witness is fenced, waiting out the pair's lease"
+            );
+            tokio::time::sleep_until(gone).await;
+            let grant = {
+                let mut witness = rt
+                    .failover
+                    .witness
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                witness
+                    .as_mut()
+                    .ok_or(ActivateRefused::Fencing)?
+                    .activate(rt.node())?
+            };
+            if rt.failover.keep(Change::Grant(grant)).is_none() {
+                return Err(ActivateRefused::NotKept("see the node's log".into()));
+            }
+            crate::replication::dr_lead(&rt, grant.epoch)
+                .await
+                .map_err(ActivateRefused::NotKept)?;
+            tracing::warn!(
+                epoch = grant.epoch,
+                "DR activation: this node leads at site 2"
+            );
+            Ok(grant.epoch)
+        });
+        task.await.unwrap_or(Err(ActivateRefused::Fencing))
+    }
+
+    /// The epoch this node, the witness, was activated at as the DR node
+    /// (DR4), if it is active.
+    #[must_use]
+    pub fn dr_active(&self) -> Option<u64> {
+        activated_here(self.inner())
+    }
+}
+
+/// The epoch the witness on this node promoted this node at, if it did
+/// (DR4).
+pub(crate) fn activated_here(rt: &RuntimeInner) -> Option<u64> {
+    let witness = rt
+        .failover
+        .witness
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    witness
+        .as_ref()
+        .filter(|w| w.activated() && w.promoted == rt.node())
+        .map(|w| w.epoch)
 }
 
 /// Set or clear the witness's record that this node's partner is out of

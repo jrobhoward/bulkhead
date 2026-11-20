@@ -81,8 +81,9 @@ impl Node {
     /// respects dependencies).
     pub(super) async fn restore(&self) {
         let _change = self.change.lock().await;
-        if self.config.dr.is_some() {
-            // The pair's, held until this node is activated (ROADMAP DR3).
+        if self.config.dr.is_some() && self.rt.dr_active().is_none() {
+            // The pair's, held until this node is activated (ROADMAP DR3,
+            // DR4).
             let held = self.st().desired.apps.len();
             if held > 0 {
                 tracing::info!(

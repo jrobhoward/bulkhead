@@ -16,6 +16,16 @@
 //! promote the partner, which may lack committed writes. A promotion
 //! clears it: the new primary had every committed write, and starts
 //! committing only with its partner's acknowledgement.
+//!
+//! A witness that is also the disaster-recovery node (ROADMAP DR4, spike
+//! S38's operator fencing) can be fenced: from then on it renews nothing
+//! and grants nothing ([`Witness::fence`]). Once the pair's lease has run
+//! out as it knows it, it grants itself a new epoch ([`Witness::activate`]),
+//! after which the pair's nodes are stale by the rules above alone: a
+//! renewal at an older epoch is fenced, and no request is granted, since a
+//! resume is not from the promoted node and a promotion is at no higher
+//! epoch. Fencing is in memory only: a restart ends it, and the operator
+//! asks again.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -40,6 +50,32 @@ pub(super) struct Witness {
     pub(super) released: bool,
     /// A change decided and being kept on disk.
     keeping: bool,
+    /// Fenced for an activation (DR4), and a pair node heard since, if any.
+    pub(super) fencing: Option<Option<u32>>,
+}
+
+/// Why the witness will not activate the DR node.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ActivateRefused {
+    /// The DR node is promoted already.
+    #[error("the DR node is active already, at epoch {0}")]
+    Active(u64),
+    /// Another activation is fencing.
+    #[error("an activation is under way")]
+    Fencing,
+    /// A pair node reached the witness while it fenced: site 1 is not down.
+    #[error(
+        "node {0} reached the witness while it fenced, so site 1 is not down; \
+         the activation was abandoned (fence that node, then ask again)"
+    )]
+    Heard(u32),
+    /// This node is not the witness, or not the DR node.
+    #[error("{0}")]
+    NotHere(String),
+    /// The new epoch could not be kept on disk.
+    #[error("the witness's state was not kept: {0}")]
+    NotKept(String),
 }
 
 /// What the witness does with a message.
@@ -111,6 +147,59 @@ impl Witness {
             renewed,
             released: false,
             keeping: false,
+            fencing: None,
+        }
+    }
+
+    /// Whether a node outside the pair is promoted: the DR node, activated
+    /// (DR4).
+    pub(super) fn activated(&self) -> bool {
+        !self.cfg.pair.contains(&self.promoted)
+    }
+
+    /// Start fencing for an activation: from now on every renewal is
+    /// answered `Fenced` and every request `Refused`. When the pair's lease
+    /// is gone as this witness knows it: its last renewal of either node
+    /// (or its restart) plus lease and margin.
+    pub(super) fn fence(&mut self, now: Instant) -> Result<Instant, ActivateRefused> {
+        if self.activated() {
+            return Err(ActivateRefused::Active(self.epoch));
+        }
+        if self.fencing.is_some() {
+            return Err(ActivateRefused::Fencing);
+        }
+        self.fencing = Some(None);
+        let hold = self.cfg.lease + self.cfg.margin;
+        Ok(self
+            .cfg
+            .pair
+            .iter()
+            .filter_map(|n| self.renewed.get(n))
+            .map(|r| *r + hold)
+            .max()
+            .map_or(now, |gone| gone.max(now)))
+    }
+
+    /// The grant that activates node `dr` at a new epoch, once fencing has
+    /// heard no pair node; keep it on disk, then [`Witness::apply`]. A pair
+    /// node heard while fencing abandons the activation.
+    pub(super) fn activate(&mut self, dr: u32) -> Result<Grant, ActivateRefused> {
+        match self.fencing {
+            Some(None) if !self.keeping => {
+                self.keeping = true;
+                Ok(Grant {
+                    to: dr,
+                    seq: 0,
+                    epoch: self.epoch + 1,
+                    promoted: dr,
+                    outdated: false,
+                })
+            }
+            Some(Some(node)) => {
+                self.fencing = None;
+                Err(ActivateRefused::Heard(node))
+            }
+            _ => Err(ActivateRefused::Fencing),
         }
     }
 
@@ -130,6 +219,20 @@ impl Witness {
         let now = Instant::now();
         let hold = self.cfg.lease + self.cfg.margin;
         let answer = |msg| Some(Decision::Answer(msg));
+        if let Some(heard) = &mut self.fencing {
+            // Fencing for an activation (DR4): nothing renewed or granted.
+            return match msg {
+                FailoverMsg::Renew { .. } | FailoverMsg::Record { .. } => {
+                    *heard = Some(from);
+                    answer(FailoverMsg::Fenced { epoch: self.epoch })
+                }
+                FailoverMsg::Request { .. } => {
+                    *heard = Some(from);
+                    answer(FailoverMsg::Refused { epoch: self.epoch })
+                }
+                _ => None,
+            };
+        }
         match msg {
             FailoverMsg::Renew { seq, epoch } => {
                 if epoch == self.epoch && from == self.promoted {
@@ -229,6 +332,7 @@ impl Witness {
     pub(super) fn apply(&mut self, grant: Grant) -> FailoverMsg {
         self.keeping = false;
         self.released = false;
+        self.fencing = None;
         self.epoch = grant.epoch;
         self.promoted = grant.promoted;
         self.outdated = grant.outdated;
@@ -253,9 +357,11 @@ impl Witness {
         }
     }
 
-    /// Drop a change that could not be kept; the requester asks again.
+    /// Drop a change that could not be kept; the requester asks again (an
+    /// activation is abandoned).
     pub(super) fn abandon(&mut self) {
         self.keeping = false;
+        self.fencing = None;
     }
 }
 

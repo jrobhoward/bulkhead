@@ -288,6 +288,67 @@ impl Node {
             snapshotting: s.snapshotting,
             stopped: s.stopped,
             deploys: Some(self.held_info()),
+            active_epoch: self.rt.dr_active(),
+        })
+    }
+
+    /// Activate this node, the DR node and the pair's witness (ROADMAP
+    /// DR4), once the operator confirms that site 1 is down or fenced:
+    /// the witness waits out the pair's lease, grants this node a new
+    /// epoch, the copy leads from what it holds, and the pair's apps start
+    /// here.
+    ///
+    /// # Errors
+    ///
+    /// [`NodeError::NotFound`] without `[dr]`; [`NodeError::Refused`]
+    /// without the confirmation, or on a DR node that is not the witness;
+    /// [`NodeError::Conflict`] when active already, fencing, or a pair node
+    /// was heard while fencing.
+    pub async fn dr_activate(&self, site_1_down: bool) -> Result<Done, NodeError> {
+        use bulkhead_host::failover::ActivateRefused;
+        let Some(status) = self.config.dr.as_ref().and(self.rt.dr_status()) else {
+            return Err(NodeError::NotFound(
+                "this node has no [dr] in its config".into(),
+            ));
+        };
+        if self.config.witness.is_none() {
+            return Err(NodeError::Refused(
+                "only a DR node that is also the pair's witness can be activated (ROADMAP DR4b)"
+                    .into(),
+            ));
+        }
+        if !site_1_down {
+            return Err(NodeError::Refused(format!(
+                "activation needs your confirmation that site 1 is down or fenced and stays so \
+                 (--site-1-down): a site-1 pair that still hears itself would go on running its \
+                 singletons and writes beside this node. This copy holds entry {}, {} s behind \
+                 the pair; writes site 1 committed after it are lost",
+                status.commit,
+                status.lag.as_secs(),
+            )));
+        }
+        self.audit.record(
+            "dr_activate_asked",
+            json!({ "commit": status.commit, "lag_ms": millis(status.lag) }),
+        );
+        let epoch = self.rt.dr_activate().await.map_err(|e| match e {
+            ActivateRefused::NotHere(why) => NodeError::Refused(why),
+            ActivateRefused::NotKept(why) => NodeError::Internal(why),
+            other => NodeError::Conflict(other.to_string()),
+        })?;
+        self.audit.record(
+            "dr_activate",
+            json!({ "epoch": epoch, "commit": status.commit, "lag_ms": millis(status.lag) }),
+        );
+        self.restore().await;
+        let started = self.apps.names().len();
+        Ok(Done {
+            message: format!(
+                "activated at epoch {epoch}: this node leads from entry {} (writes site 1 \
+                 committed after it are lost) and runs {started} apps; site 1's nodes are fenced \
+                 until failback",
+                status.commit
+            ),
         })
     }
 

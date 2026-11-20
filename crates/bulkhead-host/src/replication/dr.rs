@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::core::merge;
-use super::log::{Log, Snapshot};
+use super::core::{Refusal, merge};
+use super::log::{Command, Entry, Log, Snapshot};
 use super::ship::DrMsg;
-use crate::services::keyvalue::storage::BucketDump;
+use crate::services::keyvalue::storage::{BucketDump, Op, Outcome};
 
 /// The standby is pulled from while its commit index is within this many
 /// entries of the best.
@@ -101,6 +101,9 @@ pub struct DrStatus {
     /// It stopped: the pair was finalized at a version newer than this
     /// build, or both pair nodes' logs differ from its copy.
     pub stopped: bool,
+    /// Activated (ROADMAP DR4): it leads the log at this epoch, takes
+    /// writes, and pulls nothing from the pair.
+    pub leading: Option<u64>,
 }
 
 /// The DR node's copy.
@@ -117,6 +120,8 @@ pub(crate) struct DrReplica {
     caught_up_at: Option<Instant>,
     warned: bool,
     stopped: bool,
+    /// Activated: the epoch it leads at.
+    leading: Option<u64>,
 }
 
 type Out = Result<Vec<DrEffect>, String>;
@@ -139,6 +144,7 @@ impl DrReplica {
             caught_up_at: None,
             warned: false,
             stopped: false,
+            leading: None,
         })
     }
 
@@ -156,11 +162,83 @@ impl DrReplica {
             lag: self.lag(now),
             snapshotting: self.receiving.is_some(),
             stopped: self.stopped,
+            leading: self.leading,
         }
     }
 
+    /// How long it has trailed the pair; nothing once it leads.
     pub(crate) fn lag(&self, now: Instant) -> Duration {
+        if self.leading.is_some() {
+            return Duration::ZERO;
+        }
         now.duration_since(self.behind_since())
+    }
+
+    /// Lead the log at `epoch` from what it holds (ROADMAP DR4): a snapshot
+    /// part way is dropped, the pair is no longer pulled from or heard,
+    /// and a first entry of the new epoch is committed (R4), unless the log
+    /// has one already (a restart).
+    pub(crate) fn lead(&mut self, epoch: u64) -> Result<(), String> {
+        self.receiving = None;
+        self.leading = Some(epoch);
+        if self.log.last_epoch() < epoch {
+            let next = self.log.last() + 1;
+            self.log.append(
+                next,
+                &[Entry {
+                    epoch,
+                    cmd: Command::Noop,
+                }],
+            )?;
+            self.log.commit_to(next)?;
+        }
+        Ok(())
+    }
+
+    /// A write to replicated bucket `bucket`, while it leads: appended at
+    /// its epoch and committed at once, there being no other copy to wait
+    /// for. Refused `Unavailable` unless it leads.
+    pub(crate) fn write(
+        &mut self,
+        bucket: String,
+        quota: Option<u64>,
+        op: Op,
+    ) -> (Result<Outcome, Refusal>, Vec<DrEffect>) {
+        let mut out = Vec::new();
+        let Some(epoch) = self.leading else {
+            return (Err(Refusal::Unavailable), out);
+        };
+        let next = self.log.last() + 1;
+        let entry = Entry {
+            epoch,
+            cmd: Command::Write { bucket, quota, op },
+        };
+        let committed = match self
+            .log
+            .append(next, &[entry])
+            .and_then(|()| self.log.commit_to(next))
+        {
+            Ok(c) => c,
+            Err(e) => return (Err(Refusal::Failed(e)), out),
+        };
+        let mut result = Err(Refusal::Unknown);
+        for c in committed {
+            result = match c.write {
+                None => continue,
+                Some((bucket, Ok(applied))) => {
+                    if let Some(revision) = applied.revision {
+                        out.push(DrEffect::Notify {
+                            bucket,
+                            changed: applied.changed,
+                            revision,
+                        });
+                    }
+                    Ok(applied.outcome)
+                }
+                Some((_, Err(e))) => Err(Refusal::Failed(e)),
+            };
+        }
+        (result, out)
     }
 
     /// When it last held everything the pair had committed (when it
@@ -187,6 +265,9 @@ impl DrReplica {
             .compact_target(now, self.cfg.log_bytes, self.cfg.log_age);
         if to > self.log.base() {
             self.log.compact(to)?;
+        }
+        if self.leading.is_some() {
+            return Ok(out);
         }
         let timeout = self.timeout();
         if let Some(r) = &mut self.receiving {
@@ -310,7 +391,8 @@ impl DrReplica {
         let Some(i) = self.cfg.pair.iter().position(|&n| n == from) else {
             return Ok(out);
         };
-        if self.stopped {
+        if self.stopped || self.leading.is_some() {
+            // Once it leads, the pair's nodes are stale (DR4).
             return Ok(out);
         }
         match msg {

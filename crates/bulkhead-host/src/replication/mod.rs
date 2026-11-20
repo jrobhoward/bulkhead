@@ -174,7 +174,7 @@ pub(crate) fn deliver_dr(rt: &RuntimeInner, from: u32, body: &[u8]) {
         },
         Ok(msg) => {
             if let Some(d) = to_dr {
-                let _ = d.tx.send((from, msg));
+                let _ = d.tx.send(DrInput::Pair(from, msg));
             } else if let Some(h) = to_pair {
                 let _ = h.tx.send(Input::Dr(msg));
             }
@@ -258,7 +258,11 @@ impl Runtime {
         let kv = self.inner().services.keyvalue();
         let (status, since) = *kv.dr()?.status.borrow();
         Some(DrStatus {
-            lag: Instant::now().duration_since(since),
+            lag: if status.leading.is_some() {
+                Duration::ZERO
+            } else {
+                Instant::now().duration_since(since)
+            },
             ..status
         })
     }
@@ -373,9 +377,63 @@ impl DrConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct DrHandle {
     pair: [u32; 2],
-    tx: mpsc::UnboundedSender<(u32, DrMsg)>,
+    tx: mpsc::UnboundedSender<DrInput>,
     /// Its status, its lag left out, and since when it trails.
     status: watch::Receiver<(DrStatus, Instant)>,
+}
+
+/// What the DR node's task is fed.
+#[derive(Debug)]
+enum DrInput {
+    /// A message from a pair node.
+    Pair(u32, DrMsg),
+    /// Lead the log at this epoch (DR4).
+    Lead {
+        epoch: u64,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// A write to a replicated bucket, once it leads.
+    Write {
+        bucket: String,
+        quota: Option<u64>,
+        op: Op,
+        reply: oneshot::Sender<Answer>,
+    },
+}
+
+impl DrHandle {
+    /// Whether the copy leads (DR4): writes and linearizable reads are its
+    /// own then.
+    pub(crate) fn leading(&self) -> bool {
+        self.status.borrow().0.leading.is_some()
+    }
+
+    /// Write to replicated bucket `bucket` on the activated DR node.
+    pub(crate) async fn write(&self, bucket: &str, quota: Option<u64>, op: Op) -> Answer {
+        let (reply, answer) = oneshot::channel();
+        let input = DrInput::Write {
+            bucket: bucket.to_string(),
+            quota,
+            op,
+            reply,
+        };
+        if self.tx.send(input).is_err() {
+            return Err(Refusal::Unavailable);
+        }
+        answer.await.unwrap_or(Err(Refusal::Unknown))
+    }
+}
+
+/// Have the DR copy lead the log at `epoch` (DR4), and wait until it does.
+pub(crate) async fn dr_lead(rt: &RuntimeInner, epoch: u64) -> Result<(), String> {
+    let kv = rt.services.keyvalue();
+    let dr = kv.dr().ok_or("this node keeps no DR copy")?;
+    let (reply, done) = oneshot::channel();
+    dr.tx
+        .send(DrInput::Lead { epoch, reply })
+        .map_err(|_| "the DR copy's task has stopped".to_string())?;
+    done.await
+        .unwrap_or_else(|_| Err("the DR copy's task has stopped".into()))
 }
 
 fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
@@ -393,7 +451,12 @@ fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
         log_age: cfg.log_age,
     };
     let now = Instant::now();
-    let replica = DrReplica::new(tuning, log, now).map_err(HostError::Storage)?;
+    let mut replica = DrReplica::new(tuning, log, now).map_err(HostError::Storage)?;
+    // Activated before it stopped (DR4): the witness promoted this node.
+    if let Some(epoch) = activated_epoch(rt) {
+        replica.lead(epoch).map_err(HostError::Storage)?;
+        tracing::warn!(epoch, "the DR copy leads: this node was activated");
+    }
     let (tx, rx) = mpsc::unbounded_channel();
     let (status, status_rx) = watch::channel((replica.status(now), replica.behind_since()));
     kv.set_dr(DrHandle {
@@ -414,6 +477,12 @@ fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
     Ok(())
 }
 
+/// The epoch the witness on this node promoted this node at, if it did:
+/// the DR node, activated (DR4).
+fn activated_epoch(rt: &RuntimeInner) -> Option<u64> {
+    crate::failover::activated_here(rt)
+}
+
 /// The DR node's task: the copy fed ticks and the pair's answers.
 struct DrTask {
     rt: Weak<RuntimeInner>,
@@ -423,7 +492,7 @@ struct DrTask {
 }
 
 impl DrTask {
-    async fn run(mut self, mut rx: mpsc::UnboundedReceiver<(u32, DrMsg)>, tick: Duration) {
+    async fn run(mut self, mut rx: mpsc::UnboundedReceiver<DrInput>, tick: Duration) {
         let mut ticker = tokio::time::interval(tick);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -447,8 +516,25 @@ impl DrTask {
             let effects = blocking(|| {
                 let now = Instant::now();
                 let mut out = Vec::new();
-                for (from, msg) in inputs {
-                    absorb_dr(self.replica.answer(from, msg, now), &mut out);
+                for input in inputs {
+                    match input {
+                        DrInput::Pair(from, msg) => {
+                            absorb_dr(self.replica.answer(from, msg, now), &mut out);
+                        }
+                        DrInput::Lead { epoch, reply } => {
+                            let _ = reply.send(self.replica.lead(epoch));
+                        }
+                        DrInput::Write {
+                            bucket,
+                            quota,
+                            op,
+                            reply,
+                        } => {
+                            let (answer, effects) = self.replica.write(bucket, quota, op);
+                            out.extend(effects);
+                            let _ = reply.send(answer);
+                        }
+                    }
                 }
                 if ticked {
                     absorb_dr(self.replica.tick(now), &mut out);

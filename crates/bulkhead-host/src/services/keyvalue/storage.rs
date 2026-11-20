@@ -1129,6 +1129,12 @@ impl KvStore {
     /// replication, on every node; a read is local.
     pub(crate) async fn run(&self, bucket: &BucketHandle, op: Op) -> Result<Outcome, StoreError> {
         if bucket.space == SPACE && !op.read_only() {
+            if self.replication().is_none()
+                && let Some(dr) = self.dr()
+            {
+                // The DR node: its own once activated (DR4), else refused.
+                return Ok(dr.write(&bucket.name, bucket.quota, op).await?);
+            }
             let handle = self
                 .replication()
                 .ok_or_else(|| StoreError::Unavailable("replication is not running".into()))?;
@@ -1152,6 +1158,18 @@ impl KvStore {
     ) -> Result<Outcome, StoreError> {
         if bucket.space != SPACE {
             return self.run(bucket, op).await;
+        }
+        if self.replication().is_none()
+            && let Some(dr) = self.dr()
+        {
+            // The activated DR node holds the only copy that takes writes,
+            // committed as they are taken (DR4).
+            if dr.leading() {
+                return self.run(bucket, op).await;
+            }
+            return Err(StoreError::Unavailable(
+                "this node keeps a DR copy; it serves linearizable reads once activated".into(),
+            ));
         }
         let handle = self
             .replication()

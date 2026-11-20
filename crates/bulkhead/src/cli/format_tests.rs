@@ -252,6 +252,7 @@ fn dr____past_its_target_and_snapshotting____says_both() {
         snapshotting: true,
         stopped: false,
         deploys: None,
+        active_epoch: None,
     };
 
     let out = dr(&info);
@@ -262,6 +263,31 @@ fn dr____past_its_target_and_snapshotting____says_both() {
          copy:       commit 812, log 4 KiB\n\
          lag:        400.0 s (target 300.0 s), past its target\n\
          snapshot:   catching up from a snapshot of the pair's buckets"
+    );
+}
+
+#[test]
+fn dr____active____says_so_and_no_lag() {
+    let info = bulkhead::api::DrInfo {
+        pair: [1, 2],
+        source: 2,
+        commit: 812,
+        base: 700,
+        log_bytes: 4096,
+        lag_ms: 400_000,
+        rpo_target_ms: 300_000,
+        snapshotting: false,
+        stopped: false,
+        deploys: None,
+        active_epoch: Some(9),
+    };
+
+    let out = dr(&info);
+
+    assert_eq!(
+        out,
+        "active:     epoch 9, leading from this copy (site 1 fenced); pair 1 and 2\n\
+         copy:       commit 812, log 4 KiB"
     );
 }
 
@@ -390,6 +416,7 @@ fn dr____deploys_not_ready_and_grants_differ____a_line_each() {
             grants_differ: [("shop".to_string(), "not granted here: timers".to_string())].into(),
             refused: None,
         }),
+        active_epoch: None,
     };
 
     let out = dr(&info);
