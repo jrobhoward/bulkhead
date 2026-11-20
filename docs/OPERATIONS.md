@@ -194,9 +194,23 @@ bulkhead dr activate --site-1-down
 - **`bulkhead dr`** shows `active: epoch N`. The audit records are `dr_activate_asked` and `dr_activate`.
 - **While active,** deploys on this node are its own. The pair's deployments are no longer followed.
 - **Survives a restart:** the activation is in the witness's kept state, and the apps start again.
-- **A site-1 node that comes back** is fenced by the witness: an older epoch, never granted. It stays `down` and runs no singletons.
+- **A site-1 node that comes back** is fenced by the witness, which tells it the DR node is active. It stays `down`, runs no singletons, and reseeds (below).
 
-Failback is ROADMAP DR4's second part; until it lands, keep site 1's nodes stopped after an activation.
+**Failing back**, once site 1 is repaired:
+
+1. Start both site-1 nodes as they were configured. Each asks the witness, is told the DR node is active, and marks its replicated copy stale on disk. It then reseeds: it replaces its replicated buckets and log with a full snapshot of the DR node's, and pulls the DR node's entries after it. Whatever it committed after the DR node's point is dropped, its commit index included.
+   - While stale it is `down`. It runs no singletons, and its `cluster` buckets refuse reads and writes (`unavailable`).
+   - The mark outlasts a restart, which reseeds again from the start.
+   - `bulkhead failover` on it shows `stale:`, then `caught up` once it holds everything the DR node had committed.
+   - `bulkhead dr` on the DR node shows how far each has come (`site 1:`).
+2. On the DR node, run `bulkhead dr failback --to 1` (the node to make primary; `--wait-s`, 60 by default).
+   - It stops the apps there, so nothing more is written, and takes no more writes.
+   - It waits until both site-1 nodes hold its last entry.
+   - The witness then makes `--to` primary at a new epoch, kept on disk. That node resumes when it next asks, a lease or so later, and the other rejoins it as standby.
+   - The DR node holds the pair's apps again and pulls its copy from the pair. Audit records: `dr_failback_asked` and `dr_failback`.
+3. If a site-1 node has not caught up in time, the failback is refused, naming the node and how far it is. The DR node's apps start again and it takes writes as before; ask again later.
+
+Both site-1 nodes must reseed: a node that never did would hold writes the DR node does not, and could not join the pair. A failback carries the data, not the deployments. Site 1's nodes run the deployments they had; a deploy made on the active DR node is not shipped back, and the DR node takes the pair's deployments again once it follows the primary.
 
 ## Misbehaving apps and quarantine
 

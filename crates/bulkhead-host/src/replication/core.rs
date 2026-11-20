@@ -277,6 +277,12 @@ impl Replica {
         &self.log
     }
 
+    /// The log, to reseed it from the DR node while this replica is idle
+    /// (DR4's failback).
+    pub(crate) fn log_mut(&mut self) -> &mut Log {
+        &mut self.log
+    }
+
     /// Whether this replica is the primary (it takes writes, or refuses
     /// them while it has no lease); otherwise the task forwards them.
     pub(crate) fn is_primary(&self) -> bool {

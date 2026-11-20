@@ -204,6 +204,8 @@ fn failover____primary_with_cluster_buckets____replication_line() {
         partner_matched: Some(30),
         alone: true,
         dr_lag_ms: None,
+        stale: None,
+        reseeded: false,
     });
 
     let out = failover(&info);
@@ -229,6 +231,8 @@ fn failover____primary_with_a_dr_node____dr_line() {
         partner_matched: Some(40),
         alone: false,
         dr_lag_ms: Some(1_250),
+        stale: None,
+        reseeded: false,
     });
 
     let out = failover(&info);
@@ -253,6 +257,7 @@ fn dr____past_its_target_and_snapshotting____says_both() {
         stopped: false,
         deploys: None,
         active_epoch: None,
+        reseeded: None,
     };
 
     let out = dr(&info);
@@ -280,6 +285,7 @@ fn dr____active____says_so_and_no_lag() {
         stopped: false,
         deploys: None,
         active_epoch: Some(9),
+        reseeded: Some([Some(812), None]),
     };
 
     let out = dr(&info);
@@ -287,7 +293,8 @@ fn dr____active____says_so_and_no_lag() {
     assert_eq!(
         out,
         "active:     epoch 9, leading from this copy (site 1 fenced); pair 1 and 2\n\
-         copy:       commit 812, log 4 KiB"
+         copy:       commit 812, log 4 KiB\n\
+         site 1:     node 1 at 812, node 2 no snapshot yet (of 812; `dr failback` once both are)"
     );
 }
 
@@ -417,6 +424,7 @@ fn dr____deploys_not_ready_and_grants_differ____a_line_each() {
             refused: None,
         }),
         active_epoch: None,
+        reseeded: None,
     };
 
     let out = dr(&info);

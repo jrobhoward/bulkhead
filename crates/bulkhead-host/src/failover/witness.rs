@@ -219,6 +219,19 @@ impl Witness {
         let now = Instant::now();
         let hold = self.cfg.lease + self.cfg.margin;
         let answer = |msg| Some(Decision::Answer(msg));
+        if self.activated() {
+            // The DR node is active (DR4): the pair's nodes are told so,
+            // and nothing is renewed or granted.
+            return match msg {
+                FailoverMsg::Renew { .. }
+                | FailoverMsg::Record { .. }
+                | FailoverMsg::Request { .. } => answer(FailoverMsg::DrActive {
+                    epoch: self.epoch,
+                    dr: self.promoted,
+                }),
+                _ => None,
+            };
+        }
         if let Some(heard) = &mut self.fencing {
             // Fencing for an activation (DR4): nothing renewed or granted.
             return match msg {
@@ -326,6 +339,31 @@ impl Witness {
             }
             _ => None,
         }
+    }
+
+    /// The grant that hands back from the active DR node to pair node `to`
+    /// at a new epoch (DR4's failback), its partner not recorded out of
+    /// date: both have reseeded from the DR node, which checked it; keep
+    /// it on disk, then [`Witness::apply`]. `to` then resumes when it next
+    /// asks.
+    pub(super) fn hand_back(&mut self, to: u32) -> Result<Grant, ActivateRefused> {
+        if !self.activated() {
+            return Err(ActivateRefused::NotHere("the DR node is not active".into()));
+        }
+        if !self.cfg.pair.contains(&to) || self.keeping {
+            return Err(ActivateRefused::NotHere(format!(
+                "node {to} is not of the pair {:?}",
+                self.cfg.pair
+            )));
+        }
+        self.keeping = true;
+        Ok(Grant {
+            to,
+            seq: 0,
+            epoch: self.epoch + 1,
+            promoted: to,
+            outdated: false,
+        })
     }
 
     /// Apply `grant`, now kept on disk, and return the answer to send.

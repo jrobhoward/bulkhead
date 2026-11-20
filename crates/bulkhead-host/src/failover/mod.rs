@@ -230,6 +230,10 @@ pub struct Leadership {
     /// cleared the partner is not promoted, and a planned switchover is
     /// refused.
     pub partner_outdated: bool,
+    /// `Down` while the witness says the disaster-recovery node `dr` is
+    /// active (ROADMAP DR4): this node's replicated copy is stale, and it
+    /// reseeds from that node.
+    pub dr_active: Option<u32>,
 }
 
 /// Messages between a node of the pair and the witness.
@@ -311,6 +315,15 @@ pub enum FailoverMsg {
     Release {
         /// The sender's epoch.
         epoch: u64,
+    },
+    /// The disaster-recovery node `dr` is active at `epoch` (ROADMAP DR4):
+    /// the answer to anything from a pair node meanwhile. Nothing is
+    /// renewed or granted; the pair node is stale and reseeds from `dr`.
+    DrActive {
+        /// The witness's epoch.
+        epoch: u64,
+        /// The node promoted, the DR node.
+        dr: u32,
     },
 }
 
@@ -811,6 +824,7 @@ impl Runtime {
             may_run: false,
             awaiting_confirmation: false,
             partner_outdated: false,
+            dr_active: None,
         };
         let (tx, leadership) = watch::channel(initial);
         if cfg.replication || rt.services.keyvalue().has_replicated() {
@@ -966,12 +980,120 @@ impl Runtime {
         task.await.unwrap_or(Err(ActivateRefused::Fencing))
     }
 
+    /// Hand back from this node, the active DR node and the pair's witness,
+    /// to pair node `to` (ROADMAP DR4's failback): the copy takes no more
+    /// writes, both pair nodes must reseed up to its last entry within
+    /// `wait`, then the witness promotes `to` at a new epoch, kept on disk,
+    /// which `to` takes when it next asks, its partner rejoining it as
+    /// standby; this node pulls from the pair again. Stop the apps first:
+    /// nothing may write meanwhile. The new epoch.
+    ///
+    /// # Errors
+    ///
+    /// [`FailbackRefused`]; on any but [`FailbackRefused::NotActive`] and
+    /// [`FailbackRefused::NotOfPair`] the copy takes writes again.
+    pub async fn dr_failback(&self, to: u32, wait: Duration) -> Result<u64, FailbackRefused> {
+        let rt = self.inner().clone();
+        let task = tokio::spawn(async move {
+            let pair = {
+                let witness = rt
+                    .failover
+                    .witness
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                match witness.as_ref() {
+                    Some(w) if w.activated() && w.promoted == rt.node() => w.cfg.pair,
+                    _ => return Err(FailbackRefused::NotActive),
+                }
+            };
+            if !pair.contains(&to) {
+                return Err(FailbackRefused::NotOfPair(to, pair));
+            }
+            let last = crate::replication::dr_freeze(&rt)
+                .await
+                .ok_or(FailbackRefused::NotActive)?;
+            let deadline = Instant::now() + wait;
+            loop {
+                let behind = rt.services.keyvalue().dr_reseeded().and_then(|r| {
+                    (0..2)
+                        .find(|&i| r[i] != Some(last))
+                        .map(|i| (pair[i], r[i]))
+                });
+                match behind {
+                    None => break,
+                    Some((node, at)) if Instant::now() >= deadline => {
+                        crate::replication::dr_release(&rt, false);
+                        return Err(FailbackRefused::NotCaughtUp { node, at, last });
+                    }
+                    Some(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+            let grant = {
+                let mut witness = rt
+                    .failover
+                    .witness
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                match witness.as_mut().map(|w| w.hand_back(to)) {
+                    Some(Ok(g)) => g,
+                    _ => {
+                        drop(witness);
+                        crate::replication::dr_release(&rt, false);
+                        return Err(FailbackRefused::NotActive);
+                    }
+                }
+            };
+            if rt.failover.keep(Change::Grant(grant)).is_none() {
+                crate::replication::dr_release(&rt, false);
+                return Err(FailbackRefused::NotKept("see the node's log".into()));
+            }
+            crate::replication::dr_release(&rt, true);
+            tracing::warn!(
+                to,
+                epoch = grant.epoch,
+                last,
+                "DR failback: handed back to site 1"
+            );
+            Ok(grant.epoch)
+        });
+        task.await.unwrap_or(Err(FailbackRefused::NotActive))
+    }
+
     /// The epoch this node, the witness, was activated at as the DR node
     /// (DR4), if it is active.
     #[must_use]
     pub fn dr_active(&self) -> Option<u64> {
         activated_here(self.inner())
     }
+}
+
+/// Why the active DR node does not hand back (ROADMAP DR4's failback).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum FailbackRefused {
+    /// This node is not the active DR node.
+    #[error("this node is not the active DR node")]
+    NotActive,
+    /// Not a node of the pair.
+    #[error("node {0} is not of the pair {1:?}")]
+    NotOfPair(u32, [u32; 2]),
+    /// A pair node has not reseeded up to the copy's last entry in time.
+    #[error(
+        "node {node} has not reseeded from this node yet (it holds {}, of {last}); \
+         start it, or wait and ask again; this node takes writes again meanwhile",
+        at.map_or_else(|| "nothing yet".to_string(), |a| format!("entry {a}"))
+    )]
+    NotCaughtUp {
+        /// The pair node behind.
+        node: u32,
+        /// The last entry it holds as this copy does, if any.
+        at: Option<u64>,
+        /// This copy's last entry.
+        last: u64,
+    },
+    /// The new epoch could not be kept on disk.
+    #[error("the witness's state was not kept: {0}")]
+    NotKept(String),
 }
 
 /// The epoch the witness on this node promoted this node at, if it did

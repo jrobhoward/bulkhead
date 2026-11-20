@@ -279,6 +279,14 @@ pub struct ReplicationInfo {
     /// every entry this node had committed.
     #[serde(default)]
     pub dr_lag_ms: Option<u64>,
+    /// Stale since the DR node was activated (ROADMAP DR4): reseeding from
+    /// that node, whose id this is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<u32>,
+    /// Stale and holding all the DR node had committed when it last
+    /// answered: ready for `bulkhead dr failback` there.
+    #[serde(default)]
+    pub reseeded: bool,
 }
 
 /// A DR node's copy of its pair's replicated log (`[dr]`).
@@ -312,6 +320,10 @@ pub struct DrInfo {
     /// apps and taking writes; site 1 is fenced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_epoch: Option<u64>,
+    /// While active: the last entry each pair node holds as this copy does,
+    /// as it reseeds (`None` until it has a snapshot), in `pair`'s order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reseeded: Option<[Option<u64>; 2]>,
 }
 
 /// The pair's deployments a DR node holds, deployed and not started.

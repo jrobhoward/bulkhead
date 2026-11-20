@@ -66,6 +66,7 @@ fn ctx() -> Ctx {
         may_run: false,
         awaiting_confirmation: false,
         partner_outdated: false,
+        dr_active: None,
     };
     Ctx {
         rt: Weak::new(),
@@ -89,6 +90,7 @@ fn down(epoch: u64) -> State {
         epoch,
         asking: Asking::default(),
         yielding: false,
+        dr_active: None,
     })
 }
 
@@ -462,4 +464,48 @@ async fn granted____resume_with_the_record_standing____primary_knows_its_partner
     );
 
     assert!(state.leadership(&ctx.cfg, Instant::now()).partner_outdated);
+}
+
+#[tokio::test(start_paused = true)]
+async fn primary____dr_active____down_stale_keeps_asking_and_resumes_when_handed_back() {
+    let env = Fake::default();
+    let mut ctx = ctx();
+    wait_out().await;
+    let state = down(1).step(&mut ctx, &env, Instant::now());
+    let primary = state.on_message(
+        &mut ctx,
+        FailoverMsg::Granted {
+            seq: 0,
+            epoch: 2,
+            outdated: false,
+        },
+        Instant::now(),
+    );
+
+    let stale = primary.on_message(
+        &mut ctx,
+        FailoverMsg::DrActive { epoch: 3, dr: 9 },
+        Instant::now(),
+    );
+    let told = stale.leadership(&ctx.cfg, Instant::now());
+    let asked_before = env.requests().len();
+    tokio::time::advance(Duration::from_millis(3_700)).await;
+    let stale = stale.step(&mut ctx, &env, Instant::now());
+    let seq = env.requests().last().unwrap().0;
+    let resumed = stale.on_message(
+        &mut ctx,
+        FailoverMsg::Granted {
+            seq,
+            epoch: 4,
+            outdated: false,
+        },
+        Instant::now(),
+    );
+
+    assert_eq!(told.standing, Standing::Down);
+    assert_eq!(told.dr_active, Some(9));
+    assert!(!told.may_run);
+    assert_eq!(env.requests().len(), asked_before + 1);
+    assert!(matches!(resumed, State::Primary(_)));
+    assert_eq!(resumed.leadership(&ctx.cfg, Instant::now()).dr_active, None);
 }

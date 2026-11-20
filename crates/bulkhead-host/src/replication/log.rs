@@ -129,6 +129,9 @@ pub(crate) struct Log {
     /// The sum of their sizes.
     bytes: u64,
     commit: u64,
+    /// Stale since the DR node, this one, was activated (ROADMAP DR4): a
+    /// pair node's copy that must be reseeded from it before it serves.
+    stale: Option<u32>,
 }
 
 impl std::fmt::Debug for Log {
@@ -157,14 +160,18 @@ impl Log {
     /// The log as kept in `disk`'s database.
     pub(crate) fn open(disk: Arc<Disk>) -> Result<Self, String> {
         let txn = disk.db().begin_read().map_err(err)?;
-        let (base, base_epoch, commit) = match txn.open_table(META) {
+        let (base, base_epoch, commit, stale) = match txn.open_table(META) {
             Ok(meta) => {
                 let get = |k: &str| -> Result<u64, String> {
                     Ok(meta.get(k).map_err(err)?.map_or(0, |v| v.value()))
                 };
-                (get("base")?, get("base_epoch")?, get("commit")?)
+                let stale = meta
+                    .get("stale_dr")
+                    .map_err(err)?
+                    .and_then(|v| u32::try_from(v.value()).ok());
+                (get("base")?, get("base_epoch")?, get("commit")?, stale)
             }
-            Err(redb::TableError::TableDoesNotExist(_)) => (0, 0, 0),
+            Err(redb::TableError::TableDoesNotExist(_)) => (0, 0, 0, None),
             Err(e) => return Err(err(e)),
         };
         let mut held = Vec::new();
@@ -197,7 +204,37 @@ impl Log {
             bytes: held.iter().map(|h| h.bytes).sum(),
             held,
             commit,
+            stale,
         })
+    }
+
+    /// The DR node this copy must be reseeded from, if it is stale (DR4).
+    pub(crate) fn stale(&self) -> Option<u32> {
+        self.stale
+    }
+
+    /// Mark this copy stale, to be reseeded from DR node `dr`, or clear
+    /// the mark; kept on disk (synced) before it returns, so a restart part
+    /// way through a reseed never serves the partial copy.
+    pub(crate) fn set_stale(&mut self, dr: Option<u32>) -> Result<(), String> {
+        if self.stale == dr {
+            return Ok(());
+        }
+        let txn = self.disk.db().begin_write().map_err(err)?;
+        {
+            let mut meta = txn.open_table(META).map_err(err)?;
+            match dr {
+                Some(n) => {
+                    meta.insert("stale_dr", u64::from(n)).map_err(err)?;
+                }
+                None => {
+                    meta.remove("stale_dr").map_err(err)?;
+                }
+            }
+        }
+        txn.commit().map_err(err)?;
+        self.stale = dr;
+        Ok(())
     }
 
     /// The disk backend the log and its buckets live in.

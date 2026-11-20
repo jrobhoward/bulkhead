@@ -456,7 +456,7 @@ impl Node {
     }
 
     /// Whether `name` runs now, or is a singleton this node holds.
-    fn running(&self, name: &str) -> bool {
+    pub(super) fn running(&self, name: &str) -> bool {
         self.apps.app(name).is_some() || self.held(name)
     }
 

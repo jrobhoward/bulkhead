@@ -441,8 +441,9 @@ fn events(node: &Node) -> Reply {
     )
 }
 
-/// `GET /v1/dr`, the DR copy (ROADMAP DR2), and
-/// `POST /v1/dr/activate?site_1_down=true` (DR4).
+/// `GET /v1/dr`, the DR copy (ROADMAP DR2),
+/// `POST /v1/dr/activate?site_1_down=true` and
+/// `POST /v1/dr/failback?to=N&wait_s=S` (DR4).
 async fn dr(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)]) -> Reply {
     match (method, rest) {
         (&Method::GET, []) => respond(node.dr()),
@@ -450,6 +451,17 @@ async fn dr(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)])
             Ok(confirmed) => respond(node.dr_activate(confirmed.unwrap_or(false)).await),
             Err(e) => error(&e),
         },
+        (&Method::POST, ["failback"]) => {
+            let params = param::<u32>(q, "to").and_then(|to| Ok((to, param::<u64>(q, "wait_s")?)));
+            match params {
+                Ok((Some(to), wait_s)) => {
+                    let wait = Duration::from_secs(wait_s.unwrap_or(60).min(3600));
+                    respond(node.dr_failback(to, wait).await)
+                }
+                Ok((None, _)) => error(&NodeError::Invalid("to is required".into())),
+                Err(e) => error(&e),
+            }
+        }
         _ => error(&NodeError::NotFound(format!(
             "no route for {method} /v1/dr/{}",
             rest.join("/")

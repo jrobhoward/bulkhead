@@ -8,6 +8,25 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Failing back from the active disaster-recovery node (ROADMAP DR4,
+  second part). A pair node told by the witness that the DR node is
+  active (`FailoverMsg::DrActive`, in cluster protocol version 10,
+  unreleased) marks its replicated copy stale on disk and reseeds it
+  from a full snapshot of the DR node's, then the entries after it
+  (decided with the user on 2026-11-19: a snapshot, so whatever it
+  committed after the DR node's point goes, its commit index included);
+  a restart reseeds again. While stale it is `down` and serves no
+  replicated reads or writes (S38's `StaleInert`). `bulkhead dr failback --to N` on the DR node stops
+  its apps, takes no more writes, waits until both pair nodes hold its
+  last entry (`--wait-s`), then the witness promotes N at a new epoch,
+  its partner rejoins it as standby, and the DR node holds the apps and
+  pulls its copy again; refused, with the apps started again, if a pair
+  node is behind. `bulkhead failover` shows `stale:` on a reseeding node
+  (`ReplicationInfo::stale`, `reseeded`), `bulkhead dr` each pair node's
+  progress (`DrInfo::reseeded`); audit records `dr_failback_asked` and
+  `dr_failback`; `Runtime::dr_failback` and `FailbackRefused` in
+  `bulkhead-host`. Deployments are not carried back.
+
 - Activating the disaster-recovery node (ROADMAP DR4, first part), with
   operator fencing as decided with the user on 2026-11-19 (spike S38):
   `bulkhead dr activate --site-1-down`, on a DR node that is also the
@@ -21,8 +40,7 @@ All notable changes are recorded here. The format follows
   fenced by the epoch rules alone and stays `down`. `bulkhead dr` shows
   `active: epoch N` (`DrInfo::active_epoch`); audit records
   `dr_activate_asked` and `dr_activate`; `Runtime::dr_activate` and
-  `Runtime::dr_active` in `bulkhead-host`. Failback is DR4's second
-  part.
+  `Runtime::dr_active` in `bulkhead-host`.
 
 - A failover pair across systems (ROADMAP FB5): `scripts/vm-pair.sh`
   runs node 1 on a Linux VM and node 2 on a FreeBSD VM, with the witness

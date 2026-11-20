@@ -359,6 +359,16 @@ pub(crate) fn failover(f: &bulkhead::api::FailoverInfo) -> String {
                 seconds(lag)
             ));
         }
+        if let Some(dr) = r.stale {
+            out.push_str(&format!(
+                "\nstale:      the DR node {dr} is active; reseeding from it ({})",
+                if r.reseeded {
+                    "caught up: ready for `bulkhead dr failback` there"
+                } else {
+                    "catching up"
+                }
+            ));
+        }
     }
     out
 }
@@ -373,6 +383,19 @@ pub(crate) fn dr(d: &bulkhead::api::DrInfo) -> String {
             d.commit,
             d.log_bytes.div_ceil(1024),
         );
+        if let Some(r) = d.reseeded {
+            let at = |n: Option<u64>| {
+                n.map_or_else(|| "no snapshot yet".to_string(), |i| format!("at {i}"))
+            };
+            out.push_str(&format!(
+                "\nsite 1:     node {} {}, node {} {} (of {}; `dr failback` once both are)",
+                d.pair[0],
+                at(r[0]),
+                d.pair[1],
+                at(r[1]),
+                d.commit
+            ));
+        }
         if let Some(h) = &d.deploys {
             out.push_str(&dr_deploys(h));
         }

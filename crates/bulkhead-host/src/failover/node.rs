@@ -106,6 +106,8 @@ pub(super) struct Down {
     /// Stepped down to hand over (a planned switchover), until it rejoins
     /// or resumes; its beats say so.
     yielding: bool,
+    /// The witness said the DR node is active (DR4): this one.
+    dr_active: Option<u32>,
 }
 
 /// A request to the witness.
@@ -202,6 +204,10 @@ impl State {
             may_run,
             awaiting_confirmation: matches!(self, Self::Standby(s) if s.awaiting),
             partner_outdated: matches!(self, Self::Primary(p) if p.partner_outdated),
+            dr_active: match self {
+                Self::Down(d) => d.dr_active,
+                Self::Primary(_) | Self::Standby(_) => None,
+            },
         }
     }
 
@@ -249,6 +255,33 @@ impl State {
             ) => d.granted(ctx, seq, epoch, outdated),
             (Self::Down(d), FailoverMsg::NotYet { wait_ms }) => d.not_yet(wait_ms, now),
             (Self::Down(d), FailoverMsg::Refused { epoch }) => d.refused(ctx, epoch, now),
+            // The DR node is active (DR4): stand down, stale, and keep
+            // asking, so a hand-back is heard.
+            (state, FailoverMsg::DrActive { epoch, dr }) => {
+                let down = match state {
+                    Self::Primary(p) => {
+                        let at = p.epoch.max(epoch);
+                        ctx.step_down(at, now)
+                    }
+                    Self::Standby(s) => s.refused(ctx, epoch, now),
+                    Self::Down(d) => d.refused(ctx, epoch, now),
+                };
+                match down {
+                    Self::Down(mut d) => {
+                        if d.dr_active.is_none() {
+                            tracing::warn!(
+                                dr,
+                                epoch,
+                                "the DR node is active: this node is stale and reseeds from it"
+                            );
+                        }
+                        d.dr_active = Some(dr);
+                        d.asking.retry_at.get_or_insert(now + ctx.cfg.lease);
+                        Self::Down(d)
+                    }
+                    other => other,
+                }
+            }
             // Anything else is no news to this standing.
             (state, _) => state,
         }
@@ -307,6 +340,7 @@ impl Ctx {
             epoch,
             asking: Asking::default(),
             yielding: false,
+            dr_active: None,
         }
     }
 
@@ -696,6 +730,7 @@ impl Node {
                 epoch: cfg.epoch,
                 asking: Asking::default(),
                 yielding: false,
+                dr_active: None,
             }),
             ctx: Ctx {
                 rt: Arc::downgrade(rt),
@@ -724,6 +759,7 @@ impl Node {
             epoch: 0,
             asking: Asking::default(),
             yielding: false,
+            dr_active: None,
         });
         let state = std::mem::replace(&mut self.state, placeholder);
         let before = state.standing();

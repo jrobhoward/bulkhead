@@ -394,7 +394,7 @@ async fn Witness____activated____new_epoch_and_the_pair_is_stale() {
     assert!(witness.activated());
     assert_eq!(
         renew(&mut witness, 1, 1),
-        Some(FailoverMsg::Fenced { epoch: 2 })
+        Some(FailoverMsg::DrActive { epoch: 2, dr: 3 })
     );
     assert_eq!(
         answer(
@@ -407,12 +407,12 @@ async fn Witness____activated____new_epoch_and_the_pair_is_stale() {
                 confirmed_ago_ms: 60_000
             }
         ),
-        Some(FailoverMsg::Refused { epoch: 2 })
+        Some(FailoverMsg::DrActive { epoch: 2, dr: 3 })
     );
     tokio::time::advance(Duration::from_secs(60)).await;
     assert_eq!(
         request(&mut witness),
-        Some(FailoverMsg::Refused { epoch: 2 })
+        Some(FailoverMsg::DrActive { epoch: 2, dr: 3 })
     );
     assert_eq!(
         witness.fence(Instant::now()),
@@ -463,6 +463,55 @@ async fn Witness____resumed_activated____stays_active() {
     assert!(witness.activated());
     assert_eq!(
         renew(&mut witness, 2, 4),
-        Some(FailoverMsg::Fenced { epoch: 5 })
+        Some(FailoverMsg::DrActive { epoch: 5, dr: 3 })
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____handed_back____node_resumes_at_a_new_epoch() {
+    let mut witness = Witness::start(config(Some((5, 3))));
+
+    let grant = witness.hand_back(2).unwrap();
+    witness.apply(grant);
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let resumed = answer(
+        &mut witness,
+        2,
+        FailoverMsg::Request {
+            seq: 4,
+            resume: true,
+            epoch: 5,
+            confirmed_ago_ms: 60_000,
+        },
+    );
+    let other = answer(
+        &mut witness,
+        1,
+        FailoverMsg::Request {
+            seq: 1,
+            resume: true,
+            epoch: 5,
+            confirmed_ago_ms: 60_000,
+        },
+    );
+
+    assert!(!witness.activated());
+    assert_eq!(
+        resumed,
+        Some(FailoverMsg::Granted {
+            seq: 4,
+            epoch: 6,
+            outdated: false
+        })
+    );
+    assert_eq!(other, Some(FailoverMsg::Refused { epoch: 6 }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____hand_back_not_active_or_outside_the_pair____refused() {
+    let mut active = Witness::start(config(Some((5, 3))));
+    let mut plain = Witness::start(config(None));
+
+    assert!(active.hand_back(7).is_err());
+    assert!(plain.hand_back(2).is_err());
 }

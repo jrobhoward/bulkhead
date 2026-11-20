@@ -1094,6 +1094,24 @@ impl KvStore {
         self.replication.set((handle, status)).map_err(|_| ())
     }
 
+    /// Refuse a replicated bucket while this node's copy is stale, since
+    /// the DR node was activated, until it has reseeded and the pair runs
+    /// again (ROADMAP DR4; spike S38's `StaleInert`: a stale node serves
+    /// no read).
+    fn refuse_stale(&self, bucket: &BucketHandle) -> Result<(), StoreError> {
+        let stale = bucket.space == SPACE
+            && self
+                .replication
+                .get()
+                .is_some_and(|(_, s)| s.borrow().stale.is_some());
+        if stale {
+            return Err(StoreError::Unavailable(
+                "this node's replicated copy is stale: it reseeds from the active DR node".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The replication task, once started.
     pub(crate) fn replication(&self) -> Option<&Handle> {
         self.replication.get().map(|(h, _)| h)
@@ -1107,6 +1125,11 @@ impl KvStore {
     /// The DR copy's task, once started.
     pub(crate) fn dr(&self) -> Option<&DrHandle> {
         self.dr.get()
+    }
+
+    /// On the active DR node: how far each pair node has reseeded (DR4).
+    pub(crate) fn dr_reseeded(&self) -> Option<[Option<u64>; 2]> {
+        self.dr().map(DrHandle::reseeded)
     }
 
     /// Where replication stands, once started.
@@ -1128,6 +1151,7 @@ impl KvStore {
     /// returns once it commits, and its watches hear of it from
     /// replication, on every node; a read is local.
     pub(crate) async fn run(&self, bucket: &BucketHandle, op: Op) -> Result<Outcome, StoreError> {
+        self.refuse_stale(bucket)?;
         if bucket.space == SPACE && !op.read_only() {
             if self.replication().is_none()
                 && let Some(dr) = self.dr()
@@ -1194,6 +1218,7 @@ impl KvStore {
     /// [`KvStore::run`] runs reads. For host functions bound synchronously.
     pub(crate) fn read(&self, bucket: &BucketHandle, op: Op) -> Result<Outcome, StoreError> {
         debug_assert!(op.read_only(), "a write through KvStore::read");
+        self.refuse_stale(bucket)?;
         Ok(self.apply_now(bucket, op)?.outcome)
     }
 

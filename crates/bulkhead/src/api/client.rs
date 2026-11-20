@@ -490,6 +490,19 @@ impl Client {
         self.json(Method::POST, &path, None).await
     }
 
+    /// Hand back from this active DR node to pair node `to` (ROADMAP DR4's
+    /// failback), waiting up to `wait_s` seconds for both pair nodes to
+    /// reseed.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; not found without `[dr]`, conflict when not
+    /// active or a pair node is behind.
+    pub async fn dr_failback(&self, to: u32, wait_s: u64) -> Result<Done, ClientError> {
+        let path = format!("/v1/dr/failback?to={to}&wait_s={wait_s}");
+        self.json(Method::POST, &path, None).await
+    }
+
     /// Confirm that the partner is gone, so this standby may promote
     /// itself.
     ///

@@ -20,7 +20,7 @@ use tokio::time::Instant;
 
 use super::core::{Refusal, merge};
 use super::log::{Command, Entry, Log, Snapshot};
-use super::ship::DrMsg;
+use super::ship::{DrMsg, Shipper};
 use crate::services::keyvalue::storage::{BucketDump, Op, Outcome};
 
 /// The standby is pulled from while its commit index is within this many
@@ -104,6 +104,12 @@ pub struct DrStatus {
     /// Activated (ROADMAP DR4): it leads the log at this epoch, takes
     /// writes, and pulls nothing from the pair.
     pub leading: Option<u64>,
+    /// Handing back (DR4's failback): it takes no writes.
+    pub frozen: bool,
+    /// While it leads: the last entry each pair node holds as this copy
+    /// does, from its asks as it reseeds (`None` until it asks after a
+    /// snapshot).
+    pub reseeded: [Option<u64>; 2],
 }
 
 /// The DR node's copy.
@@ -122,6 +128,12 @@ pub(crate) struct DrReplica {
     stopped: bool,
     /// Activated: the epoch it leads at.
     leading: Option<u64>,
+    /// Handing back: no writes.
+    frozen: bool,
+    /// Answers the pair's nodes as they reseed from it, while it leads.
+    shipper: Shipper,
+    /// How far each pair node has reseeded (see [`DrStatus::reseeded`]).
+    reseeded: [Option<u64>; 2],
 }
 
 type Out = Result<Vec<DrEffect>, String>;
@@ -145,6 +157,9 @@ impl DrReplica {
             warned: false,
             stopped: false,
             leading: None,
+            frozen: false,
+            shipper: Shipper::new(now),
+            reseeded: [None; 2],
         })
     }
 
@@ -163,7 +178,34 @@ impl DrReplica {
             snapshotting: self.receiving.is_some(),
             stopped: self.stopped,
             leading: self.leading,
+            frozen: self.frozen,
+            reseeded: self.reseeded,
         }
+    }
+
+    /// Hand back (DR4's failback), first step: take no more writes. Its
+    /// last entry, which both pair nodes must hold before the witness
+    /// hands back. `None` unless it leads.
+    pub(crate) fn freeze(&mut self) -> Option<u64> {
+        self.leading?;
+        self.frozen = true;
+        Some(self.log.last())
+    }
+
+    /// Take writes again: a hand-back that did not happen.
+    pub(crate) fn unfreeze(&mut self) {
+        self.frozen = false;
+    }
+
+    /// Handed back: pull from the pair again, whose new primary continues
+    /// this copy's log at a higher epoch.
+    pub(crate) fn unlead(&mut self, now: Instant) {
+        self.leading = None;
+        self.frozen = false;
+        self.reseeded = [None; 2];
+        self.sources = [Source::default(); 2];
+        self.caught_up_at = Some(now);
+        self.next_round = now;
     }
 
     /// How long it has trailed the pair; nothing once it leads.
@@ -181,6 +223,7 @@ impl DrReplica {
     pub(crate) fn lead(&mut self, epoch: u64) -> Result<(), String> {
         self.receiving = None;
         self.leading = Some(epoch);
+        self.reseeded = [None; 2];
         if self.log.last_epoch() < epoch {
             let next = self.log.last() + 1;
             self.log.append(
@@ -195,6 +238,29 @@ impl DrReplica {
         Ok(())
     }
 
+    /// Answer pair node `from` (index `i`), reseeding from this copy, and
+    /// note how far it has come.
+    fn serve(&mut self, i: usize, from: u32, msg: DrMsg, now: Instant) -> Out {
+        if let DrMsg::Ask {
+            after, after_epoch, ..
+        } = &msg
+            && *after <= self.log.last()
+            && self.log.epoch_at(*after) == Some(*after_epoch)
+        {
+            self.reseeded[i] = Some(*after);
+        }
+        let reply = match msg {
+            DrMsg::Ask { .. } | DrMsg::AskSnapshot { .. } => {
+                self.shipper.answer(&self.log, false, msg, now)?
+            }
+            _ => None,
+        };
+        Ok(reply
+            .map(|msg| DrEffect::Send { to: from, msg })
+            .into_iter()
+            .collect())
+    }
+
     /// A write to replicated bucket `bucket`, while it leads: appended at
     /// its epoch and committed at once, there being no other copy to wait
     /// for. Refused `Unavailable` unless it leads.
@@ -205,7 +271,7 @@ impl DrReplica {
         op: Op,
     ) -> (Result<Outcome, Refusal>, Vec<DrEffect>) {
         let mut out = Vec::new();
-        let Some(epoch) = self.leading else {
+        let Some(epoch) = self.leading.filter(|_| !self.frozen) else {
             return (Err(Refusal::Unavailable), out);
         };
         let next = self.log.last() + 1;
@@ -267,6 +333,7 @@ impl DrReplica {
             self.log.compact(to)?;
         }
         if self.leading.is_some() {
+            self.shipper.tick(now);
             return Ok(out);
         }
         let timeout = self.timeout();
@@ -391,8 +458,12 @@ impl DrReplica {
         let Some(i) = self.cfg.pair.iter().position(|&n| n == from) else {
             return Ok(out);
         };
-        if self.stopped || self.leading.is_some() {
-            // Once it leads, the pair's nodes are stale (DR4).
+        if self.leading.is_some() {
+            // Once it leads, the pair's nodes are stale (DR4): it answers
+            // their asks as they reseed, and takes nothing from them.
+            return self.serve(i, from, msg, now);
+        }
+        if self.stopped {
             return Ok(out);
         }
         match msg {

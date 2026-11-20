@@ -381,3 +381,72 @@ fn dr____site_1_lost_then_activated____copy_kept_and_writes_taken() {
     assert_eq!(after, format!("{},site2", written(10)));
     assert!(matches!(apart, ActivateRefused::NotHere(_)), "{apart:?}");
 }
+
+/// Failback over a lossy WAN (ROADMAP DR4): after an activation and a
+/// write at site 2, site 1 comes back; its nodes are stale (reads of the
+/// replicated bucket refused, S38's `StaleInert`), reseed from the DR
+/// node, and once both have, it hands back to node 1, which then holds
+/// exactly the DR node's copy and leads again.
+#[test]
+fn dr____site_1_back_after_activation____reseeded_and_handed_back() {
+    let root = tempfile::tempdir().unwrap();
+    let (stale_read, epoch, on_1, on_dr) =
+        simulate_with(207, 3, configure(root.path()), |sim| async move {
+            lossy_wan(&sim, 3);
+            let _handles = start(&sim, 3, 64 << 20);
+            let p = primary(&sim).await;
+            let kv = sim.node(p).spawn_kv(BUCKET);
+            for i in 0..10 {
+                assert_eq!(set(&kv, &format!("k{i:02}")).await, "ok");
+            }
+            caught_up(&sim, 3, p).await;
+            for (a, b) in [(1, 2), (1, 3), (2, 3)] {
+                sim.mesh.partition(a, b);
+            }
+            sim.node(3).rt.dr_activate().await.unwrap();
+            let kv3 = sim.node(3).spawn_kv(BUCKET);
+            assert_eq!(set(&kv3, "site2").await, "ok");
+            sim.mesh.heal_all();
+            lossy_wan(&sim, 3);
+            let mut stale_read = String::new();
+            for _ in 0..600 {
+                pass(50).await;
+                let reseeded = (1..=2).all(|n| {
+                    sim.node(n)
+                        .rt
+                        .replication_status()
+                        .is_some_and(|s| s.stale == Some(3) && s.reseeded)
+                });
+                if stale_read.is_empty()
+                    && sim
+                        .node(1)
+                        .rt
+                        .replication_status()
+                        .is_some_and(|s| s.stale.is_some())
+                {
+                    stale_read = keys(&sim, 1).await;
+                }
+                if reseeded {
+                    break;
+                }
+            }
+            let epoch = sim
+                .node(3)
+                .rt
+                .dr_failback(1, Duration::from_secs(30))
+                .await
+                .unwrap();
+            for _ in 0..400 {
+                if primary_of(&sim, 1) {
+                    break;
+                }
+                pass(50).await;
+            }
+            (stale_read, epoch, keys(&sim, 1).await, keys(&sim, 3).await)
+        });
+
+    assert_eq!(stale_read, "err:unavailable");
+    assert!(epoch >= 3, "{epoch}");
+    assert_eq!(on_1, format!("{},site2", written(10)));
+    assert_eq!(on_dr, on_1);
+}

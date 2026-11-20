@@ -22,6 +22,7 @@
 mod core;
 mod dr;
 mod log;
+mod reseed;
 mod ship;
 
 use std::collections::HashMap;
@@ -36,6 +37,7 @@ use self::core::{Config, Effect, Lead, Msg, Replica, Waiter, Write};
 pub use self::dr::DrStatus;
 use self::dr::{DrEffect, DrReplica, DrTuning};
 pub(crate) use self::log::SPACE;
+use self::reseed::{Reseed, ReseedEffect};
 use self::ship::{DrMsg, Shipper};
 use crate::error::HostError;
 use crate::failover::{FailoverConfig, Leadership, RunUntil, Standing};
@@ -221,6 +223,12 @@ pub struct ReplicationStatus {
     /// primary holding its lease, once it committed an entry of its own
     /// epoch (R5). A singleton with replicated buckets starts only then.
     pub ready: bool,
+    /// Stale since the DR node was activated (ROADMAP DR4): reseeding from
+    /// that node, whose id this is, until the pair takes over again.
+    pub stale: Option<u32>,
+    /// Stale and holding everything the DR node had committed when it last
+    /// answered.
+    pub reseeded: bool,
 }
 
 impl Runtime {
@@ -399,6 +407,12 @@ enum DrInput {
         op: Op,
         reply: oneshot::Sender<Answer>,
     },
+    /// Hand back: take no more writes; its last entry (DR4's failback).
+    Freeze { reply: oneshot::Sender<Option<u64>> },
+    /// Take writes again: the hand-back did not happen.
+    Unfreeze,
+    /// Handed back: pull from the pair again.
+    Unlead,
 }
 
 impl DrHandle {
@@ -406,6 +420,11 @@ impl DrHandle {
     /// own then.
     pub(crate) fn leading(&self) -> bool {
         self.status.borrow().0.leading.is_some()
+    }
+
+    /// How far each pair node has reseeded from this copy (DR4).
+    pub(crate) fn reseeded(&self) -> [Option<u64>; 2] {
+        self.status.borrow().0.reseeded
     }
 
     /// Write to replicated bucket `bucket` on the activated DR node.
@@ -421,6 +440,27 @@ impl DrHandle {
             return Err(Refusal::Unavailable);
         }
         answer.await.unwrap_or(Err(Refusal::Unknown))
+    }
+}
+
+/// Have the active DR copy take no more writes (DR4's failback): its last
+/// entry, or `None` unless it leads.
+pub(crate) async fn dr_freeze(rt: &RuntimeInner) -> Option<u64> {
+    let dr = rt.services.keyvalue().dr()?.clone();
+    let (reply, done) = oneshot::channel();
+    dr.tx.send(DrInput::Freeze { reply }).ok()?;
+    done.await.ok().flatten()
+}
+
+/// Have the DR copy take writes again, or, `handed_back`, pull from the
+/// pair again (DR4's failback).
+pub(crate) fn dr_release(rt: &RuntimeInner, handed_back: bool) {
+    if let Some(dr) = rt.services.keyvalue().dr() {
+        let _ = dr.tx.send(if handed_back {
+            DrInput::Unlead
+        } else {
+            DrInput::Unfreeze
+        });
     }
 }
 
@@ -524,6 +564,11 @@ impl DrTask {
                         DrInput::Lead { epoch, reply } => {
                             let _ = reply.send(self.replica.lead(epoch));
                         }
+                        DrInput::Freeze { reply } => {
+                            let _ = reply.send(self.replica.freeze());
+                        }
+                        DrInput::Unfreeze => self.replica.unfreeze(),
+                        DrInput::Unlead => self.replica.unlead(now),
                         DrInput::Write {
                             bucket,
                             quota,
@@ -605,7 +650,12 @@ pub(crate) fn start(
     let replica = Replica::new(config, log);
     let (tx, rx) = mpsc::unbounded_channel();
     let first = leadership.borrow().clone();
-    let (status, status_rx) = watch::channel(status_of(&replica, &first));
+    // Stale before it stopped (DR4): reseed again from the start.
+    let reseed = replica
+        .log()
+        .stale()
+        .map(|dr| Reseed::new(dr, Instant::now()));
+    let (status, status_rx) = watch::channel(status_of(&replica, &first, reseed.as_ref()));
     let dr = cfg
         .dr
         .map(|node| (node, Arc::new(Mutex::new(Shipper::new(Instant::now())))));
@@ -634,13 +684,16 @@ pub(crate) fn start(
         status,
         dr,
         dr_out: Vec::new(),
+        reseed,
     };
     tokio::spawn(task.run(rx, leadership, rt.liveness.interval()));
     Ok(())
 }
 
-fn status_of(replica: &Replica, lead: &Leadership) -> ReplicationStatus {
+fn status_of(replica: &Replica, lead: &Leadership, reseed: Option<&Reseed>) -> ReplicationStatus {
     ReplicationStatus {
+        stale: replica.log().stale(),
+        reseeded: reseed.is_some_and(|r| r.caught_up(replica.log())),
         standing: lead.standing,
         epoch: lead.epoch,
         commit: replica.log().commit(),
@@ -695,6 +748,8 @@ struct Task {
     dr: Option<(u32, Arc<Mutex<Shipper>>)>,
     /// Answers to the DR node, sent after a step.
     dr_out: Vec<DrMsg>,
+    /// Stale, reseeding from the active DR node (DR4).
+    reseed: Option<Reseed>,
 }
 
 /// What woke the task.
@@ -767,12 +822,12 @@ impl Task {
                 // read. The partner commits without it (R13).
                 let status = ReplicationStatus {
                     ready: false,
-                    ..status_of(&self.replica, &self.lead)
+                    ..status_of(&self.replica, &self.lead, self.reseed.as_ref())
                 };
                 self.status.send_replace(status);
                 return;
             }
-            let status = status_of(&self.replica, &self.lead);
+            let status = status_of(&self.replica, &self.lead, self.reseed.as_ref());
             self.status
                 .send_if_modified(|s| std::mem::replace(s, status) != status);
         }
@@ -795,6 +850,7 @@ impl Task {
             may_run: self.lead.may_run,
             partner_outdated: self.lead.partner_outdated,
         };
+        self.follow_dr(now);
         absorb(self.replica.leadership(lead, now), &mut out);
         let mut writes = Vec::new();
         for input in inputs {
@@ -847,12 +903,20 @@ impl Task {
                         out.push(done(id, Err(Refusal::Unavailable)));
                     }
                 }
-                Input::Dr(msg) => self.answer_dr(msg, now),
+                Input::Dr(msg) => match self.reseed.as_mut() {
+                    Some(r) => {
+                        let effects = r.answer(self.replica.log_mut(), msg, now);
+                        self.absorb_reseed(effects, &mut out);
+                    }
+                    None => self.answer_dr(msg, now),
+                },
                 Input::Message(Msg::Done { id, result }) => {
                     if let Some(f) = self.forwarded.remove(&id) {
                         let _ = f.reply.send(result);
                     }
                 }
+                // Stale (DR4): nothing from the partner applies here.
+                Input::Message(_) if self.reseed.is_some() => {}
                 Input::Message(msg) => {
                     let r = self.replica.message(msg, now);
                     absorb(r, &mut out);
@@ -861,6 +925,10 @@ impl Task {
         }
         self.flush(&mut writes, now, &mut out);
         if tick {
+            if let Some(r) = self.reseed.as_mut() {
+                let effects = r.tick(self.replica.log(), now);
+                self.absorb_reseed(effects, &mut out);
+            }
             let r = self.replica.tick(now, partner_heard);
             absorb(r, &mut out);
             self.expire(rt, now);
@@ -876,6 +944,71 @@ impl Task {
     }
 
     /// A message from the DR node, answered from this node's log.
+    /// Follow the DR node's activation (DR4): told by the witness that it
+    /// is active, mark this copy stale on disk and reseed from it; once the
+    /// pair takes over again (this node promoted at the hand-back, or a
+    /// standby of the node that was), the copy is the DR node's and the
+    /// mark goes.
+    fn follow_dr(&mut self, now: Instant) {
+        if let Some(dr) = self.lead.dr_active
+            && self.reseed.is_none()
+        {
+            if self.dr.as_ref().map(|(n, _)| *n) != Some(dr) {
+                tracing::error!(
+                    dr,
+                    "replication: the active DR node is not this node's failover.dr; not reseeding"
+                );
+                return;
+            }
+            if let Err(e) = self.replica.log_mut().set_stale(Some(dr)) {
+                tracing::error!(error = %e, "replication: the stale mark was not kept");
+                return;
+            }
+            tracing::warn!(
+                dr,
+                "replication: this copy is stale; reseeding from the DR node's snapshot"
+            );
+            self.reseed = Some(Reseed::new(dr, now));
+        }
+        if self.reseed.is_some()
+            && matches!(self.lead.standing, Standing::Primary | Standing::Standby)
+        {
+            match self.replica.log_mut().set_stale(None) {
+                Ok(()) => {
+                    self.reseed = None;
+                    tracing::info!(
+                        commit = self.replica.log().commit(),
+                        "replication: reseeded from the DR node; the pair runs again"
+                    );
+                }
+                Err(e) => tracing::error!(error = %e, "replication: the stale mark not cleared"),
+            }
+        }
+    }
+
+    /// Carry out what the reseed returned.
+    fn absorb_reseed(&mut self, effects: Result<Vec<ReseedEffect>, String>, out: &mut Vec<Effect>) {
+        match effects {
+            Ok(effects) => {
+                for e in effects {
+                    match e {
+                        ReseedEffect::Send(msg) => self.dr_out.push(msg),
+                        ReseedEffect::Notify {
+                            bucket,
+                            changed,
+                            revision,
+                        } => out.push(Effect::Notify {
+                            bucket,
+                            changed,
+                            revision,
+                        }),
+                    }
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "replication: the reseed's storage failed"),
+        }
+    }
+
     fn answer_dr(&mut self, msg: DrMsg, now: Instant) {
         let Some((_, shipper)) = &self.dr else {
             return;

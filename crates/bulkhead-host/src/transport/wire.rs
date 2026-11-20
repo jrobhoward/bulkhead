@@ -31,7 +31,8 @@ use crate::failover::FailoverMsg;
 /// receiving node for room in a full mailbox (`CastWait`); version 9 sends
 /// waited casts on credit (`CastCredited`, `Credit`, `CreditReturn`,
 /// `CreditVoid`); version 10 ships the replicated log to a
-/// disaster-recovery node (`Dr`).
+/// disaster-recovery node (`Dr`) and tells a pair node that node is
+/// active (`DrActive`).
 pub const VERSION: u16 = 10;
 
 /// The oldest protocol version this node speaks: the one before
@@ -117,6 +118,7 @@ pub fn since(frame: &Frame) -> u16 {
             | FailoverMsg::Refused { .. } => 1,
             FailoverMsg::Record { .. } | FailoverMsg::Recorded { .. } => 6,
             FailoverMsg::Release { .. } => 7,
+            FailoverMsg::DrActive { .. } => 10,
         },
     }
 }
@@ -387,6 +389,10 @@ pub(crate) mod failover {
         Release {
             epoch: u64,
         },
+        DrActive {
+            epoch: u64,
+            dr: u32,
+        },
     }
 
     pub(crate) fn serialize<S: Serializer>(m: &FailoverMsg, s: S) -> Result<S::Ok, S::Error> {
@@ -427,6 +433,7 @@ pub(crate) mod failover {
             },
             FailoverMsg::Recorded { seq, outdated } => Wire::Recorded { seq, outdated },
             FailoverMsg::Release { epoch } => Wire::Release { epoch },
+            FailoverMsg::DrActive { epoch, dr } => Wire::DrActive { epoch, dr },
         };
         wire.serialize(s)
     }
@@ -474,6 +481,7 @@ pub(crate) mod failover {
             },
             Wire::Recorded { seq, outdated } => FailoverMsg::Recorded { seq, outdated },
             Wire::Release { epoch } => FailoverMsg::Release { epoch },
+            Wire::DrActive { epoch, dr } => FailoverMsg::DrActive { epoch, dr },
         })
     }
 }

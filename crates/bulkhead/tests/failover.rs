@@ -1781,3 +1781,187 @@ async fn dr____activated_while_site_1_reaches_the_witness____abandoned_and_pair_
         p.child.kill().await.unwrap();
     }
 }
+
+/// A whole cycle (ROADMAP DR4): site 1 commits a write the DR node never
+/// got, is lost, and the DR node is activated and written to; a failback
+/// before site 1 is back is refused and the apps run on; site 1's nodes
+/// come back stale, reseed from the DR node, and it hands back to node 1.
+/// Node 1 then holds exactly the DR node's writes, node 2 is its standby,
+/// and the DR node holds the apps and pulls its copy again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____activated_then_failed_back____site_1_holds_exactly_the_dr_writes() {
+    let dir = tempfile::Builder::new()
+        .prefix("pdf")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3) = (free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n").unwrap();
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 3\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let dr = format!(
+        "policy = {policy:?}\n{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_singleton(&signer))
+            .await
+            .unwrap();
+    }
+    let runs = |c: &bulkhead::api::Client| {
+        let c = c.clone();
+        move || {
+            let c = c.clone();
+            async move {
+                c.status("vault")
+                    .await
+                    .is_ok_and(|d| d.summary.status == "running")
+            }
+        }
+    };
+    until("node 1 runs the singleton", runs(&n1.client)).await;
+    for i in 0..5 {
+        assert_eq!(
+            call_text(&n1.client, "vault", &format!("set:state:k{i}:v{i}")).await,
+            "ok"
+        );
+    }
+    let committed = n1
+        .client
+        .failover()
+        .await
+        .unwrap()
+        .replication
+        .unwrap()
+        .commit;
+    until_long("the DR node holds the copy and the app", || {
+        let c = w.client.clone();
+        async move {
+            c.dr().await.is_ok_and(|d| {
+                d.commit >= committed
+                    && d.deploys
+                        .is_some_and(|h| h.apps == 1 && h.fetching.is_none())
+            })
+        }
+    })
+    .await;
+    // Site 1 commits a write site 2 never gets, then is lost.
+    w.child.kill().await.unwrap();
+    let lost = call_text(&n1.client, "vault", "set:state:lost:site1").await;
+    for p in [&mut n1, &mut n2] {
+        p.child.kill().await.unwrap();
+    }
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+    w.client.dr_activate(true).await.unwrap();
+    until("the DR node runs the singleton", runs(&w.client)).await;
+    assert_eq!(
+        call_text(&w.client, "vault", "set:state:site2:written").await,
+        "ok"
+    );
+
+    let early = w.client.dr_failback(1, 1).await.unwrap_err();
+    until("the DR node runs the singleton again", runs(&w.client)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    until_long("both site-1 nodes reseeded", || {
+        let (c1, c2) = (n1.client.clone(), n2.client.clone());
+        async move {
+            let ready = |f: Result<bulkhead::api::FailoverInfo, _>| {
+                f.ok()
+                    .and_then(|f| f.replication)
+                    .is_some_and(|r| r.stale == Some(3) && r.reseeded)
+            };
+            ready(c1.failover().await) && ready(c2.failover().await)
+        }
+    })
+    .await;
+    let stale_view = n2.client.failover().await.unwrap();
+    // A stale node restarts: still stale, it reseeds again.
+    n2.child.kill().await.unwrap();
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    let restarted = n2.client.failover().await.unwrap();
+    until_long("node 2 reseeded again", || {
+        let c = n2.client.clone();
+        async move {
+            c.failover()
+                .await
+                .ok()
+                .and_then(|f| f.replication)
+                .is_some_and(|r| r.stale == Some(3) && r.reseeded)
+        }
+    })
+    .await;
+    let handed = w.client.dr_failback(1, 30).await.unwrap();
+    until_long("node 1 runs the singleton again", runs(&n1.client)).await;
+    let site2 = call_text(&n1.client, "vault", "get:state:site2").await;
+    let old = call_text(&n1.client, "vault", "get:state:k4").await;
+    let gone = call_text(&n1.client, "vault", "get:state:lost").await;
+    until_long("node 2 is node 1's standby", || {
+        let c = n2.client.clone();
+        async move {
+            c.failover().await.is_ok_and(|f| {
+                f.role == "standby" && f.replication.is_some_and(|r| r.stale.is_none())
+            })
+        }
+    })
+    .await;
+    assert_eq!(
+        call_text(&n1.client, "vault", "set:state:after:back").await,
+        "ok"
+    );
+    let after = n1
+        .client
+        .failover()
+        .await
+        .unwrap()
+        .replication
+        .unwrap()
+        .commit;
+    until_long("the DR node pulls the pair's writes again", || {
+        let c = w.client.clone();
+        async move {
+            c.dr()
+                .await
+                .is_ok_and(|d| d.active_epoch.is_none() && d.commit >= after)
+        }
+    })
+    .await;
+    let held = w.client.status("vault").await.unwrap().summary;
+
+    assert_eq!(lost, "ok");
+    assert_eq!(common::kind(&early), "conflict");
+    assert!(early.to_string().contains("has not reseeded"), "{early}");
+    assert!(format::contains_stale(&stale_view), "{stale_view:?}");
+    assert!(format::contains_stale(&restarted), "{restarted:?}");
+    assert!(
+        handed.message.contains("handed back to node 1"),
+        "{}",
+        handed.message
+    );
+    assert_eq!(site2, "written");
+    assert_eq!(old, "v4");
+    assert_eq!(gone, "none");
+    assert_eq!(held.status, "dr copy", "{held:?}");
+    for p in [&mut n1, &mut n2, &mut w] {
+        p.child.kill().await.unwrap();
+    }
+}
+
+mod format {
+    /// Whether a failover view shows the node stale, reseeding from node 3.
+    pub(super) fn contains_stale(f: &bulkhead::api::FailoverInfo) -> bool {
+        f.role == "down" && f.replication.as_ref().is_some_and(|r| r.stale == Some(3))
+    }
+}

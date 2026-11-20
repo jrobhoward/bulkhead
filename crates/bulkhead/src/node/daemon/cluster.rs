@@ -262,6 +262,8 @@ impl Node {
                 partner_matched: s.partner_matched,
                 alone: s.alone,
                 dr_lag_ms: self.rt.dr_lag().map(millis),
+                stale: s.stale,
+                reseeded: s.reseeded,
             }),
         })
     }
@@ -289,6 +291,7 @@ impl Node {
             stopped: s.stopped,
             deploys: Some(self.held_info()),
             active_epoch: self.rt.dr_active(),
+            reseeded: s.leading.map(|_| s.reseeded),
         })
     }
 
@@ -350,6 +353,73 @@ impl Node {
                 status.commit
             ),
         })
+    }
+
+    /// Hand back from this node, the active DR node, to pair node `to`
+    /// (ROADMAP DR4's failback): its apps stop, its copy takes no more
+    /// writes, both pair nodes must have reseeded up to its last entry
+    /// within `wait`, then the witness promotes `to` at a new epoch and
+    /// this node holds the pair's apps and pulls its copy again. On a
+    /// refusal after the apps stopped, they start again.
+    ///
+    /// # Errors
+    ///
+    /// [`NodeError::NotFound`] without `[dr]`; [`NodeError::Conflict`]
+    /// when not active or a pair node has not caught up;
+    /// [`NodeError::Invalid`] for a node not of the pair.
+    pub async fn dr_failback(&self, to: u32, wait: Duration) -> Result<Done, NodeError> {
+        use bulkhead_host::failover::FailbackRefused;
+        let Some(d) = &self.config.dr else {
+            return Err(NodeError::NotFound(
+                "this node has no [dr] in its config".into(),
+            ));
+        };
+        if self.rt.dr_active().is_none() {
+            return Err(NodeError::Conflict(
+                "this DR node is not active: there is nothing to hand back".into(),
+            ));
+        }
+        if !d.pair.contains(&to) {
+            return Err(NodeError::Invalid(format!(
+                "node {to} is not of the pair {:?}",
+                d.pair
+            )));
+        }
+        self.audit.record("dr_failback_asked", json!({ "to": to }));
+        {
+            // Nothing may write while the pair catches up.
+            let _change = self.change.lock().await;
+            let order = self.st().desired.order.clone();
+            for name in order.iter().rev() {
+                if self.running(name) {
+                    self.stop_running(name).await?;
+                    self.ingress.remove_routes(name);
+                }
+            }
+        }
+        match self.rt.dr_failback(to, wait).await {
+            Ok(epoch) => {
+                self.audit
+                    .record("dr_failback", json!({ "to": to, "epoch": epoch }));
+                Ok(Done {
+                    message: format!(
+                        "handed back to node {to} at epoch {epoch}: it resumes as primary when it \
+                         next asks the witness, its partner rejoining it as standby; this node \
+                         holds the pair's apps again and pulls its copy from the pair. \
+                         Deployments made here while active stay here until the pair's replace \
+                         them"
+                    ),
+                })
+            }
+            Err(e) => {
+                self.restore().await;
+                Err(match e {
+                    FailbackRefused::NotOfPair(..) => NodeError::Invalid(e.to_string()),
+                    FailbackRefused::NotKept(why) => NodeError::Internal(why),
+                    other => NodeError::Conflict(other.to_string()),
+                })
+            }
+        }
     }
 
     /// This node's failover standing once its leadership has changed since

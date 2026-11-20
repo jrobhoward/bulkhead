@@ -141,6 +141,23 @@ enum DrCommand {
         #[arg(long)]
         site_1_down: bool,
     },
+    /// Hand back from this active DR node to site 1 (ROADMAP DR4): start
+    /// both site-1 nodes first; each finds itself stale and reseeds from a
+    /// full snapshot of this node (`bulkhead failover` there says when it
+    /// has caught up). This node then stops its apps and takes no more
+    /// writes; once both hold its last entry, the witness makes --to
+    /// primary at a new epoch and the other rejoins it as standby. This
+    /// node holds the pair's apps and pulls its copy again. Refused, with
+    /// the apps started again, if a site-1 node has not caught up within
+    /// --wait-s.
+    Failback {
+        /// The site-1 node to make primary.
+        #[arg(long)]
+        to: u32,
+        /// How long to wait for both site-1 nodes to catch up, in seconds.
+        #[arg(long, default_value_t = 60)]
+        wait_s: u64,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -880,6 +897,9 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
         Command::Dr {
             action: Some(DrCommand::Activate { site_1_down }),
         } => done(json, client.dr_activate(site_1_down).await),
+        Command::Dr {
+            action: Some(DrCommand::Failback { to, wait_s }),
+        } => done(json, client.dr_failback(to, wait_s).await),
         Command::Release { action: None } => print(json, &client.release().await?, format::release),
         Command::Release {
             action: Some(ReleaseCommand::Finalize),
