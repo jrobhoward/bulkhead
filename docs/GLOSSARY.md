@@ -54,7 +54,7 @@ Two words have more than one meaning:
 - **Link:** a two-way tie between instances: when one exits abnormally, the other exits too, unless it traps exits and gets an `exit` info instead.
 - **Monitor:** a one-way watch on an instance: the watcher gets a `down` info when it exits.
 - **Trap exits:** an instance that traps exits turns exit signals from links into `exit` infos.
-- **Supervisor:** a host task that starts children and restarts them by its strategy (`one_for_one`, `one_for_all`, `rest_for_one`, `simple_one_for_one`), within `intensity` restarts per `period`, after a backoff. Each app has a root supervisor.
+- **Supervisor:** a host task that starts children and restarts them by its strategy (`one_for_one`, `one_for_all`, `rest_for_one`, `simple_one_for_one`), within `intensity` restarts per `period`, after a backoff. Each app has a root supervisor, which runs the app's own instances and no other app's.
 - **Health check:** a call the host makes to an instance on a timer; `failure_threshold` failures in a row kill it as `crashed: unhealthy`.
 - **Upgrade modes:** `restart` (stop, then start the new version from `init`), `snapshot` (each instance in place: `save_snapshot` in the old version, `load_snapshot` in the new, keeping pid and mailbox) and `blue-green` (the new version beside the old, traffic moved by weight). [MANIFEST.md](MANIFEST.md).
 - **Weight:** during a blue-green upgrade, the percentage of messages a pool sends to the new side.

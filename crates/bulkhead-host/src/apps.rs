@@ -452,14 +452,7 @@ impl Apps {
                 )));
             }
         }
-        let others: Vec<AppDeployment> = set.apps.values().map(AppHandle::deployment).collect();
-        let mut by_name: HashMap<&str, &AppDeployment> = others
-            .iter()
-            .chain(also)
-            .map(|d| (d.manifest.app.name.as_str(), d))
-            .collect();
-        by_name.insert(name, deployment);
-        root_spec(deployment, &by_name).map_err(HostError::InvalidApps)
+        Ok(root_spec(deployment))
     }
 
     /// Kill every instance of `name` at once (no `terminate`, no restart)
@@ -926,14 +919,7 @@ pub(crate) async fn start(
 ) -> Result<Apps, HostError> {
     let manifests: Vec<&AppManifest> = deployments.iter().map(|d| &d.manifest).collect();
     let order = start_order(&manifests).map_err(HostError::InvalidApps)?;
-    let by_name: HashMap<&str, &AppDeployment> = deployments
-        .iter()
-        .map(|d| (d.manifest.app.name.as_str(), d))
-        .collect();
-    let mut specs = Vec::with_capacity(order.len());
-    for &i in &order {
-        specs.push(root_spec(&deployments[i], &by_name).map_err(HostError::InvalidApps)?);
-    }
+    let specs: Vec<SupervisorSpec> = order.iter().map(|&i| root_spec(&deployments[i])).collect();
 
     let mut set = AppSet::default();
     for (&i, spec) in order.iter().zip(specs) {
@@ -1067,7 +1053,7 @@ async fn watch_side(app: AppHandle, supervisor: SupervisorHandle) {
 /// Start the root supervisor and instances of `deployment` for the new side
 /// of a blue-green upgrade, and wait until they run.
 async fn start_side(rt: &Runtime, deployment: &AppDeployment) -> Result<SupervisorHandle, String> {
-    let spec = root_spec(deployment, &HashMap::new())?;
+    let spec = root_spec(deployment);
     let pooled = spec.strategy == Strategy::SimpleOneForOne;
     let budget = start_budget(&spec);
     let supervisor = rt.start_supervisor(spec).map_err(|e| e.to_string())?;
@@ -1365,61 +1351,36 @@ async fn wait_started(supervisor: &SupervisorHandle, budget: Duration) -> Result
     }
 }
 
-/// The root supervisor for one app. `simple_one_for_one` uses
-/// `supervision.children[0]` as the pool template; other strategies run
-/// `instances.count` instances of the app itself, then the listed children.
-fn root_spec(
-    deployment: &AppDeployment,
-    by_name: &HashMap<&str, &AppDeployment>,
-) -> Result<SupervisorSpec, String> {
+/// The root supervisor for one app, which runs the app's own instances and
+/// no other app's (ROADMAP AP3): `instances.count` of them, or under
+/// `simple_one_for_one` a template of the app that the caller starts
+/// `instances.count` children from (each named `instance-<n>` either way).
+fn root_spec(deployment: &AppDeployment) -> SupervisorSpec {
     let manifest = &deployment.manifest;
     let supervision = &manifest.spec.supervision;
-    let mut children = Vec::new();
-    if supervision.strategy != Strategy::SimpleOneForOne {
-        for n in 1..=manifest.spec.instances.initial() {
-            children.push(ChildSpec {
-                id: format!("instance-{n}"),
-                restart: manifest.spec.lifecycle.restart,
-                start: ChildStart::Instance {
-                    app: deployment.app.clone(),
-                    spec: deployment.spec.clone(),
-                },
-            });
-        }
-    }
-    for child in &supervision.children {
-        let target = by_name.get(child.app.as_str()).ok_or_else(|| {
-            format!(
-                "{}: supervision child '{}' runs app '{}', which is not deployed",
-                manifest.app.name, child.id, child.app
-            )
-        })?;
-        let mut spec = target.spec.clone();
-        if let Some(ms) = child.shutdown_timeout_ms {
-            spec.shutdown_timeout = Duration::from_millis(ms);
-        }
-        if let Some(args) = &child.start_args {
-            spec.init_args = args.to_string().into_bytes();
-        }
-        children.push(ChildSpec {
-            id: child.id.clone(),
-            restart: child
-                .restart
-                .unwrap_or(target.manifest.spec.lifecycle.restart),
-            start: ChildStart::Instance {
-                app: target.app.clone(),
-                spec,
-            },
-        });
-    }
-    Ok(SupervisorSpec {
+    let child = |id: String| ChildSpec {
+        id,
+        restart: manifest.spec.lifecycle.restart,
+        start: ChildStart::Instance {
+            app: deployment.app.clone(),
+            spec: deployment.spec.clone(),
+        },
+    };
+    let children = if supervision.strategy == Strategy::SimpleOneForOne {
+        vec![child("instance".to_string())]
+    } else {
+        (1..=manifest.spec.instances.initial())
+            .map(|n| child(format!("instance-{n}")))
+            .collect()
+    };
+    SupervisorSpec {
         name: manifest.app.name.clone(),
         strategy: supervision.strategy,
         intensity: supervision.intensity,
         period: Duration::from_millis(supervision.period_ms),
         backoff: Backoff::from(&supervision.backoff),
         children,
-    })
+    }
 }
 
 /// Start order: each app after the apps it depends on, otherwise in the

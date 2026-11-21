@@ -105,7 +105,8 @@ pub enum Strategy {
     OneForAll,
     /// Restart the child that exited and every child started after it.
     RestForOne,
-    /// A dynamic pool of identical children from a single child spec.
+    /// A pool of the app's own instances, `instances.count` of them, each
+    /// restarted alone.
     SimpleOneForOne,
 }
 
@@ -132,27 +133,8 @@ impl Default for Backoff {
     }
 }
 
-/// A child started by a supervisor app.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChildSpec {
-    /// Identifies the child within its supervisor.
-    pub id: String,
-    /// The app to start.
-    pub app: String,
-    /// Overrides the child app's own `lifecycle.restart`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub restart: Option<RestartType>,
-    /// Overrides the child app's own `lifecycle.shutdown_timeout_ms`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shutdown_timeout_ms: Option<u64>,
-    /// Overrides the child app's own `lifecycle.start_args`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_args: Option<serde_json::Value>,
-}
-
-/// The `supervision` section: the app's root supervisor and, for supervisor
-/// apps, the children it starts.
+/// The `supervision` section: the app's root supervisor, which runs the
+/// app's own instances and no other app's (ROADMAP AP3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Supervision {
@@ -165,9 +147,6 @@ pub struct Supervision {
     pub period_ms: u64,
     /// Delay between restarts.
     pub backoff: Backoff,
-    /// Children, in start order.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<ChildSpec>,
 }
 
 impl Default for Supervision {
@@ -177,7 +156,6 @@ impl Default for Supervision {
             intensity: 5,
             period_ms: 10_000,
             backoff: Backoff::default(),
-            children: Vec::new(),
         }
     }
 }
@@ -189,21 +167,6 @@ impl Supervision {
         }
         if self.backoff.max_ms < self.backoff.initial_ms {
             v.error_at("backoff.max_ms", "must be at least backoff.initial_ms");
-        }
-        v.unique_names("children", self.children.iter().map(|c| c.id.as_str()));
-        for (i, child) in self.children.iter().enumerate() {
-            v.at(format!("children[{i}]"), |v| {
-                v.name("app", &child.app);
-                if child.shutdown_timeout_ms == Some(0) {
-                    v.error_at("shutdown_timeout_ms", "must be greater than zero");
-                }
-            });
-        }
-        if self.strategy == Strategy::SimpleOneForOne && self.children.len() != 1 {
-            v.error_at(
-                "children",
-                "simple_one_for_one needs exactly one child spec, the template for the pool",
-            );
         }
     }
 }

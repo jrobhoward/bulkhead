@@ -124,17 +124,6 @@ pub fn validate_blue_green(
                 m.app.name, m.app.version
             ));
         }
-        if m.spec
-            .supervision
-            .children
-            .iter()
-            .any(|c| c.app != m.app.name)
-        {
-            return invalid(format!(
-                "{} {} supervises other apps' instances",
-                m.app.name, m.app.version
-            ));
-        }
     }
     validate_upgrade(old, new, approve)
 }

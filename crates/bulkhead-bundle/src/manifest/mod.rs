@@ -44,8 +44,8 @@ pub use capabilities::{
 };
 pub use error::{ManifestError, ValidationError};
 pub use lifecycle::{
-    Backoff, ChildSpec, Instances, Kind, Lifecycle, Native, NativeProgram, RestartType, Routing,
-    Strategy, Supervision, Upgrade, UpgradeMode,
+    Backoff, Instances, Kind, Lifecycle, Native, NativeProgram, RestartType, Routing, Strategy,
+    Supervision, Upgrade, UpgradeMode,
 };
 pub use limits::Limits;
 pub use sections::{
@@ -82,7 +82,7 @@ pub struct AppSpec {
     pub registered_names: Vec<RegisteredName>,
     /// Start, stop and restart behaviour.
     pub lifecycle: Lifecycle,
-    /// Root supervisor and, for supervisor apps, children.
+    /// The root supervisor of the app's own instances.
     pub supervision: Supervision,
     /// How many instances run and how a pool routes.
     pub instances: Instances,

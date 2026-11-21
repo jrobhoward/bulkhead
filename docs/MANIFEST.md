@@ -102,17 +102,16 @@ log_level = "info"
 
 ### `supervision`
 
-The app's root supervisor, with OTP semantics.
+The app's root supervisor, with OTP semantics. It runs the app's own instances, named `instance-1` to `instance-<count>`, and no other app's: supervision is flat, and `dependencies` orders apps' starts and stops.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `strategy` | `"one_for_one"` | `one_for_one`, `one_for_all`, `rest_for_one`, or `simple_one_for_one` (a pool built from `children[0]`). |
+| `strategy` | `"one_for_one"` | `one_for_one`, `one_for_all`, `rest_for_one`, or `simple_one_for_one` (a pool of the app's own instances, `instances.count` of them). |
 | `intensity` | `5` | Most restarts within `period_ms`. One more, and the supervisor gives up: the app is marked `failed`, and the reason shows in `bulkhead status`. |
 | `period_ms` | `10000` | The window for `intensity`. |
 | `backoff.initial_ms` | `100` | Delay before the first restart. It doubles on each consecutive restart. |
 | `backoff.max_ms` | `5000` | Upper bound on the delay. |
 | `backoff.jitter` | `true` | Randomize delays, so pools don't restart in lockstep. |
-| `children` | `[]` | Other deployed apps this supervisor also starts, after the app's own instances: `{ id, app, restart?, shutdown_timeout_ms?, start_args? }`. The optional fields override the child app's own. |
 
 ### `instances`
 

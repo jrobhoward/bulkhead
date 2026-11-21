@@ -169,6 +169,11 @@ fn AppSpec____json_round_trip____is_lossless() {
 )]
 #[case(r#"{ "limits": { "cpu": 0.5 } }"#, "limits.cpu", "unknown field `cpu`")]
 #[case(
+    r#"{ "supervision": { "children": [] } }"#,
+    "supervision.children",
+    "unknown field `children`"
+)]
+#[case(
     r#"{ "limits": { "memory_max": "64 parsecs" } }"#,
     "limits.memory_max",
     "unknown unit"
@@ -259,8 +264,6 @@ fn AppSpec____memory_max_above_4_gib____accepted() {
 #[case(json!({ "registered_names": ["a", "a"] }), "registered_names[1]")]
 #[case(json!({ "dependencies": [{ "app": "b", "version": "1" }, { "app": "b", "version": "2" }] }), "dependencies[1].app")]
 #[case(json!({ "supervision": { "period_ms": 0 } }), "supervision.period_ms")]
-#[case(json!({ "supervision": { "strategy": "simple_one_for_one" } }), "supervision.children")]
-#[case(json!({ "supervision": { "children": [{ "id": "w", "app": "x" }, { "id": "w", "app": "y" }] } }), "supervision.children[1]")]
 #[case(json!({ "supervision": { "backoff": { "initial_ms": 10, "max_ms": 5 } } }), "supervision.backoff.max_ms")]
 #[case(json!({ "upgrade": { "mode": "snapshot" } }), "upgrade.snapshot_version")]
 #[case(json!({ "capabilities": { "bulkhead:keyvalue": { "buckets": { "Bad Name": {} } } } }), "capabilities.bulkhead:keyvalue.buckets.Bad Name")]

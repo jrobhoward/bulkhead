@@ -98,7 +98,7 @@ fn validate_upgrade____same_version_or_other_app____invalid() {
 }
 
 #[test]
-fn validate_blue_green____mode_names_and_children____checked() {
+fn validate_blue_green____mode_and_names____checked() {
     let blue_green = json!({ "upgrade": { "mode": "blue-green" } });
     let old = manifest("c", "1.0.0", json!({}));
     let new = manifest("c", "2.0.0", blue_green.clone());

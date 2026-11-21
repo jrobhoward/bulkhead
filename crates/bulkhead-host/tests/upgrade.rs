@@ -580,14 +580,13 @@ async fn snapshot____after_exit____not_running() {
     assert_eq!(result, Err(bulkhead_host::SnapshotError::NotRunning));
 }
 
-/// `extra` as a pool of two instances of `name` (`simple_one_for_one`).
-fn pool(name: &str, mut extra: serde_json::Value) -> serde_json::Value {
+/// `extra` as a pool of two instances of the app (`simple_one_for_one`).
+fn pool(mut extra: serde_json::Value) -> serde_json::Value {
     extra["instances"] = json!({ "count": 2 });
     extra["supervision"] = json!({
         "strategy": "simple_one_for_one",
         "intensity": 3,
-        "backoff": { "initial_ms": 10, "max_ms": 20 },
-        "children": [{ "id": "w", "app": name }]
+        "backoff": { "initial_ms": 10, "max_ms": 20 }
     });
     extra
 }
@@ -600,16 +599,12 @@ async fn upgrade____supervisor_exits_mid_rollout____error_says_the_template_was_
     let (rt, _) = shared();
     let name = "up-sup-exit";
     let apps = rt
-        .start_apps(vec![deployment(name, 1, pool(name, json!({})))])
+        .start_apps(vec![deployment(name, 1, pool(json!({})))])
         .await
         .unwrap();
     let app = apps.app(name).unwrap().clone();
     running_at(&app, 1).await;
-    let v2 = deployment(
-        name,
-        2,
-        pool(name, json!({ "upgrade": snapshot_mode("^1") })),
-    );
+    let v2 = deployment(name, 2, pool(json!({ "upgrade": snapshot_mode("^1") })));
     let supervisor = app.supervisor().unwrap().clone();
     let exit = tokio::spawn(async move {
         // After the first instance moved, during the observe window.

@@ -358,44 +358,7 @@ async fn running_app____restarts_exhausted_later____status_becomes_failed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn supervision_children____other_app____runs_under_this_apps_root() {
-    let (rt, _) = shared();
-    let apps = rt
-        .start_apps(vec![
-            deployment("sc-worker", "1.0.0", fast(json!({ "instances": { "count": 1 } }))),
-            deployment(
-                "sc-boss",
-                "1.0.0",
-                fast(json!({ "supervision": { "intensity": 2, "children": [{ "id": "helper", "app": "sc-worker" }] } })),
-            ),
-        ])
-        .await
-        .unwrap();
-
-    let children = apps
-        .app("sc-boss")
-        .unwrap()
-        .supervisor()
-        .unwrap()
-        .children();
-
-    let shape: Vec<(String, Option<String>)> = children
-        .iter()
-        .map(|c| (c.id.clone(), c.app.clone()))
-        .collect();
-    assert_eq!(
-        shape,
-        vec![
-            ("instance-1".into(), Some("sc-boss".into())),
-            ("helper".into(), Some("sc-worker".into())),
-        ]
-    );
-    assert_eq!(apps.app("sc-boss").unwrap().instances().len(), 1);
-    apps.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn simple_one_for_one_app____instances_count____starts_that_many_from_template() {
+async fn simple_one_for_one_app____instances_count____starts_that_many_of_the_app() {
     let (rt, _) = shared();
     let apps = rt
         .start_apps(vec![deployment(
@@ -403,7 +366,7 @@ async fn simple_one_for_one_app____instances_count____starts_that_many_from_temp
             "1.0.0",
             fast(json!({
                 "instances": { "count": 3 },
-                "supervision": { "strategy": "simple_one_for_one", "intensity": 2, "children": [{ "id": "w", "app": "sofo-app" }] }
+                "supervision": { "strategy": "simple_one_for_one", "intensity": 2 }
             })),
         )])
         .await
@@ -418,7 +381,7 @@ async fn simple_one_for_one_app____instances_count____starts_that_many_from_temp
         .map(|c| c.id.clone())
         .collect();
 
-    assert_eq!(ids, vec!["w-1", "w-2", "w-3"]);
+    assert_eq!(ids, vec!["instance-1", "instance-2", "instance-3"]);
     assert_eq!(app.instances().len(), 3);
     assert_eq!(app.status(), AppStatus::Running);
     apps.stop().await;

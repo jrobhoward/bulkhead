@@ -170,6 +170,16 @@ All notable changes are recorded here. The format follows
 
 ### Removed
 
+- `supervision.children` (ROADMAP AP3): an app's root supervisor no
+  longer starts instances of other deployed apps, as supervision is flat;
+  it runs the app's own instances only, and `dependencies` orders apps'
+  starts and stops. The manifest key is refused as an unknown field, so
+  a stored deployment whose manifest used it no longer loads (no example
+  did). Under `simple_one_for_one` the app itself is the pool's template:
+  `supervision.children[0]` is no longer needed, and the pool's instances
+  are named `instance-1` to `instance-<count>`, as under the other
+  strategies (they took the template's id). Blue-green upgrades lose the
+  check for other apps' children, which can no longer be declared.
 - CPU limits per instance (ROADMAP PS6b, decided 2026-11-19; PS6 above
   added them). The cgroup `cpu` controller cost every call from the host
   2.4 to 3.3 µs on a Raspberry Pi 5 (about 21 µs against 18 µs), a fifth
