@@ -1,0 +1,36 @@
+[package]
+name = "bulkhead-runner"
+version.workspace = true
+description = "The launcher a Bulkhead node runs every native app through: Landlock and seccomp on Linux, Capsicum on FreeBSD"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "bulkhead-runner"
+path = "src/bin/bulkhead-runner.rs"
+
+[dependencies]
+bulkhead-native = { workspace = true, features = ["app"] }
+rustix = { workspace = true, features = ["event"] }
+rustbridge-consumer = { workspace = true }
+serde_json = { workspace = true }
+
+# The sandbox, which is Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+seccompiler = { workspace = true }
+libc = "0.2"
+
+# FreeBSD: Capsicum's rights and the watchdog's signals.
+[target.'cfg(target_os = "freebsd")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rstest.workspace = true
+
+[lints]
+workspace = true

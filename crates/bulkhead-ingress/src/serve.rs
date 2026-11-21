@@ -11,12 +11,12 @@
 //! rules 403, the instance exiting before replying, a malformed reply or
 //! one over `max_response` 502.
 
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use bulkhead_native::protocol::{CallError, Envelope};
 use bulkhead_native::sender_async::AsyncSender;
-use bulkhead_sdk::http::{Request, Response, Routes};
+use bulkhead_sdk::http::{ClientCert, Request, Response, Routes};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
@@ -24,6 +24,7 @@ use hyper::header::{
     CONTENT_LENGTH, CONTENT_TYPE, HOST, HeaderName, HeaderValue, LOCATION, RETRY_AFTER,
 };
 use hyper::{StatusCode, Uri};
+use rustls_pki_types::CertificateDer;
 
 use crate::config::{Listener, Standby};
 use crate::tls::IngressTls;
@@ -74,14 +75,36 @@ impl Listening {
     }
 }
 
-/// Answer `req`, counting it.
+/// The client certificate a handshake verified, from its peer
+/// certificates (leaf first), for the app (ROADMAP DA2b).
+#[must_use]
+pub fn client_cert(peer: Option<&[CertificateDer<'_>]>) -> Option<Arc<ClientCert>> {
+    let leaf = peer?.first()?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, leaf.as_ref());
+    let sha256 = digest
+        .as_ref()
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write as _;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+    Some(Arc::new(ClientCert {
+        sha256,
+        der: leaf.to_vec(),
+    }))
+}
+
+/// Answer `req`, counting it; `client` is the connection's verified client
+/// certificate, if any.
 pub async fn serve(
     req: hyper::Request<Incoming>,
     listening: &Listening,
     shared: &Shared,
     sender: &AsyncSender,
+    client: Option<&ClientCert>,
 ) -> Reply {
-    let reply = handle(req, listening, shared, sender).await;
+    let reply = handle(req, listening, shared, sender, client).await;
     let c = &shared.counters;
     c.requests.fetch_add(1, Ordering::Relaxed);
     let code = reply.status();
@@ -102,6 +125,7 @@ async fn handle(
     listening: &Listening,
     shared: &Shared,
     sender: &AsyncSender,
+    client: Option<&ClientCert>,
 ) -> Reply {
     let host = host_of(req.headers().get(HOST), req.uri());
     let path = req.uri().path().to_string();
@@ -149,6 +173,7 @@ async fn handle(
             .collect(),
         body: body.to_vec(),
         key,
+        client_cert: client.cloned(),
     };
     let timeout_ms = u32::try_from(route.timeout_ms).unwrap_or(u32::MAX);
     let msg: Envelope = request.to_envelope().into();

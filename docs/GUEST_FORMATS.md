@@ -46,6 +46,7 @@ The node's HTTP ingress sends each request on an app's routes as a call: content
 | `headers` | array of `[name, value]` text pairs | Names in lower case, in the order received; a repeated header appears once per value; a value that is not UTF-8 has its invalid bytes replaced |
 | `body` | bytes | Up to the route's `max_body` |
 | `key` | text | Only when the route has a `hash_header`: that header's value, for `instances.routing = "hash:key"` |
+| `client_cert` | map | Only when the listener has `client_ca` and the client gave a certificate the ingress verified (ROADMAP DA2b): `sha256`, text, the lowercase hex SHA-256 of `der`; `der`, bytes, the leaf certificate. The ingress parses no more of it than verifying it does; an app that needs the subject parses `der` itself |
 
 ```text
 {"scheme": "http", "method": "POST", "path": "/board/inc", "query": "by=2",
@@ -58,6 +59,23 @@ a766736368656d656468747470666d6574686f6464504f535464706174686a2f
 626f6172642f696e636571756572796462793d32676865616465727382826468
 6f73746e6c6f63616c686f73743a38303830826c636f6e74656e742d74797065
 6a746578742f706c61696e64626f6479426869636b65796874656e616e742d37
+```
+
+With a client certificate (its `der` shortened here to five bytes):
+
+```text
+{"scheme": "https", "method": "GET", "path": "/board", "query": null,
+ "headers": [], "body": h'',
+ "client_cert": {"sha256": "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0",
+                 "der": h'3003020101'}}
+```
+
+```cbor-hex http-request-client
+a766736368656d65656874747073666d6574686f64634745546470617468662f
+626f617264657175657279f667686561646572738064626f6479406b636c6965
+6e745f63657274a2667368613235367840316236356636386135323263383538
+3731356635646439353163643034303264633136363931373738383134626630
+373539383232623761323537343231643063646572453003020101
 ```
 
 The app answers from `handle-call`, now or later with `process.reply`. A reply with schema `bulkhead/http-response` is a CBOR map:

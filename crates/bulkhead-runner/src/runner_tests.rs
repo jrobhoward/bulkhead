@@ -203,3 +203,46 @@ fn parse_interpreter____not_a_whole_elf64____none(#[case] bytes: Vec<u8>) {
 
     assert!(found.is_none(), "{found:?}");
 }
+
+#[test]
+fn args____profile____parsed_and_refused_unknown() {
+    let parse = |p: &str| {
+        Args::parse(
+            ["--executable", "/bin/true", "--profile", p]
+                .into_iter()
+                .map(String::from),
+        )
+    };
+
+    let ingress = parse("ingress").unwrap();
+    let unknown = parse("sandbox").unwrap_err();
+
+    assert_eq!(ingress.profile, crate::Profile::Ingress);
+    assert!(unknown.contains("app or ingress"), "{unknown}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ingress_profile____the_apps_list_without_process_and_file_changes____and_builds() {
+    use super::seccomp::{INGRESS_WITHOUT, Profile, allowed, allowed_for};
+
+    let app = allowed();
+    let ingress = allowed_for(Profile::Ingress);
+    let installed = super::seccomp::rules(&[1234], &[8]).map(|_| ());
+
+    assert!(ingress.iter().all(|c| app.contains(c)));
+    assert!(INGRESS_WITHOUT.iter().all(|c| !ingress.contains(c)));
+    assert!(
+        INGRESS_WITHOUT.iter().all(|c| app.contains(c)),
+        "only calls the apps' list has"
+    );
+    for kept in [
+        libc::SYS_execve,
+        libc::SYS_accept4,
+        libc::SYS_openat,
+        libc::SYS_futex,
+    ] {
+        assert!(ingress.contains(&kept), "{kept}");
+    }
+    assert!(installed.is_ok());
+}

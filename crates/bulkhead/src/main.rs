@@ -816,7 +816,7 @@ async fn run_apps(client: &Client, json: bool, command: Command) -> anyhow::Resu
                 out
             })
         }
-        Command::List => print(json, &client.list().await?, |a| format::apps(a)),
+        Command::List => print(json, &client.list_all().await?, |a| format::apps(a)),
         Command::Status { app } => print(json, &client.status(&app).await?, format::detail),
         Command::Upgrade {
             app,

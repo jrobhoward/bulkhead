@@ -20,7 +20,7 @@
 # all at the end unless KEEP=1.
 #
 #   cargo build -p bulkhead -p bulkhead-priv -p example-board   # as a user
-#   cargo build -p bulkhead-native --bin bulkhead-runner
+#   cargo build -p bulkhead-runner
 #   cargo build -p bulkhead-resolve -p bulkhead-ingress -p bulkhead-admin -p bulkhead-metrics
 #   cargo build -p bulkhead-sql -p example-tally
 #   cargo build -p bulkhead-egress -p bulkhead-fixture-sdk

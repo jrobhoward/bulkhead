@@ -35,7 +35,7 @@ pub fn native_fixtures() -> &'static (PathBuf, PathBuf) {
             .args([
                 "build",
                 "-p",
-                "bulkhead-native",
+                "bulkhead-runner",
                 "-p",
                 "bulkhead-fixture-native",
                 "--target-dir",

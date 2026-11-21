@@ -4,7 +4,8 @@
 use std::time::Duration;
 
 use crate::api::{
-    AppDetail, AppSummary, Done, InstanceInfo, LogLine, MonitorInfo, StateResponse, Target,
+    AppDetail, AppSummary, Done, InstanceInfo, LogLine, MonitorInfo, RouteInfo, StateResponse,
+    Target,
 };
 use bulkhead_host::{AppHandle, AppStatus, CallError, Envelope, InstanceHandle, Pid, Runtime};
 use serde_json::json;
@@ -100,6 +101,37 @@ impl Node {
             previous: app.previous.clone(),
             new_version: app.new_side.as_ref().map(|n| n.version.clone()),
             new_traffic: app.new_side.as_ref().map(|n| n.percent),
+            built_in: false,
+        }
+    }
+
+    /// The node's own drivers that run (ROADMAP DA2b): every app the
+    /// runtime runs that was not deployed.
+    fn built_ins(&self) -> Vec<String> {
+        let st = self.st();
+        let mut names: Vec<String> = self
+            .apps
+            .names()
+            .into_iter()
+            .filter(|n| !st.desired.apps.contains_key(n))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A built-in driver's summary.
+    fn built_in_summary(&self, name: &str, handle: &AppHandle) -> AppSummary {
+        let (status, reason) = status_text(&handle.status());
+        AppSummary {
+            name: name.to_string(),
+            version: handle.version().to_string(),
+            status,
+            reason,
+            instances: handle.instances().len(),
+            previous: None,
+            new_version: None,
+            new_traffic: None,
+            built_in: true,
         }
     }
 
@@ -129,6 +161,13 @@ impl Node {
     /// being deployed appears once its deploy is done.
     #[must_use]
     pub fn list(&self) -> Vec<AppSummary> {
+        self.list_with(false)
+    }
+
+    /// [`Node::list`], and with `built_in` the node's own drivers after the
+    /// apps (ROADMAP DA2b).
+    #[must_use]
+    pub fn list_with(&self, built_in: bool) -> Vec<AppSummary> {
         let apps: Vec<(String, AppState, Option<String>)> = {
             let st = self.st();
             st.desired
@@ -140,9 +179,16 @@ impl Node {
                 })
                 .collect()
         };
-        apps.iter()
+        let mut list: Vec<AppSummary> = apps
+            .iter()
             .map(|(n, a, e)| self.summary(n, a, e.as_ref()))
-            .collect()
+            .collect();
+        for name in self.built_ins().into_iter().filter(|_| built_in) {
+            if let Some(handle) = self.apps.app(&name) {
+                list.push(self.built_in_summary(&name, &handle));
+            }
+        }
+        list
     }
 
     /// One app in detail.
@@ -151,6 +197,10 @@ impl Node {
     ///
     /// [`NodeError::NotFound`].
     pub fn status(&self, name: &str) -> Result<AppDetail, NodeError> {
+        let deployed = self.st().desired.apps.contains_key(name);
+        if !deployed && let Some(handle) = self.apps.app(name) {
+            return Ok(self.built_in_detail(name, &handle));
+        }
         let (app, info, restore_error) = {
             let st = self.st();
             let app = st
@@ -191,7 +241,38 @@ impl Node {
                 (0, _) => None,
                 (count, bytes) => Some((count as u64, bytes)),
             },
+            routes: self
+                .ingress
+                .routes_of(name)
+                .into_iter()
+                .map(|(host, prefix)| RouteInfo { host, prefix })
+                .collect(),
         })
+    }
+
+    /// A built-in driver in detail: its instances and restarts.
+    fn built_in_detail(&self, name: &str, handle: &AppHandle) -> AppDetail {
+        AppDetail {
+            summary: self.built_in_summary(name, handle),
+            signer: String::new(),
+            granted: Vec::new(),
+            denied: Vec::new(),
+            warnings: Vec::new(),
+            restarts: handle.supervisor().map_or(0, |s| s.restart_count()),
+            instance_list: handle
+                .instances()
+                .iter()
+                .map(|i| instance_info(&self.rt, i))
+                .collect(),
+            listeners: Vec::new(),
+            runs_as: if self.config.privileges.is_some() {
+                "its own user".into()
+            } else {
+                "the node's user".into()
+            },
+            blobs: None,
+            routes: Vec::new(),
+        }
     }
 
     /// Every live instance.

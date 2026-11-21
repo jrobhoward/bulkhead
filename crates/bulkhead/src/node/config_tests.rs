@@ -1082,3 +1082,40 @@ fn NodeConfig____dr_node_with_the_pair_s_cluster_buckets____read() {
     assert_eq!(dr.buckets["points"].scope, BucketScope::Cluster);
     assert!(alone.to_string().contains("or [dr]"), "{alone}");
 }
+
+#[test]
+fn NodeConfig____client_ca_without_tls_or_auth_without_ca____refused() {
+    let without_tls = NodeConfig::from_toml_str(&format!(
+        "{CLUSTERED}[http.main]\naddress = \"127.0.0.1:8443\"\nclient_ca = \"/etc/ca.pem\"\n"
+    ));
+    let without_ca = NodeConfig::from_toml_str(&format!(
+        "{CLUSTERED}[http.main]\naddress = \"127.0.0.1:8443\"\nclient_auth = \"optional\"\n\
+         tls = [{{ cert = \"/c.pem\", key = \"/k.pem\" }}]\n"
+    ));
+    let same_name = NodeConfig::from_toml_str(&format!(
+        "{CLUSTERED}[http.main]\naddress = \"127.0.0.1:8443\"\nclient_ca = \"/other/c.pem\"\n\
+         tls = [{{ cert = \"/c.pem\", key = \"/k.pem\" }}]\n"
+    ));
+    let read = NodeConfig::from_toml_str(&format!(
+        "{CLUSTERED}[http.main]\naddress = \"127.0.0.1:8443\"\nclient_ca = \"/ca.pem\"\n\
+         client_auth = \"optional\"\ntls = [{{ cert = \"/c.pem\", key = \"/k.pem\" }}]\n"
+    ))
+    .unwrap();
+
+    assert!(without_tls.unwrap_err().to_string().contains("needs tls"));
+    assert!(
+        without_ca
+            .unwrap_err()
+            .to_string()
+            .contains("needs client_ca")
+    );
+    assert!(
+        same_name
+            .unwrap_err()
+            .to_string()
+            .contains("same file name")
+    );
+    let main = &read.http["main"];
+    assert_eq!(main.client_ca.as_deref(), Some(Path::new("/ca.pem")));
+    assert_eq!(main.client_auth, Some(ClientAuthMode::Optional));
+}

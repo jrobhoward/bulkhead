@@ -47,7 +47,7 @@ fn programs() -> Programs {
         .args([
             "build",
             "-p",
-            "bulkhead-native",
+            "bulkhead-runner",
             "-p",
             "bulkhead-fixture-native",
         ])

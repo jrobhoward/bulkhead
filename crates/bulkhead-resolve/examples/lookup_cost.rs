@@ -60,7 +60,7 @@ fn programs() -> (PathBuf, PathBuf) {
             "build",
             "--release",
             "-p",
-            "bulkhead-native",
+            "bulkhead-runner",
             "-p",
             "bulkhead-resolve",
         ])

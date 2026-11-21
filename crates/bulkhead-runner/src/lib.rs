@@ -1,13 +1,13 @@
 //! `bulkhead-runner`: the launcher a node runs every native app through.
 //!
 //! ```text
-//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]...
+//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]... [--profile app|ingress]
 //! ```
 //!
 //! In order, before any code from the bundle runs:
 //!
 //! 0. With `--lease`, for an instance bound to a failover lease: fork a
-//!    watchdog ([`watchdog`], [`crate::lease`]) that kills the app once
+//!    watchdog ([`watchdog`], [`bulkhead_native::lease`]) that kills the app once
 //!    the lease's last deadline from the node has passed, whether or not
 //!    the node runs. The steps below run in the child.
 //! 1. Not dumpable: no core dump (a `core_pattern` that pipes to a helper
@@ -27,9 +27,9 @@
 //!
 //! Then `--library` loads a rustbridge plugin and serves it
 //! ([`library`]), and `--executable` replaces the runner with the
-//! program, which serves itself through [`crate::app`]. Landlock and
+//! program, which serves itself through [`bulkhead_native::app`]. Landlock and
 //! seccomp stay in force across the exec; not being dumpable does not
-//! (`execve` resets it for a readable program), so [`crate::app::serve`]
+//! (`execve` resets it for a readable program), so [`bulkhead_native::app::serve`]
 //! sets it again.
 //!
 //! On FreeBSD (ROADMAP FB2) step 1 is
@@ -40,6 +40,8 @@
 //! linker. `--landlock best-effort` changes nothing there, and a
 //! rustbridge plugin is refused (its loading would need paths). The jail
 //! per instance comes with the helper (FB2's second half).
+
+#![cfg(any(target_os = "linux", target_os = "freebsd"))]
 
 #[cfg(target_os = "freebsd")]
 pub mod capsicum;
@@ -60,7 +62,7 @@ use std::process::ExitCode;
 pub enum Program {
     /// A rustbridge plugin, loaded into the runner.
     Library(PathBuf),
-    /// An executable linking [`crate::app`], run in the runner's place.
+    /// An executable linking [`bulkhead_native::app`], run in the runner's place.
     Executable(PathBuf),
 }
 
@@ -86,11 +88,39 @@ pub struct Args {
     pub write: Vec<PathBuf>,
     /// Whether to refuse to run without Landlock.
     pub landlock_required: bool,
-    /// Whether a lease bounds the app ([`crate::lease`]): fork a watchdog.
+    /// Whether a lease bounds the app ([`bulkhead_native::lease`]): fork a watchdog.
     pub lease: bool,
     /// Listening sockets a driver app was passed (ROADMAP DA1), by
     /// descriptor number: `accept4` is allowed on these alone.
     pub accept_fds: Vec<i32>,
+    /// `--profile`: which system calls the app may make (Linux; on
+    /// FreeBSD Capsicum fences every app alike).
+    pub profile: Profile,
+}
+
+/// Which system calls a process gets (the runner's `--profile`, ROADMAP
+/// DA2b): on Linux, `seccomp::allowed_for`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Profile {
+    /// Any native app's.
+    #[default]
+    App,
+    /// The HTTP ingress driver's: the apps' list without what it has no
+    /// use for (`seccomp::INGRESS_WITHOUT`).
+    Ingress,
+}
+
+impl Profile {
+    /// The profile named `name` (`app`, `ingress`).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "app" => Some(Self::App),
+            "ingress" => Some(Self::Ingress),
+            _ => None,
+        }
+    }
 }
 
 impl Args {
@@ -107,8 +137,9 @@ impl Args {
         let mut landlock_required = true;
         let mut lease = false;
         let mut accept_fds = Vec::new();
+        let mut profile = Profile::App;
         while let Some(flag) = it.next() {
-            if flag == crate::lease::FLAG {
+            if flag == bulkhead_native::lease::FLAG {
                 lease = true;
                 continue;
             }
@@ -118,6 +149,11 @@ impl Args {
                 "--executable" => program = Some(Program::Executable(value()?.into())),
                 "--read" => read.push(value()?.into()),
                 "--write" => write.push(value()?.into()),
+                "--profile" => {
+                    let v = value()?;
+                    profile = Profile::parse(&v)
+                        .ok_or_else(|| format!("--profile {v}: app or ingress"))?;
+                }
                 "--accept-fd" => {
                     let v = value()?;
                     accept_fds.push(
@@ -145,6 +181,7 @@ impl Args {
             landlock_required,
             lease,
             accept_fds,
+            profile,
         })
     }
 }
@@ -174,7 +211,7 @@ pub fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     #[cfg(target_os = "linux")]
-    if let Err(e) = seccomp::install(&args.accept_fds) {
+    if let Err(e) = seccomp::install(&args.accept_fds, args.profile) {
         eprintln!("bulkhead-runner: seccomp: {e}");
         return ExitCode::from(2);
     }
@@ -195,11 +232,11 @@ pub fn main() -> ExitCode {
             // The environment is the node's choice, already narrowed to
             // what the app may know.
             let env: Vec<(String, String)> = [
-                crate::protocol::PRIV_ENV,
-                crate::preopens::ENV,
-                crate::channel::SPIN_ENV,
-                crate::channel::SENDER_SPIN_ENV,
-                crate::driver::LISTENERS_ENV,
+                bulkhead_native::protocol::PRIV_ENV,
+                bulkhead_native::preopens::ENV,
+                bulkhead_native::channel::SPIN_ENV,
+                bulkhead_native::channel::SENDER_SPIN_ENV,
+                bulkhead_native::driver::LISTENERS_ENV,
             ]
             .into_iter()
             .filter_map(|var| std::env::var(var).ok().map(|v| (var.to_string(), v)))
@@ -227,7 +264,7 @@ fn not_dumpable() -> rustix::io::Result<()> {
 /// As on Linux, and kept across the exec into the app.
 #[cfg(target_os = "freebsd")]
 fn not_dumpable() -> std::io::Result<()> {
-    crate::freebsd::set_not_traceable(true)
+    bulkhead_native::freebsd::set_not_traceable(true)
 }
 
 #[cfg(test)]

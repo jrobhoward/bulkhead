@@ -25,7 +25,7 @@ use std::time::Duration;
 use bulkhead_native::protocol::MetricKind;
 use bulkhead_native::sender::Sender;
 use bulkhead_native::sender_async::AsyncSender;
-use bulkhead_sdk::http::{ROUTES_EVENT, Routes};
+use bulkhead_sdk::http::{ClientCert, ROUTES_EVENT, Routes};
 use bulkhead_sdk::{App, CallRef, Ctx, Envelope, Info, Reply};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,7 @@ impl App for Ingress {
                 None
             } else {
                 Some(
-                    IngressTls::load(l.tls.clone(), SdkFiles)
+                    IngressTls::load(l.tls.clone(), l.client_auth.clone(), SdkFiles)
                         .map_err(|e| format!("listener {}: {e}", l.name))?,
                 )
             };
@@ -371,11 +371,14 @@ async fn connection(
         Err(_) => return,
     };
     match &l.tls {
-        None => http1(stream, l.clone(), shared.clone(), sender.clone()).await,
+        None => http1(stream, l.clone(), shared.clone(), sender.clone(), None).await,
         Some(tls) => {
             let handshake = tls.acceptor().accept(stream);
             match tokio::time::timeout(l.config.header_timeout(), handshake).await {
-                Ok(Ok(s)) => http1(s, l.clone(), shared.clone(), sender.clone()).await,
+                Ok(Ok(s)) => {
+                    let client = crate::serve::client_cert(s.get_ref().1.peer_certificates());
+                    http1(s, l.clone(), shared.clone(), sender.clone(), client).await;
+                }
                 Ok(Err(e)) => bulkhead_sdk::debug!("TLS handshake failed: {e}"),
                 Err(_) => bulkhead_sdk::debug!("TLS handshake timed out"),
             }
@@ -384,14 +387,20 @@ async fn connection(
     drop(permit);
 }
 
-async fn http1<IO>(io: IO, l: Arc<Listening>, shared: Arc<Shared>, sender: AsyncSender)
-where
+async fn http1<IO>(
+    io: IO,
+    l: Arc<Listening>,
+    shared: Arc<Shared>,
+    sender: AsyncSender,
+    client: Option<Arc<ClientCert>>,
+) where
     IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static,
 {
     let header_timeout = l.config.header_timeout();
     let service = hyper::service::service_fn(move |req| {
-        let (l, shared, sender) = (l.clone(), shared.clone(), sender.clone());
-        async move { Ok::<_, Infallible>(serve(req, &l, &shared, &sender).await) }
+        let (l, shared, sender, client) =
+            (l.clone(), shared.clone(), sender.clone(), client.clone());
+        async move { Ok::<_, Infallible>(serve(req, &l, &shared, &sender, client.as_deref()).await) }
     });
     let _ = hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())

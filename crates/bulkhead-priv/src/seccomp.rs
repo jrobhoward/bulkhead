@@ -6,7 +6,7 @@
 //!
 //! A filter stays in force across `clone3` and `execve`, so every
 //! instance the helper starts afterwards runs under this one as well as
-//! the runner's own (`bulkhead_native::runner::seccomp`). The list is
+//! the runner's own (`bulkhead_runner::seccomp`). The list is
 //! therefore the union of three:
 //!
 //! - `HELPER`: what the helper itself calls, and what a child does
@@ -67,7 +67,7 @@ const PRELUDE: &[i64] = &[
     libc::SYS_seccomp,
 ];
 
-/// `bulkhead_native::runner::seccomp`'s list: every call its filters
+/// `bulkhead_runner::seccomp`'s list: every call its filters
 /// allow, or answer with `EPERM` or `ENOSYS`.
 const INSTANCE: &[i64] = &[
     // Memory.

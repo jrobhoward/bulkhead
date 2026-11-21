@@ -8,6 +8,17 @@
 //! not run here runs (`Request::Elsewhere`, a `CallApp` with `partner`).
 //! Without the `http` feature a node has none, and refuses node config or
 //! apps that need one.
+//!
+//! The driver reads its certificates through the rules or descriptors it
+//! was given at start, bound to the files then (Landlock, FreeBSD's
+//! descriptors), so a certificate replaced by rename, as certbot renews,
+//! is not one it can read. The node keeps each certificate and key file's
+//! identity (device and inode, links followed) from the driver's start
+//! and checks it on a reload and every `tls_reload_s`: when one changed,
+//! it restarts the driver, which then gets the new files (ROADMAP DA2b).
+//! The node keeps the listeners, so connections made meanwhile wait;
+//! those in flight are dropped. A file rewritten in place is reloaded by
+//! the driver itself.
 
 #[cfg(feature = "http")]
 use std::path::PathBuf;
@@ -46,6 +57,46 @@ pub(super) struct Ingress {
     serving: bool,
     #[cfg(feature = "http")]
     apps: Option<Apps>,
+    /// How to start the driver again, and its files' identities.
+    #[cfg(feature = "http")]
+    driver: Option<Arc<Driver>>,
+}
+
+/// The driver as started: what starts it again, and the identity of each
+/// file it reads.
+#[cfg(feature = "http")]
+#[derive(Debug)]
+struct Driver {
+    rt: Runtime,
+    program: PathBuf,
+    args: serde_json::Value,
+    /// Every certificate and key file, with its identity at the start.
+    files: std::sync::Mutex<Vec<(PathBuf, Identity)>>,
+    /// Checked this often for a renamed file (`None`: on reloads only).
+    every: Option<Duration>,
+    /// One restart at a time.
+    restarting: tokio::sync::Mutex<()>,
+}
+
+/// A file's device and inode, links followed.
+#[cfg(feature = "http")]
+type Identity = (u64, u64);
+
+/// `path`'s identity.
+#[cfg(feature = "http")]
+fn identity(path: &std::path::Path) -> Result<Identity, String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((meta.dev(), meta.ino()))
+}
+
+/// What a reload did: HTTPS listeners reloaded, those that failed, and the
+/// files whose replacement restarted the driver.
+#[derive(Debug, Default)]
+pub(super) struct Reload {
+    pub(super) certificates: usize,
+    pub(super) failed: Vec<String>,
+    pub(super) restarted_for: Vec<std::path::PathBuf>,
 }
 
 /// Whether two versions of an app have the same HTTP routes, as both run
@@ -111,6 +162,14 @@ pub(super) fn bind(
             files.push(t.cert.clone());
             files.push(t.key.clone());
         }
+        let client_auth = binding.client_ca.as_ref().map(|ca| {
+            files.push(ca.clone());
+            serde_json::json!({
+                "ca": format!("/driver/{}", ca.file_name().unwrap_or_default().to_string_lossy()),
+                "required": binding.client_auth
+                    != Some(crate::node::config::ClientAuthMode::Optional),
+            })
+        });
         let standby = match (binding.standby_mode(), &binding.partner_url) {
             (StandbyMode::Redirect, Some(url)) => serde_json::json!({
                 "redirect": { "partner_url": url.trim_end_matches('/') }
@@ -132,6 +191,7 @@ pub(super) fn bind(
             "standby": standby,
             "tls": certificates,
             "tls_reload_s": binding.tls_reload_s,
+            "client_auth": client_auth,
         }));
     }
     let profile = bulkhead_host::DriverProfile {
@@ -147,6 +207,7 @@ pub(super) fn bind(
         egress: None,
         endpoints: Vec::new(),
         delivers: false,
+        seccomp_profile: Some("ingress".into()),
     };
     let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
     Ok(Some((profile, args)))
@@ -160,6 +221,22 @@ pub(super) fn bind(
     _native: &bulkhead_host::NativeConfig,
 ) -> Result<Option<(bulkhead_host::DriverProfile, serde_json::Value)>, NodeError> {
     Ok(None)
+}
+
+/// Every certificate, key and client CA file of `[http]`, in listener
+/// order.
+#[cfg(feature = "http")]
+fn tls_files(config: &NodeConfig) -> Vec<PathBuf> {
+    config
+        .http
+        .values()
+        .flat_map(|b| {
+            b.tls
+                .iter()
+                .flat_map(|t| [t.cert.clone(), t.key.clone()])
+                .chain(b.client_ca.clone())
+        })
+        .collect()
 }
 
 /// The driver's manifest: one instance, its init arguments, restarts that
@@ -200,6 +277,7 @@ impl Ingress {
             routes: Some(Arc::new(RouteTable::new(rt.clone()))),
             serving: false,
             apps: Some(apps.clone()),
+            driver: None,
         };
         let Some(args) = args else {
             return Ok(ingress);
@@ -212,14 +290,106 @@ impl Ingress {
             )));
         }
         let code = rt.load_native(bulkhead_host::NativeCode {
-            path: program,
+            path: program.clone(),
             kind: bulkhead_bundle::manifest::NativeProgram::Executable,
         });
-        let deployment = AppDeployment::new(ingress_manifest(args)?, code);
+        let deployment = AppDeployment::new(ingress_manifest(args.clone())?, code);
         super::builtin::start(rt, apps, deployment).await?;
         ingress.serving = true;
+        let files = tls_files(config)
+            .into_iter()
+            .map(|p| {
+                let id = identity(&p).map_err(NodeError::Invalid)?;
+                Ok((p, id))
+            })
+            .collect::<Result<Vec<_>, NodeError>>()?;
+        let every = config
+            .http
+            .values()
+            .filter(|b| !b.tls.is_empty() && b.tls_reload_s > 0)
+            .map(|b| Duration::from_secs(b.tls_reload_s))
+            .min();
+        ingress.driver = Some(Arc::new(Driver {
+            rt: rt.clone(),
+            program,
+            args,
+            files: std::sync::Mutex::new(files),
+            every,
+            restarting: tokio::sync::Mutex::new(()),
+        }));
         tracing::info!(listeners = config.http.len(), "HTTP ingress driver started");
         Ok(ingress)
+    }
+
+    /// `app`'s routes the ingress serves: (host, prefix).
+    pub(super) fn routes_of(&self, app: &str) -> Vec<(Option<String>, String)> {
+        #[cfg(feature = "http")]
+        if let Some(table) = &self.routes {
+            return table
+                .routes(app)
+                .into_iter()
+                .map(|r| (r.host, r.path_prefix))
+                .collect();
+        }
+        let _ = app;
+        Vec::new()
+    }
+
+    /// How often the node checks for a renamed certificate, if at all.
+    #[cfg(feature = "http")]
+    pub(super) fn check_every(&self) -> Option<Duration> {
+        self.driver.as_ref().and_then(|d| d.every)
+    }
+
+    /// Restart the driver if a certificate or key file was replaced (its
+    /// identity changed since the driver started): the files that were.
+    /// Nothing restarts while a file cannot be read.
+    ///
+    /// # Errors
+    ///
+    /// A file cannot be read, or the driver did not start again (the
+    /// next check tries again).
+    #[cfg(feature = "http")]
+    pub(super) async fn restart_if_renewed(&self) -> Result<Vec<PathBuf>, String> {
+        let (Some(driver), Some(apps)) = (&self.driver, &self.apps) else {
+            return Ok(Vec::new());
+        };
+        let _one = driver.restarting.lock().await;
+        let known = driver
+            .files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut now = Vec::with_capacity(known.len());
+        let mut changed = Vec::new();
+        for (path, was) in known {
+            let id = identity(&path)?;
+            if id != was {
+                changed.push(path.clone());
+            }
+            now.push((path, id));
+        }
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let code = driver.rt.load_native(bulkhead_host::NativeCode {
+            path: driver.program.clone(),
+            kind: bulkhead_bundle::manifest::NativeProgram::Executable,
+        });
+        let deployment = AppDeployment::new(
+            ingress_manifest(driver.args.clone()).map_err(|e| e.to_string())?,
+            code,
+        );
+        // Requests in flight end with it; the listeners stay the node's.
+        apps.take_out(INGRESS_APP).await;
+        super::builtin::start(&driver.rt, apps, deployment)
+            .await
+            .map_err(|e| format!("the HTTP ingress did not start again: {e}"))?;
+        *driver
+            .files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = now;
+        Ok(changed)
     }
 
     /// No ingress in this build: refuse node config that asks for one.
@@ -331,17 +501,35 @@ impl Ingress {
         Ok(())
     }
 
-    /// Ask the driver to reload every HTTPS listener's certificates from
-    /// their files: how many listeners serve HTTPS, and each that failed
-    /// (it keeps its old certificates).
-    pub(super) async fn reload_tls(&self) -> (usize, Vec<String>) {
+    /// Reload every HTTPS listener's certificates: restart the driver if
+    /// a file was replaced by rename, otherwise ask it to read them again
+    /// (a file rewritten in place). A listener that fails keeps its old
+    /// certificates.
+    pub(super) async fn reload_tls(&self) -> Reload {
         #[cfg(feature = "http")]
         if self.serving
             && let Some(apps) = &self.apps
         {
-            return reload_driver(apps).await;
+            let restarted_for = match self.restart_if_renewed().await {
+                Ok(files) => files,
+                Err(e) => {
+                    let (certificates, mut failed) = reload_driver(apps).await;
+                    failed.push(format!("http: {e}"));
+                    return Reload {
+                        certificates,
+                        failed,
+                        restarted_for: Vec::new(),
+                    };
+                }
+            };
+            let (certificates, failed) = reload_driver(apps).await;
+            return Reload {
+                certificates,
+                failed,
+                restarted_for,
+            };
         }
-        (0, Vec::new())
+        Reload::default()
     }
 
     /// Stop the driver first, so no request reaches an app that is

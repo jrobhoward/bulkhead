@@ -41,6 +41,8 @@
 //! max_response = "16MiB"        # larger app replies become 502
 //! tls = [{ cert = "/etc/bulkhead/shop.pem", key = "/etc/bulkhead/shop.key", hosts = ["shop.example"] }]
 //! tls_reload_s = 60             # check the files for changes; also SIGHUP
+//! # client_ca = "/etc/bulkhead/clients.pem"  # with tls: client certificates
+//! # client_auth = "required"    # or "optional"
 //! # With [failover], what the standby does with a request for a singleton
 //! # that runs on the primary: "refuse" (503, for load balancers),
 //! # "redirect" (307 to partner_url) or "forward" (over the cluster to the
@@ -1273,6 +1275,15 @@ pub struct HttpBinding {
     /// reload-tls`).
     #[serde(default = "default_tls_reload_s")]
     pub tls_reload_s: u64,
+    /// With `tls`: ask clients for a certificate from these CAs (PEM),
+    /// verified by the ingress driver (ROADMAP DA2b).
+    #[serde(default)]
+    pub client_ca: Option<PathBuf>,
+    /// With `client_ca`: `required` (the default) refuses a client
+    /// without one; `optional` serves it, with no certificate in its
+    /// requests.
+    #[serde(default)]
+    pub client_auth: Option<ClientAuthMode>,
     /// With `[failover]`: the partner's address for this listener, as
     /// clients reach it (`scheme://host[:port][/path]`), where `standby =
     /// "redirect"` sends a request for a singleton that runs on the
@@ -1296,6 +1307,17 @@ impl HttpBinding {
             StandbyMode::Refuse
         })
     }
+}
+
+/// Whether an HTTPS listener with `client_ca` requires a client
+/// certificate: `[http.<name>] client_auth`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientAuthMode {
+    /// A client without a certificate from the CAs fails the handshake.
+    Required,
+    /// A client without one is served; one with an unverified one is not.
+    Optional,
 }
 
 /// What a listener on the standby of an HA pair does with a request for a
@@ -1532,7 +1554,23 @@ impl NodeConfig {
                     "node config: http.{name}: not a name (lowercase letters, digits, '-' and '_')"
                 )));
             }
-            for path in binding.tls.iter().flat_map(|t| [&t.cert, &t.key]) {
+            if binding.client_ca.is_some() && binding.tls.is_empty() {
+                return Err(NodeError::Invalid(format!(
+                    "node config: http.{name}.client_ca needs tls: client certificates are \
+                     asked for in the TLS handshake"
+                )));
+            }
+            if binding.client_auth.is_some() && binding.client_ca.is_none() {
+                return Err(NodeError::Invalid(format!(
+                    "node config: http.{name}.client_auth needs client_ca"
+                )));
+            }
+            for path in binding
+                .tls
+                .iter()
+                .flat_map(|t| [&t.cert, &t.key])
+                .chain(binding.client_ca.as_ref())
+            {
                 let file = path.file_name().unwrap_or_default().to_os_string();
                 if let Some(other) = files.insert(file, path)
                     && other != path

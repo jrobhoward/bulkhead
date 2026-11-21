@@ -362,6 +362,10 @@ mod process {
             let mut listener_fds = Vec::new();
             let mut driver_files = Vec::new();
             if let Some(d) = driver {
+                if let Some(profile) = &d.seccomp_profile {
+                    launch.args.push("--profile".into());
+                    launch.args.push(profile.clone().into());
+                }
                 for (l, fd) in d
                     .listeners
                     .iter()

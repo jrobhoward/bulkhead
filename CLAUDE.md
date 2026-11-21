@@ -180,14 +180,18 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   sender channel, ROADMAP AP1), `sender_async` (feature `tokio`: a
   sender channel awaited on an app's tokio current-thread runtime, S41;
   the rule against `current_thread` below is the node's, not an app's), `driver` (a driver app's inherited
-  listening sockets, ROADMAP DA1) and `runner` (feature `runner`,
-  default; Linux and FreeBSD): `bulkhead-runner`, which restricts itself
-  (Landlock, seccomp, non-dumpable; on FreeBSD `runner/capsicum.rs`:
-  rights per descriptor, capability mode, then `fexecve` of the run-time
-  linker, executables only) before loading a rustbridge plugin or executing
-  the program. `freebsd::rights` holds the Capsicum rights the runner and
-  the node (`native/os`'s `for_app`, on what it passes later) both apply. bulkhead-host depends on it without default features (the
-  protocol and the channel). The host side is
+  listening sockets, ROADMAP DA1). `freebsd::rights` holds the Capsicum
+  rights the runner and the node (`native/os`'s `for_app`, on what it
+  passes later) both apply. bulkhead-host depends on it with `channel`
+  only (the protocol and the channel); it holds no sandbox.
+- `crates/bulkhead-runner` (Linux and FreeBSD; ROADMAP CR1): the launcher
+  `bulkhead-runner`, which restricts itself (Landlock, seccomp,
+  non-dumpable; on FreeBSD `capsicum.rs`: rights per descriptor,
+  capability mode, then `fexecve` of the run-time linker, executables
+  only) before loading a rustbridge plugin or executing the program, and
+  its lease watchdog (`watchdog.rs`). `scripts/check.sh deps` keeps it and
+  its sandbox crates out of the node's, the SDK's and `bulkhead-native`'s
+  trees. The host side is
   `crates/bulkhead-host/src/native/` (the port; `link`, the node's end of
   a channel; `sender`, the tasks serving an app's sender channels;
   cgroups, conversions, and `os`, what differs between Linux and
@@ -209,7 +213,8 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   its `unsafe` in `sys` (the crate denies it elsewhere); every check from
   its own configuration, never the node's. On Linux its own seccomp
   allow-list (`seccomp.rs`, PS1b) is inherited by every instance, so it
-  covers the runner's list (`bulkhead-native`'s `runner/seccomp.rs`):
+  covers the runner's list (`bulkhead-runner`'s `seccomp.rs`; the
+  ingress's `--profile ingress` is a subset of it, ROADMAP DA2b):
   a call added there goes in the helper's `INSTANCE` too, or
   `seccomp_tests` fails. `crates/bulkhead-priv-wire`
   is the message format it shares with the node (`forbid(unsafe_code)`,
@@ -559,7 +564,8 @@ that can block) while holding one.
 **Unsafe:** `unsafe_op_in_unsafe_fn` is `forbid`, and
 `undocumented_unsafe_blocks` is `deny`: every `unsafe` block carries a
 `// SAFETY:` comment saying why it is sound. Unsafe code lives in
-`bulkhead-native` (the channel, the runner, the app side), `bulkhead-host`
+`bulkhead-native` (the channel, the app side), `bulkhead-runner` (the
+sandbox and its watchdog), `bulkhead-host`
 (its native port), `bulkhead-priv` (its `sys` module only),
 `bulkhead`'s serial tty and `bulkhead-fixture-native`; every other crate
 has `#![forbid(unsafe_code)]` in its `lib.rs` and `main.rs` (ROADMAP CR2).

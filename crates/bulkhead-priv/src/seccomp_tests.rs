@@ -9,8 +9,8 @@ use super::*;
 #[test]
 fn seccomp____runner_list____every_call_on_the_helpers() {
     let helper = allowed();
-    let runner = bulkhead_native::runner::seccomp::allowed();
-    let answered = bulkhead_native::runner::seccomp::rules(&[1], &[3]).unwrap();
+    let runner = bulkhead_runner::seccomp::allowed();
+    let answered = bulkhead_runner::seccomp::rules(&[1], &[3]).unwrap();
 
     let missing: Vec<i64> = runner
         .iter()

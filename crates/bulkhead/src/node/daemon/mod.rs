@@ -397,7 +397,14 @@ impl Node {
         for e in self.rt.share_driver_files().await {
             tracing::warn!(error = %e, "a driver's file not shared with it");
         }
-        let (ingresses, mut failed) = self.ingress.reload_tls().await;
+        let ingress::Reload {
+            certificates: ingresses,
+            mut failed,
+            restarted_for,
+        } = self.ingress.reload_tls().await;
+        if !restarted_for.is_empty() {
+            self.ingress_restarted(&restarted_for);
+        }
         match self.resolver.reload().await {
             Ok(true) => tracing::info!("resolver restarted with changed resolv.conf or hosts"),
             Ok(false) => {}
@@ -424,10 +431,65 @@ impl Node {
         if !failed.is_empty() {
             return Err(NodeError::Invalid(failed.join("; ")));
         }
+        let restarted = if restarted_for.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; the HTTP ingress restarted for its replaced {}",
+                restarted_for
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         Ok(Done {
-            message: format!("reloaded {ingresses} HTTPS ingress(es)"),
+            message: format!("reloaded {ingresses} HTTPS ingress(es){restarted}"),
         })
     }
+
+    /// Note the ingress's restart for certificate files replaced by
+    /// rename (ROADMAP DA2b).
+    fn ingress_restarted(&self, files: &[std::path::PathBuf]) {
+        tracing::warn!(
+            ?files,
+            "HTTP ingress restarted for replaced certificate files; connections in flight were dropped"
+        );
+        self.audit
+            .record("ingress_restarted", json!({ "files": files }));
+    }
+
+    /// Check for certificate files replaced by rename every
+    /// `tls_reload_s`, restarting the ingress when one was (ROADMAP DA2b).
+    #[cfg(feature = "http")]
+    pub fn start_ingress_watch(self: &Arc<Self>) {
+        let Some(every) = self.ingress.check_every() else {
+            return;
+        };
+        let (node, mut stop) = (Arc::downgrade(self), self.stop.subscribe());
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop.wait_for(|s| *s) => return,
+                    () = tokio::time::sleep(every) => {}
+                }
+                let Some(n) = node.upgrade() else { return };
+                // A renamed file is not yet the driver's under the helper.
+                for e in n.rt.share_driver_files().await {
+                    tracing::warn!(error = %e, "a driver's file not shared with it");
+                }
+                match n.ingress.restart_if_renewed().await {
+                    Ok(files) if !files.is_empty() => n.ingress_restarted(&files),
+                    Ok(_) => {}
+                    Err(e) => tracing::error!(error = %e, "HTTP ingress certificates not checked"),
+                }
+            }
+        });
+    }
+
+    /// No ingress in this build.
+    #[cfg(not(feature = "http"))]
+    pub fn start_ingress_watch(self: &Arc<Self>) {}
 
     /// The admin socket this node's configuration names.
     #[must_use]
@@ -706,6 +768,7 @@ fn bind_drivers(
                     egress: None,
                     endpoints: Vec::new(),
                     delivers: false,
+                    seccomp_profile: None,
                 },
             ))
         })

@@ -82,7 +82,7 @@ fn load____a_missing_file____refused_naming_it() {
         hosts: Vec::new(),
     };
 
-    let err = IngressTls::load(vec![missing], HostFiles).unwrap_err();
+    let err = IngressTls::load(vec![missing], None, HostFiles).unwrap_err();
 
     assert!(err.contains("/nowhere/web.crt"), "{err}");
 }
@@ -91,7 +91,7 @@ fn load____a_missing_file____refused_naming_it() {
 fn reload_if_changed____rewritten_files____new_set_and_broken_files_keep_the_old() {
     let dir = tempfile::tempdir().unwrap();
     let a = write_cert(dir.path(), "a", &["a.example"]);
-    let tls = IngressTls::load(vec![a.clone()], HostFiles).unwrap();
+    let tls = IngressTls::load(vec![a.clone()], None, HostFiles).unwrap();
     let before = leaf(&tls.inner.current.read().unwrap().default);
 
     let unchanged = tls.reload_if_changed().unwrap();

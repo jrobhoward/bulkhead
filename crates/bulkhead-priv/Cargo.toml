@@ -28,7 +28,7 @@ tempfile.workspace = true
 
 # The runner's seccomp list, which the helper's must cover (seccomp_tests).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-bulkhead-native = { workspace = true, features = ["runner"] }
+bulkhead-runner = { workspace = true }
 
 [lints]
 workspace = true

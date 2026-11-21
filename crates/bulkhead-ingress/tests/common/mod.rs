@@ -59,7 +59,7 @@ pub fn programs() -> &'static (PathBuf, PathBuf, PathBuf) {
         let native = workspace_root().join("target/fixtures/native");
         cargo_build(
             &native,
-            &["-p", "bulkhead-native", "-p", "bulkhead-ingress"],
+            &["-p", "bulkhead-runner", "-p", "bulkhead-ingress"],
         );
         let sdk = workspace_root().join("target/fixtures/native-sdk");
         cargo_build(
@@ -223,6 +223,8 @@ pub async fn serve(
                 egress: None,
                 endpoints: Vec::new(),
                 delivers: false,
+                // As the node runs it (ROADMAP DA2b).
+                seccomp_profile: Some("ingress".into()),
             },
         )]),
         ..RuntimeConfig::default()

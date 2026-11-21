@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used)]
 
 use super::*;
+use bulkhead::api::RouteInfo;
 
 fn summary(name: &str, status: &str) -> AppSummary {
     AppSummary {
@@ -14,6 +15,7 @@ fn summary(name: &str, status: &str) -> AppSummary {
         previous: None,
         new_version: None,
         new_traffic: None,
+        built_in: false,
     }
 }
 
@@ -55,6 +57,7 @@ fn detail____app_holding_blobs____shows_them() {
         listeners: vec![],
         runs_as: String::new(),
         blobs: Some((2, 4096)),
+        routes: Vec::new(),
     };
 
     let out = detail(&d);
@@ -77,6 +80,7 @@ fn detail____failed_app____shows_reason_and_denied() {
         listeners: vec![],
         runs_as: "its own user".into(),
         blobs: None,
+        routes: Vec::new(),
     };
 
     let out = detail(&d);
@@ -162,6 +166,7 @@ fn detail____connection_handler____lists_listeners() {
         }],
         runs_as: String::new(),
         blobs: None,
+        routes: Vec::new(),
     };
 
     let out = detail(&d);
@@ -438,4 +443,49 @@ fn dr____deploys_not_ready_and_grants_differ____a_line_each() {
             "grants:     shop: not granted here: timers",
         ]
     );
+}
+
+#[test]
+fn apps____built_in_driver____marked_built_in() {
+    let mut ingress = summary("bulkhead-ingress", "running");
+    ingress.built_in = true;
+
+    let out = apps(&[summary("orders", "running"), ingress]);
+
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("bulkhead-ingress"))
+        .unwrap();
+    assert!(line.contains("built-in"), "{line}");
+}
+
+#[test]
+fn detail____app_with_routes____lists_each() {
+    let d = AppDetail {
+        summary: summary("shop", "running"),
+        signer: "key".into(),
+        granted: vec!["bulkhead:http-routes".into()],
+        denied: Vec::new(),
+        warnings: Vec::new(),
+        restarts: 0,
+        instance_list: Vec::new(),
+        listeners: Vec::new(),
+        runs_as: String::new(),
+        blobs: None,
+        routes: vec![
+            RouteInfo {
+                host: Some("shop.example".into()),
+                prefix: "/shop".into(),
+            },
+            RouteInfo {
+                host: None,
+                prefix: "/api".into(),
+            },
+        ],
+    };
+
+    let out = detail(&d);
+
+    assert!(out.contains("route:     shop.example/shop"), "{out}");
+    assert!(out.contains("route:     */api"), "{out}");
 }

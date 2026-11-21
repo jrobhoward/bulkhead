@@ -421,10 +421,13 @@ header_timeout_ms = 10000              # default 10000: time to send headers (al
 body_timeout_ms = 30000                # default 30000: time to send a body, then 408
 max_response = "16MiB"                 # default "16MiB": larger app replies become 502
 tls = [                                # HTTPS (cargo feature `tls`, on by default): PEM chain and key; SNI picks by hosts; the first is the default;
-                                       # the driver reads each file by its name under /driver/, so names must differ; rewrite them in place to renew
+                                       # the driver reads each file by its name under /driver/, so names must differ; renewed by rename (certbot)
+                                       # or in place, both picked up (a rename restarts the driver)
   { cert = "/etc/bulkhead/shop.pem", key = "/etc/bulkhead/shop.key", hosts = ["shop.example", "*.shop.example"] },
 ]
 tls_reload_s = 60                      # default 60: reload when the files' modification times change (0: only SIGHUP or `bulkhead reload-tls`)
+client_ca = "/etc/bulkhead/clients.pem"  # with tls: ask clients for a certificate from these CAs (PEM); the app gets client_cert
+client_auth = "required"               # with client_ca: "required" (default) or "optional" (served without one)
 partner_url = "https://node2.example:8443"  # with [failover]: the partner's listener, as clients reach it
 standby = "redirect"                   # with [failover], a request for a singleton running on the partner:
                                        # "redirect" (307 to partner_url), "forward" (over the cluster to the

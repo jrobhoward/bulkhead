@@ -63,7 +63,7 @@ fi
 
 echo "bench: building (release)"
 cargo build -q --release -p bulkhead-host --examples
-cargo build -q --release -p bulkhead-native --bin bulkhead-runner
+cargo build -q --release -p bulkhead-runner
 cargo build -q --release -p bulkhead-fixture-native
 cargo build -q --release -p bulkhead-fixture-kvbench --bin bulkhead-fixture-kvbench
 cargo build -q --release -p bulkhead-fixture-msgbench --bin bulkhead-fixture-msgbench

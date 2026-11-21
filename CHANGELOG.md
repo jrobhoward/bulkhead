@@ -8,6 +8,35 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A certificate or key replaced by rename (certbot's renewals, with
+  `cert` and `key` pointing into `live/`) is now served (ROADMAP DA2b):
+  the node keeps each file's identity and, on SIGHUP, `bulkhead
+  reload-tls` and every `tls_reload_s`, restarts the HTTP ingress driver
+  when one changed, dropping the connections in flight (audit
+  `ingress_restarted`). A file rewritten in place is reloaded as before.
+- Client certificates on an HTTPS listener (ROADMAP DA2b): `[http.<name>]
+  client_ca` (the CAs, PEM) and `client_auth = "required"` (the default)
+  or `"optional"`, verified by the ingress driver with rustls's WebPKI
+  verifier; the app gets `client_cert` (`sha256`, `der`) in the request
+  (`bulkhead_sdk::http::ClientCert`, GUEST_FORMATS.md).
+- The HTTP ingress driver runs under a narrower seccomp list than other
+  apps (ROADMAP DA2b): the runner's `--profile ingress`
+  (`DriverProfile::seccomp_profile`) leaves out starting and waiting for
+  processes, every call that writes or changes files, copies between
+  descriptors and socket pairs. Linux only; FreeBSD's Capsicum is
+  unchanged.
+- `bulkhead list` shows the node's own drivers after the deployed apps,
+  marked `built-in`, and `bulkhead status` shows a driver too and an
+  app's HTTP routes (ROADMAP DA2b). The API lists them only when asked
+  (`GET /v1/apps?built_in=true`, `Client::list_all`), so `GET /v1/apps`
+  is as before; `AppSummary` gains `built_in`, `AppDetail` `routes`.
+- `bulkhead-runner` is a crate of its own (ROADMAP CR1): build it with
+  `cargo build --release -p bulkhead-runner` (was `-p bulkhead-native
+  --bin bulkhead-runner`). `bulkhead-native` is the protocol, the channel
+  and the app API, with no `runner` feature and no sandbox crates;
+  `scripts/check.sh deps` fails if the runner, Landlock, seccompiler or
+  rustbridge's consumer appear in the node's, the SDK's or
+  `bulkhead-native`'s tree.
 - A DR node apart from the witness can be activated and failed back
   (ROADMAP DR4b): `[dr] witness = N` on it and `[witness] dr = M` on the
   witness. The witness stays the one authority: the DR node sends it its

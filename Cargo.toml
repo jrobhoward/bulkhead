@@ -22,6 +22,7 @@ members = [
     "crates/bulkhead-modbus",
     "crates/bulkhead-modbus-client",
     "crates/bulkhead-native",
+    "crates/bulkhead-runner",
     "crates/bulkhead-priv",
     "crates/bulkhead-priv-wire",
     "crates/bulkhead-sdk",
@@ -125,6 +126,7 @@ bulkhead-bundle = { path = "crates/bulkhead-bundle" }
 bulkhead-host = { path = "crates/bulkhead-host", default-features = false }
 bulkhead-modbus-client = { path = "crates/bulkhead-modbus-client" }
 bulkhead-native = { path = "crates/bulkhead-native", default-features = false }
+bulkhead-runner = { path = "crates/bulkhead-runner" }
 bulkhead-priv-wire = { path = "crates/bulkhead-priv-wire" }
 bulkhead-sdk = { path = "crates/bulkhead-sdk" }
 bulkhead-keys = { path = "crates/bulkhead-keys" }

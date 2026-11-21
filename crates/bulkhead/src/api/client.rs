@@ -192,6 +192,16 @@ impl Client {
         self.json(Method::GET, "/v1/apps", None).await
     }
 
+    /// List apps, and the node's own drivers after them (ROADMAP DA2b):
+    /// what `bulkhead list` shows.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn list_all(&self) -> Result<Vec<AppSummary>, ClientError> {
+        self.json(Method::GET, "/v1/apps?built_in=true", None).await
+    }
+
     /// One app in detail.
     ///
     /// # Errors

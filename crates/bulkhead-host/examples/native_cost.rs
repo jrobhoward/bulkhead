@@ -3,7 +3,7 @@
 //! start time, through `bulkhead-runner` and `bulkhead-fixture-native`.
 //!
 //! ```sh
-//! cargo build --release -p bulkhead-native --bin bulkhead-runner
+//! cargo build --release -p bulkhead-runner
 //! cargo build --release -p bulkhead-fixture-native
 //! cargo run --release -p bulkhead-host --example native_cost -- [workers]
 //! ```

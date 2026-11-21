@@ -71,6 +71,25 @@ pub struct Listener {
     /// reloads only when the node asks.
     #[serde(default)]
     pub tls_reload_s: u64,
+    /// Ask HTTPS clients for a certificate from these CAs (ROADMAP DA2b).
+    #[serde(default)]
+    pub client_auth: Option<ClientAuth>,
+}
+
+/// Client certificates on an HTTPS listener.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientAuth {
+    /// The CAs' PEM file, a guest path under `/driver/`.
+    pub ca: String,
+    /// Refuse a client without one; otherwise it is served as before,
+    /// with no `client_cert` in its requests.
+    #[serde(default = "default_required")]
+    pub required: bool,
+}
+
+fn default_required() -> bool {
+    true
 }
 
 fn default_max_connections() -> usize {

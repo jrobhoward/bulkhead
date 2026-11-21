@@ -1,4 +1,4 @@
-//! The lease watchdog ([`crate::lease`]): with [`crate::lease::FLAG`],
+//! The lease watchdog ([`bulkhead_native::lease`]): with [`bulkhead_native::lease::FLAG`],
 //! the runner forks before it restricts itself. The child goes on to be
 //! the app; the parent watches the child and the lease pipe, kills the
 //! child once the latest deadline has passed, and exits as the child did,
@@ -21,7 +21,7 @@ use landlock::{ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::process::{Pid, Signal};
 
-use crate::lease::{KILLED_EXIT, LEASE_FD, NO_DEADLINE, last_deadline, now_ns};
+use bulkhead_native::lease::{KILLED_EXIT, LEASE_FD, NO_DEADLINE, last_deadline, now_ns};
 
 /// Fork: return in the child, which becomes the app; never return in the
 /// parent, which watches it.

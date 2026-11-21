@@ -3,7 +3,7 @@
 //! Before the app's code runs, the runner limits the rights of every
 //! descriptor the app inherits to what its use needs, opens each preopened
 //! directory or file as a descriptor of its own (named in
-//! [`crate::preopens::FDS_ENV`]: capability mode refuses opening by path),
+//! [`bulkhead_native::preopens::FDS_ENV`]: capability mode refuses opening by path),
 //! and enters capability mode. Capability mode forbids `execve`, so the
 //! runner opens the run-time linker, the program and the library
 //! directories first and `fexecve`s the linker in its direct-execution
@@ -25,8 +25,8 @@ use std::os::fd::RawFd;
 use std::process::ExitCode;
 
 use super::Args;
-use crate::channel::{BELL_FD, DOOR_FD, FDS_FD, MEMFD_FD};
-use crate::freebsd::{limit_ioctls, limit_rights, rights};
+use bulkhead_native::channel::{BELL_FD, DOOR_FD, FDS_FD, MEMFD_FD};
+use bulkhead_native::freebsd::{limit_ioctls, limit_rights, rights};
 
 /// The directories the run-time linker loads libraries from, where they
 /// exist.
@@ -105,10 +105,10 @@ fn limit_inherited(args: &Args) -> Result<(), String> {
 }
 
 /// Open each preopen (`BULKHEAD_PREOPENS`) as a descriptor with the rights
-/// its mode gives, in order: the value of [`crate::preopens::FDS_ENV`].
+/// its mode gives, in order: the value of [`bulkhead_native::preopens::FDS_ENV`].
 fn open_preopens(args: &Args) -> Result<String, String> {
     let mut fds = Vec::new();
-    for p in crate::preopens::from_env() {
+    for p in bulkhead_native::preopens::from_env() {
         let host = p
             .host
             .to_str()
@@ -154,7 +154,7 @@ fn prepare_and_exec(
     limit_inherited(args)?;
     let preopens = open_preopens(args)?;
     if !preopens.is_empty() {
-        env.push((crate::preopens::FDS_ENV.into(), preopens));
+        env.push((bulkhead_native::preopens::FDS_ENV.into(), preopens));
     }
     let rtld = open(RTLD, libc::O_RDONLY | libc::O_CLOEXEC)?;
     limit(

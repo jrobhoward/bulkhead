@@ -7,7 +7,7 @@
 //! strictest answer among them:
 //!
 //! 1. [`allowed`]: a call outside the list raises `SIGSYS` in the caller
-//!    (`SECCOMP_RET_TRAP`). [`crate::app::serve`] handles it by recording
+//!    (`SECCOMP_RET_TRAP`). [`bulkhead_native::app::serve`] handles it by recording
 //!    the call's number in the channel and ending the process, so the
 //!    instance exits `crashed: syscall <name>`; a process with no handler
 //!    dies of the signal. A missing entry shows up as that exit, in a
@@ -34,6 +34,15 @@
 //! | `socketpair` | for any family but `AF_UNIX` |
 //! | `ioctl` | for any request but the descriptor ones (`FIONBIO`, `FIONREAD`, `FIOCLEX`, `FIONCLEX`) and the terminal check (`TCGETS`) |
 //!
+//! A process may get a narrower list by profile ([`Profile`], the
+//! runner's `--profile`): the HTTP ingress driver, open to any client,
+//! gets the apps' list without what it has no use for (ROADMAP DA2b):
+//! starting and waiting for processes, every call that writes or changes
+//! a file or a directory, copying between descriptors, and socket pairs.
+//! It keeps the rest, `execve` among it, which the runner's own exec of
+//! the program needs once the filters are on. A `strace` of its tests
+//! (2026-11-21, x86-64) found none of the calls it lacks.
+//!
 //! What is not on the list at all, among others: `bind` and `listen`,
 //! `unshare`, `setns`, `mount`, `chroot`, `pivot_root`, `bpf`, `keyctl`,
 //! `perf_event_open`, `userfaultfd`, `memfd_create`, `execveat`, the
@@ -44,6 +53,7 @@
 
 use std::collections::BTreeMap;
 
+pub use crate::Profile;
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
     SeccompRule, TargetArch,
@@ -259,6 +269,62 @@ pub fn allowed() -> Vec<i64> {
     ALLOWED.iter().chain(ALLOWED_ARCH).copied().collect()
 }
 
+/// What the ingress driver's list leaves out of the apps': processes
+/// started and waited for, file and directory changes, copies between
+/// descriptors, socket pairs.
+pub const INGRESS_WITHOUT: &[i64] = &[
+    libc::SYS_wait4,
+    libc::SYS_waitid,
+    libc::SYS_mkdirat,
+    libc::SYS_unlinkat,
+    libc::SYS_renameat,
+    libc::SYS_renameat2,
+    libc::SYS_symlinkat,
+    libc::SYS_linkat,
+    libc::SYS_truncate,
+    libc::SYS_ftruncate,
+    libc::SYS_fallocate,
+    libc::SYS_fsync,
+    libc::SYS_fdatasync,
+    libc::SYS_flock,
+    libc::SYS_utimensat,
+    libc::SYS_fchmod,
+    libc::SYS_fchmodat,
+    libc::SYS_umask,
+    libc::SYS_copy_file_range,
+    libc::SYS_sendfile,
+    libc::SYS_splice,
+    libc::SYS_socketpair,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_fork,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_vfork,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_mkdir,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_rmdir,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_unlink,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_rename,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_symlink,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_link,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_chmod,
+];
+
+/// The calls `profile` may make (filter 1).
+#[must_use]
+pub fn allowed_for(profile: Profile) -> Vec<i64> {
+    let mut calls = allowed();
+    if profile == Profile::Ingress {
+        calls.retain(|c| !INGRESS_WITHOUT.contains(c));
+    }
+    calls
+}
+
 fn condition(
     arg: u8,
     op: SeccompCmpOp,
@@ -373,7 +439,7 @@ pub fn rules(
 
 /// The three filters, in the order they are installed (the module's
 /// docs number them by what they do).
-fn programs(pids: &[u32], accept_fds: &[i32]) -> Result<Vec<BpfProgram>, String> {
+fn programs(pids: &[u32], accept_fds: &[i32], profile: Profile) -> Result<Vec<BpfProgram>, String> {
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| e.to_string())?;
     let compile = |rules, mismatch, matched| -> Result<BpfProgram, String> {
         SeccompFilter::new(rules, mismatch, matched, arch)
@@ -383,7 +449,7 @@ fn programs(pids: &[u32], accept_fds: &[i32]) -> Result<Vec<BpfProgram>, String>
     };
     let eperm = SeccompAction::Errno(libc::EPERM.unsigned_abs());
     let enosys = SeccompAction::Errno(libc::ENOSYS.unsigned_abs());
-    let listed = allowed()
+    let listed = allowed_for(profile)
         .into_iter()
         .map(|call| (call, Vec::new()))
         .collect();
@@ -408,8 +474,8 @@ fn programs(pids: &[u32], accept_fds: &[i32]) -> Result<Vec<BpfProgram>, String>
 /// # Errors
 ///
 /// A filter could not be built or installed.
-pub fn install(accept_fds: &[i32]) -> Result<(), String> {
-    install_for(&[std::process::id()], accept_fds)
+pub fn install(accept_fds: &[i32], profile: Profile) -> Result<(), String> {
+    install_programs(programs(&[std::process::id()], accept_fds, profile)?)
 }
 
 /// [`install`], with signals allowed to the processes `pids` (the lease
@@ -419,7 +485,11 @@ pub fn install(accept_fds: &[i32]) -> Result<(), String> {
 ///
 /// A filter could not be built or installed.
 pub fn install_for(pids: &[u32], accept_fds: &[i32]) -> Result<(), String> {
-    for program in programs(pids, accept_fds)? {
+    install_programs(programs(pids, accept_fds, Profile::App)?)
+}
+
+fn install_programs(programs: Vec<BpfProgram>) -> Result<(), String> {
+    for program in programs {
         seccompiler::apply_filter_all_threads(&program).map_err(|e| e.to_string())?;
     }
     Ok(())

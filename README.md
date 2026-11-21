@@ -109,7 +109,7 @@ two together:
 
 ```sh
 cargo test --workspace --all-features
-cargo build --release -p bulkhead -p bulkhead-native -p bulkhead-resolve -p bulkhead-ingress
+cargo build --release -p bulkhead -p bulkhead-runner -p bulkhead-resolve -p bulkhead-ingress
 # bulkhead; beside it bulkhead-runner, the resolver of host names and the HTTP ingress
 # (and -p bulkhead-admin -p bulkhead-metrics -p bulkhead-sql -p bulkhead-egress for [admin], [metrics],
 # [datasources] and apps granted bulkhead:http-egress)

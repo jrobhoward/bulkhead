@@ -338,13 +338,22 @@ async fn body<B: AdminBody>(req: Request<B>) -> Result<(String, Vec<u8>), NodeEr
     Ok((content_type, bytes.to_vec()))
 }
 
+/// `GET /v1/apps[?built_in=true]`: the apps, and with `built_in` the
+/// node's own drivers (ROADMAP DA2b).
+fn list(node: &Node, q: &[(String, String)]) -> Reply {
+    match param::<bool>(q, "built_in") {
+        Ok(built_in) => json(StatusCode::OK, &node.list_with(built_in.unwrap_or(false))),
+        Err(e) => error(&e),
+    }
+}
+
 pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
     let q = query(&req);
     match (&method, segments.as_slice()) {
-        (&Method::GET, ["v1", "apps"]) => json(StatusCode::OK, &node.list()),
+        (&Method::GET, ["v1", "apps"]) => list(node, &q),
         (&Method::POST, ["v1", "apps"]) => deploy(node, req).await,
         (&Method::GET, ["v1", "apps", app]) => respond(node.status(app)),
         (&Method::DELETE, ["v1", "apps", app]) => respond(node.remove(app).await),

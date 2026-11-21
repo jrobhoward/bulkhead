@@ -53,7 +53,8 @@
 //! - `busy:<ms>`: spin for that long, then `ok` (notices queue meanwhile).
 //! - HTTP requests (`bulkhead_sdk::http`), by the end of the path: `/plain`
 //!   replies a plain text envelope; `/status/<n>` replies status n;
-//!   `/crash` panics; `/never` never replies; `/big/<n>` replies n bytes; anything else replies 200 with
+//!   `/crash` panics; `/never` never replies; `/big/<n>` replies n bytes;
+//!   `/client` replies the client certificate's SHA-256, or `-`; anything else replies 200 with
 //!   `<method> <path>?<query> key=<key> body=<body> scheme=<scheme> pid=<pid>`.
 //! - `changes`: every change notice received, `<key>@<revision>`, joined
 //!   by `,`.
@@ -194,6 +195,10 @@ fn http(ctx: &mut Ctx, req: &Request) -> Reply {
     }
     if path.ends_with("/never") {
         return Reply::Later;
+    }
+    if path.ends_with("/client") {
+        let sha = req.client_cert.as_ref().map_or("-", |c| c.sha256.as_str());
+        return Reply::Now(Response::text(200, sha.to_string()).into());
     }
     if let Some((_, n)) = path.rsplit_once("/big/") {
         let body = "x".repeat(n.parse().unwrap_or(0));

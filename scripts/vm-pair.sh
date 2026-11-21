@@ -85,7 +85,7 @@ build() {
   local packages=(-p bulkhead -p bulkhead-resolve -p example-counter)
   echo "building (release) here and on both VMs..."
   cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" "${packages[@]}"
-  cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-native --bin bulkhead-runner
+  cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-runner
   local to pids=()
   for to in "$LINUX" "$FREEBSD"; do
     rsync -a --delete -e "${SSH[*]}" --exclude target/ --exclude /.git \
@@ -93,7 +93,7 @@ build() {
       "$ROOT/" "$to:bulkhead/"
     on "$to" "export PATH=\$HOME/.cargo/bin:\$PATH; cd bulkhead &&
       cargo build --quiet --release ${packages[*]} &&
-      cargo build --quiet --release -p bulkhead-native --bin bulkhead-runner" &
+      cargo build --quiet --release -p bulkhead-runner" &
     pids+=($!)
   done
   wait "${pids[0]}" && wait "${pids[1]}"

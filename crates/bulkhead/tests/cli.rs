@@ -119,12 +119,22 @@ async fn cli____full_cycle____deploy_list_status_call_kill_stop_start_remove() {
 
     assert!(deploy.ok, "{}", deploy.stderr);
     assert_eq!(deploy.stdout.trim(), "deployed demo 1.0.0 (running)");
-    assert!(
+    let row = |name: &str| {
         list.stdout
             .lines()
-            .nth(1)
-            .unwrap()
-            .starts_with("demo  1.0.0    running  1"),
+            .find(|l| l.starts_with(name))
+            .map(|l| l.split_whitespace().take(4).collect::<Vec<_>>())
+    };
+    assert_eq!(
+        row("demo"),
+        Some(vec!["demo", "1.0.0", "running", "1"]),
+        "{}",
+        list.stdout
+    );
+    // The node's own drivers follow the apps (ROADMAP DA2b).
+    assert_eq!(
+        row("bulkhead-resolve").map(|r| r[1].to_string()),
+        Some("built-in".to_string()),
         "{}",
         list.stdout
     );

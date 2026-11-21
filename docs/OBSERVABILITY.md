@@ -20,6 +20,8 @@ What an operator can see on a running node: instance stats, events and log recor
 
 `bulkhead state <pid>` shows an instance's state through its `save-snapshot`.
 
+`bulkhead list` lists the deployed apps, then the node's own drivers (the HTTP ingress, the resolver, a datasource's or an app's egress driver ...) with `built-in` in place of a version (ROADMAP DA2b); `bulkhead status <name>` shows either, and for an app its HTTP routes (`route:`).
+
 Connection handlers do not appear in `ps` (an instance per connection, with no mailbox); a native app with listeners does, its instances holding the connections. `bulkhead status <app>` lists either's listeners: address, connections open now, and totals accepted, refused (over `max_connections`), crashed and closed by the idle timeout.
 
 ## Events and logs as they happen

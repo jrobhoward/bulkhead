@@ -14,6 +14,10 @@ fn Request____envelope____round_trips() {
         headers: vec![("X-Tenant".into(), "t1".into())],
         body: b"hi".to_vec(),
         key: Some("t1".into()),
+        client_cert: Some(ClientCert {
+            sha256: "ab".repeat(32),
+            der: vec![0x30, 0x03, 1, 2, 3],
+        }),
     };
 
     let back = Request::from_envelope(&req.to_envelope()).unwrap();

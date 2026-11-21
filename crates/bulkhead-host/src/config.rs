@@ -482,6 +482,10 @@ pub struct DriverProfile {
     /// DA5). A host and port listed here is connected, anything else
     /// refused.
     pub endpoints: Vec<DriverEndpoint>,
+    /// The runner's `--profile` for its system calls (Linux), narrower
+    /// than an app's: `"ingress"` for the HTTP ingress (ROADMAP DA2b).
+    /// `None`: an app's.
+    pub seccomp_profile: Option<String>,
 }
 
 /// Where the node connects a driver ([`DriverProfile::connect`]).

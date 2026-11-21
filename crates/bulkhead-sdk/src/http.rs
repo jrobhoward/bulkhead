@@ -47,6 +47,20 @@ pub struct Request {
     pub body: Vec<u8>,
     /// The value of the route's `hash_header`, if it names one.
     pub key: Option<String>,
+    /// The client's certificate, verified by the ingress against the
+    /// listener's `client_ca` (ROADMAP DA2b); `None` without one.
+    pub client_cert: Option<ClientCert>,
+}
+
+/// A client certificate the ingress verified: its leaf, which an app that
+/// needs its subject parses itself (the ingress parses no more of it than
+/// the verification does).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClientCert {
+    /// The SHA-256 of `der`, lowercase hex: the certificate's fingerprint.
+    pub sha256: String,
+    /// The leaf certificate, DER.
+    pub der: Vec<u8>,
 }
 
 fn text(s: &str) -> Value {
@@ -101,6 +115,14 @@ impl Request {
                 .cloned()
                 .unwrap_or_default(),
             key: get_text("key"),
+            client_cert: field(map, "client_cert")
+                .and_then(Value::as_map)
+                .and_then(|c| {
+                    Some(ClientCert {
+                        sha256: field(c, "sha256")?.as_text()?.to_string(),
+                        der: field(c, "der")?.as_bytes()?.clone(),
+                    })
+                }),
         })
     }
 
@@ -151,6 +173,15 @@ impl Request {
         ];
         if let Some(key) = &self.key {
             map.push((text("key"), text(key)));
+        }
+        if let Some(c) = &self.client_cert {
+            map.push((
+                text("client_cert"),
+                Value::Map(vec![
+                    (text("sha256"), text(&c.sha256)),
+                    (text("der"), Value::Bytes(c.der.clone())),
+                ]),
+            ));
         }
         encode(&Value::Map(map), REQUEST_SCHEMA)
     }

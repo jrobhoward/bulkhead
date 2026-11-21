@@ -1,7 +1,7 @@
 [package]
 name = "bulkhead-native"
 version.workspace = true
-description = "Native-process apps for Bulkhead: the frame protocol, the app API and bulkhead-runner"
+description = "Native-process apps for Bulkhead: the frame protocol, the channel and the app API"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,50 +10,28 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["runner"]
+default = []
 # `bulkhead_native::channel`: the shared-memory rings between a node and
 # an app (Linux and FreeBSD).
 channel = ["dep:libc", "dep:rustix", "rustix/fs", "rustix/mm", "rustix/thread", "rustix/pipe", "rustix/net", "rustix/time"]
 # `bulkhead_native::app`: a native app as an executable (Unix; it serves
 # a node on Linux and FreeBSD).
 app = ["channel", "dep:rustix", "rustix/stdio", "dep:libc"]
-# `bulkhead-runner`, the launcher a node runs native apps through (Linux;
-# on FreeBSD without a sandbox until ROADMAP FB2).
-runner = [
-    "app",
-    "dep:landlock",
-    "dep:seccompiler",
-    "dep:libc",
-    "dep:rustbridge-consumer",
-    "dep:serde_json",
-    "rustix/event",
-]
-
 # `bulkhead_native::sender_async`: sender channels awaited on tokio
 # (spike S41, ROADMAP DA2), for a driver app.
 tokio = ["app", "dep:tokio"]
-
-[[bin]]
-name = "bulkhead-runner"
-path = "src/bin/bulkhead-runner.rs"
-required-features = ["runner"]
 
 [dependencies]
 ciborium.workspace = true
 serde.workspace = true
 rustix = { workspace = true, optional = true }
-rustbridge-consumer = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "net", "sync"] }
 
-# The runner's sandbox, which is Linux only.
 [target.'cfg(target_os = "linux")'.dependencies]
-landlock = { version = "0.4.7", optional = true }
-seccompiler = { workspace = true, optional = true }
 libc = { version = "0.2", optional = true }
 
 # FreeBSD: `_umtx_op` for the channel's one wait on shared memory, which
-# rustix does not wrap; the runner's watchdog and the app's signals.
+# rustix does not wrap; the app's signals.
 [target.'cfg(target_os = "freebsd")'.dependencies]
 libc = { version = "0.2", optional = true }
 

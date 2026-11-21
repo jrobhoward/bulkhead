@@ -83,6 +83,27 @@ fn http_request____documented_example____read_with_every_field() {
 
 #[cfg(feature = "http")]
 #[test]
+fn http_request____documented_client_certificate____read_and_written_alike() {
+    use crate::http::{ClientCert, REQUEST_SCHEMA, Request};
+    let documented = example("cbor-hex", "http-request-client");
+    let msg = Envelope::new("application/cbor", documented.clone()).with_schema(REQUEST_SCHEMA);
+
+    let request = Request::from_envelope(&msg).unwrap();
+    let written = request.to_envelope();
+
+    assert_eq!(
+        request.client_cert,
+        Some(ClientCert {
+            sha256: "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0".into(),
+            der: vec![0x30, 0x03, 0x02, 0x01, 0x01],
+        })
+    );
+    assert_eq!(request.scheme, "https");
+    assert_eq!(written.body, documented);
+}
+
+#[cfg(feature = "http")]
+#[test]
 fn http_response____documented_example____same_bytes() {
     use crate::http::{RESPONSE_SCHEMA, Response};
 

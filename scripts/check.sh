@@ -181,6 +181,12 @@ check_deps() {
         -p bulkhead --all-features || status=1
     absent "bulkhead-host (every feature)" 'bulkhead-modbus|tokio-modbus' \
         -p bulkhead-host --all-features || status=1
+    # The sandbox is the runner's (CR1): none in the node, in what apps
+    # link, or in the protocol and channel crate they all share.
+    local sandbox='bulkhead-runner|landlock|seccompiler|rustbridge-consumer'
+    absent "bulkhead (every feature)" "$sandbox" -p bulkhead --all-features || status=1
+    absent "bulkhead-sdk (every feature)" "$sandbox" -p bulkhead-sdk --all-features || status=1
+    absent "bulkhead-native (every feature)" "$sandbox" -p bulkhead-native --all-features || status=1
     return $status
 }
 

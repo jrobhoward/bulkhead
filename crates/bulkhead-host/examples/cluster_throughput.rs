@@ -10,7 +10,7 @@
 //! `bulkhead-runner` in `target/release`.
 //!
 //! ```sh
-//! cargo build --release -p bulkhead-native --bin bulkhead-runner
+//! cargo build --release -p bulkhead-runner
 //! cargo build --release -p bulkhead-fixture-msgbench \
 //!     --bin bulkhead-fixture-msgbench
 //! cargo run --release -p bulkhead-host --example cluster_throughput -- 4

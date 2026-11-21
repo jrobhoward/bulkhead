@@ -45,7 +45,7 @@ pub fn programs() -> &'static (PathBuf, PathBuf) {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
         let status = Command::new(cargo)
             .current_dir(workspace_root())
-            .args(["build", "-p", "bulkhead-native", "-p", "bulkhead-resolve"])
+            .args(["build", "-p", "bulkhead-runner", "-p", "bulkhead-resolve"])
             .arg("--target-dir")
             .arg(&native)
             .status()

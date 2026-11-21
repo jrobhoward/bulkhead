@@ -22,7 +22,7 @@ PROGRAM="$ROOT/target/release/example-counter"
 echo "building (release)..."
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead
 # The node runs apps through the bulkhead-runner beside it.
-cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-native --bin bulkhead-runner
+cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-runner
 # And its resolver of host names (bulkhead-resolve), also beside it.
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" -p bulkhead-resolve
 cargo build --quiet --release --manifest-path "$ROOT/Cargo.toml" \

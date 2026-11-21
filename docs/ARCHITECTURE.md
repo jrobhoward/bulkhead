@@ -12,7 +12,9 @@ flowchart TD
     bulkhead["bulkhead (bin + lib)<br/>api: admin types, client<br/>node: daemon, store, gate, events, audit, serial path<br/>cli: commands, shell"]
     host["bulkhead-host<br/>runtime, process core, services, supervisors,<br/>transport, failover, replication, routes, listeners, native"]
     bundle["bulkhead-bundle<br/>manifest, .rbp, verify, policy, grant"]
-    native["bulkhead-native<br/>protocol, channel, snapshot, app, bulkhead-runner"]
+    native["bulkhead-native<br/>protocol, channel, snapshot, app"]
+    runner["bulkhead-runner<br/>the sandbox"]
+    runner --> native
     guests["apps (programs)<br/>bulkhead-sdk, fixtures, examples"]
     napps["native apps<br/>rustbridge plugins, executables<br/>on bulkhead-native's app API"]
     helper["bulkhead-priv (bin, root)<br/>starts the node and each instance"]
@@ -27,7 +29,7 @@ flowchart TD
     host --> bundle
     host -->|"protocol, channel, snapshot"| native
     guests -.->|"frames on a channel"| host
-    napps -.->|"run by bulkhead-runner"| native
+    napps -.->|"run by"| runner
     host -->|"[priv]"| wire
     helper --> wire
     helper -.->|"starts, under each app's user"| napps
@@ -53,7 +55,8 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-host` | library | The runtime: process table, instances, links and monitors, supervisors, app sets and pools, host services, the HTTP route table, listeners, the cluster transport, liveness, membership, failover, replication, moving singletons and release versions. |
 | `bulkhead-priv-wire` | library | The messages between a node and its privileged helper (spawn, signal, bind; spawned, exited, refused) and their bounded parser, with no `unsafe`. |
 | `bulkhead-priv` | `bulkhead-priv` (root) | The privileged helper (ROADMAP PS1): started as root, it starts the node under its user and each native instance under its app's, in a cgroup, namespaces and a minimal root (Linux) or a process group with `rctl` rules (FreeBSD). Synchronous, no async runtime; `unsafe` only in `sys`. `bulkhead-host`'s `native::helper` is the node's side. |
-| `bulkhead-native` | library and `bulkhead-runner` | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, the app API for native executables (feature `app`), and `bulkhead-runner` (feature `runner`, default), the launcher that sandboxes itself and loads or executes a native app. `bulkhead-host` takes the protocol, the channel and the snapshot format. |
+| `bulkhead-native` | library | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, and the app API for native executables (feature `app`). `bulkhead-host` takes the protocol, the channel and the snapshot format. |
+| `bulkhead-runner` | library and `bulkhead-runner` | The launcher that sandboxes itself (Landlock and seccomp on Linux, Capsicum on FreeBSD) and loads or executes a native app, and its lease watchdog; a crate of its own (ROADMAP CR1), so nothing the node, apps or drivers link holds the sandbox. |
 | `bulkhead-ingress` | library and `bulkhead-ingress` | The HTTP ingress driver (ROADMAP DA2): an SDK app the node starts for `[http]`, hyper's HTTP/1.1 server and rustls on tokio, a current-thread runtime and a sender channel (`bulkhead_native::sender_async`) per worker thread; `config` (the node's init arguments), `serve` (one request, its limits and statuses), `tls` (certificates by SNI, reloaded), `driver` (threads, host events, metrics). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-resolve` | library and `bulkhead-resolve` | The resolver driver (ROADMAP DA9): an SDK app every member node starts, hickory-resolver on a worker thread with a tokio runtime and a sender channel; `config` (the nameservers, `resolv.conf` and hosts text, TCP only), `lookup` (the `bulkhead/resolve` call), `provider` (hickory's I/O over streams the node opens, one per nameserver), `driver` (the callback thread taking the node's calls, the worker answering them on its sender channel and casting to its own instance for sockets). No node crate depends on it (`scripts/check.sh deps`). |
 | `bulkhead-sql` | library and `bulkhead-sql` | A datasource's Postgres client as a driver (ROADMAP DA3): an SDK app the node starts as `bulkhead-sql-<name>` for each `[datasources.<name>]`; `config` (the node's init arguments), `pool` (deadpool over streams the node connects, `Request::Connect`; TLS; the reset), `statements` (running a `SqlRequest`, the result limit, faults), `values`, `driver` (the callback thread handing calls to a worker thread with a tokio runtime and a sender channel, which answers each with `Request::Reply`). No node crate depends on it, and the node's tree holds no Postgres crate (`scripts/check.sh deps`). |

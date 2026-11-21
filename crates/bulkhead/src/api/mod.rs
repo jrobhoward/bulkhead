@@ -67,6 +67,11 @@ pub struct AppSummary {
     /// percent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_traffic: Option<u8>,
+    /// One of the node's own drivers (the HTTP ingress, the resolver, a
+    /// datasource's ...), started from node config, not deployed
+    /// (ROADMAP DA2b).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub built_in: bool,
 }
 
 /// One app in detail, as `GET /v1/apps/{app}` returns it.
@@ -99,6 +104,20 @@ pub struct AppDetail {
     /// many and their bytes. Absent with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blobs: Option<(u64, u64)>,
+    /// The app's HTTP routes the ingress serves (granted ones only,
+    /// ROADMAP DA2b).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteInfo>,
+}
+
+/// One HTTP route of an app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteInfo {
+    /// The host it matches, if it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The path prefix.
+    pub prefix: String,
 }
 
 /// One listener of a connection-handler app.

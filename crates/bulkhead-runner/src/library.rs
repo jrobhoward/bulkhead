@@ -22,8 +22,8 @@ use rustbridge_consumer::{
     LogCallbackFn, LogLevel, NativePlugin, NativePluginLoader, PluginConfig,
 };
 
-use crate::app::{self, App, CallRef, Ctx};
-use crate::protocol::{Envelope, ExitReason, Level};
+use bulkhead_native::app::{self, App, CallRef, Ctx};
+use bulkhead_native::protocol::{Envelope, ExitReason, Level};
 
 /// The content type a rustbridge plugin takes and returns.
 pub const JSON: &str = "application/json";

@@ -78,7 +78,7 @@ fn programs() -> PathBuf {
         "build",
         "--release",
         "-p",
-        "bulkhead-native",
+        "bulkhead-runner",
         "-p",
         "example-scada-points",
     ]);

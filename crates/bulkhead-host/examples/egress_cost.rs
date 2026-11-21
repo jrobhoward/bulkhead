@@ -72,7 +72,7 @@ fn programs() -> (PathBuf, PathBuf, PathBuf) {
     let mut build = Command::new(&cargo);
     build
         .current_dir(&root)
-        .args(["build", "--release", "-p", "bulkhead-native"]);
+        .args(["build", "--release", "-p", "bulkhead-runner"]);
     if root.join("crates/bulkhead-egress").is_dir() {
         build.args(["-p", "bulkhead-egress"]);
     }

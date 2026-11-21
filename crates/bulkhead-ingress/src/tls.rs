@@ -10,21 +10,26 @@
 //! the error is returned. Files are read through [`Files`]: the driver's
 //! own under `/driver/` ([`SdkFiles`]), which on FreeBSD are opened under
 //! the preopen's descriptor.
+//!
+//! With client certificates (ROADMAP DA2b), clients are asked for one
+//! from the listener's CAs and verified by rustls's WebPKI verifier;
+//! required, a client without one fails the handshake. The CA file
+//! reloads with the certificates: each reload builds the acceptor again.
 
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::SystemTime;
 
-use rustls::ServerConfig;
 use rustls::crypto::ring::{default_provider, sign::any_supported_type};
-use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
+use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
-use crate::config::Certificate;
+use crate::config::{Certificate, ClientAuth};
 
 /// Where certificate files are read from.
 pub trait Files: Send + Sync + 'static {
@@ -79,12 +84,14 @@ impl std::fmt::Debug for IngressTls {
 
 struct Inner {
     entries: Vec<Certificate>,
+    client: Option<ClientAuth>,
     files: Box<dyn Files>,
     /// Shared with the resolver rustls asks during each handshake.
     current: Arc<RwLock<Arc<Loaded>>>,
     /// The files' modification times at the last load.
     stamps: Mutex<Vec<Option<SystemTime>>>,
-    acceptor: TlsAcceptor,
+    /// Built again on each reload, for the client CAs.
+    acceptor: RwLock<TlsAcceptor>,
 }
 
 #[derive(Debug)]
@@ -122,12 +129,55 @@ fn load(files: &dyn Files, entries: &[Certificate]) -> Result<Loaded, String> {
     Ok(Loaded { default, by_host })
 }
 
-fn stamps(files: &dyn Files, entries: &[Certificate]) -> Vec<Option<SystemTime>> {
+fn stamps(
+    files: &dyn Files,
+    entries: &[Certificate],
+    client: Option<&ClientAuth>,
+) -> Vec<Option<SystemTime>> {
     entries
         .iter()
         .flat_map(|e| [&e.cert, &e.key])
+        .chain(client.map(|c| &c.ca))
         .map(|p| files.modified(p))
         .collect()
+}
+
+/// The server's configuration: certificates through `current`, and client
+/// certificates verified against `client`'s CAs if given.
+fn server_config(
+    current: &Arc<RwLock<Arc<Loaded>>>,
+    files: &dyn Files,
+    client: Option<&ClientAuth>,
+) -> Result<ServerConfig, String> {
+    let provider = Arc::new(default_provider());
+    let builder = ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| e.to_string())?;
+    let builder = match client {
+        None => builder.with_no_client_auth(),
+        Some(c) => {
+            let pem = files.read(&c.ca).map_err(|e| format!("{}: {e}", c.ca))?;
+            let mut roots = RootCertStore::empty();
+            for cert in CertificateDer::pem_slice_iter(&pem) {
+                let cert = cert.map_err(|e| format!("{}: {e}", c.ca))?;
+                roots.add(cert).map_err(|e| format!("{}: {e}", c.ca))?;
+            }
+            if roots.is_empty() {
+                return Err(format!("{}: no CA certificate", c.ca));
+            }
+            let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider);
+            let verifier = if c.required {
+                verifier
+            } else {
+                verifier.allow_unauthenticated()
+            };
+            builder
+                .with_client_cert_verifier(verifier.build().map_err(|e| format!("{}: {e}", c.ca))?)
+        }
+    };
+    let mut config = builder.with_cert_resolver(Arc::new(Resolver(current.clone())));
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(config)
 }
 
 impl Loaded {
@@ -157,27 +207,28 @@ impl ResolvesServerCert for Resolver {
 }
 
 impl IngressTls {
-    /// Load `entries` from `files` (the first is the default).
+    /// Load `entries` from `files` (the first is the default), and with
+    /// `client` the CAs whose client certificates it accepts.
     ///
     /// # Errors
     ///
-    /// No entries, a file that cannot be read or parsed, or a key that
-    /// does not match its certificate.
-    pub fn load(entries: Vec<Certificate>, files: impl Files) -> Result<Self, String> {
+    /// No entries, a file that cannot be read or parsed, a key that does
+    /// not match its certificate, or a CA file with no certificate.
+    pub fn load(
+        entries: Vec<Certificate>,
+        client: Option<ClientAuth>,
+        files: impl Files,
+    ) -> Result<Self, String> {
         let current = Arc::new(RwLock::new(Arc::new(load(&files, &entries)?)));
-        let mut config = ServerConfig::builder_with_provider(Arc::new(default_provider()))
-            .with_safe_default_protocol_versions()
-            .map_err(|e| e.to_string())?
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(Resolver(current.clone())));
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let config = server_config(&current, &files, client.as_ref())?;
         Ok(Self {
             inner: Arc::new(Inner {
-                stamps: Mutex::new(stamps(&files, &entries)),
+                stamps: Mutex::new(stamps(&files, &entries, client.as_ref())),
                 entries,
+                client,
                 files: Box::new(files),
                 current,
-                acceptor: TlsAcceptor::from(Arc::new(config)),
+                acceptor: RwLock::new(TlsAcceptor::from(Arc::new(config))),
             }),
         })
     }
@@ -190,7 +241,10 @@ impl IngressTls {
     /// As for [`IngressTls::load`].
     pub fn reload(&self) -> Result<(), String> {
         let files = self.inner.files.as_ref();
+        let client = self.inner.client.as_ref();
         let loaded = load(files, &self.inner.entries)?;
+        // Built first, so a broken CA file keeps the old set too.
+        let config = server_config(&self.inner.current, files, client)?;
         *self
             .inner
             .current
@@ -198,9 +252,14 @@ impl IngressTls {
             .unwrap_or_else(PoisonError::into_inner) = Arc::new(loaded);
         *self
             .inner
+            .acceptor
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = TlsAcceptor::from(Arc::new(config));
+        *self
+            .inner
             .stamps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = stamps(files, &self.inner.entries);
+            .unwrap_or_else(PoisonError::into_inner) = stamps(files, &self.inner.entries, client);
         Ok(())
     }
 
@@ -212,7 +271,11 @@ impl IngressTls {
     /// As for [`IngressTls::reload`]; a failed reload is tried again next
     /// time.
     pub fn reload_if_changed(&self) -> Result<bool, String> {
-        let now = stamps(self.inner.files.as_ref(), &self.inner.entries);
+        let now = stamps(
+            self.inner.files.as_ref(),
+            &self.inner.entries,
+            self.inner.client.as_ref(),
+        );
         let changed = *self
             .inner
             .stamps
@@ -227,8 +290,12 @@ impl IngressTls {
 
     /// The acceptor that runs handshakes with the current certificates.
     #[must_use]
-    pub fn acceptor(&self) -> &TlsAcceptor {
-        &self.inner.acceptor
+    pub fn acceptor(&self) -> TlsAcceptor {
+        self.inner
+            .acceptor
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 

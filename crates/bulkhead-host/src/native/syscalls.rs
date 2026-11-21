@@ -2,7 +2,7 @@
 //! its exit reason (`crashed: syscall bind`; ROADMAP PS4).
 
 /// The calls most likely to be met outside the allow-list
-/// (`bulkhead_native::runner::seccomp`); any other is shown by number.
+/// (`bulkhead_runner::seccomp`); any other is shown by number.
 const NAMES: &[(libc::c_long, &str)] = &[
     (libc::SYS_bind, "bind"),
     (libc::SYS_listen, "listen"),

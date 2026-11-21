@@ -40,7 +40,11 @@ pub fn apps(apps: &[AppSummary]) -> String {
         .map(|a| {
             vec![
                 a.name.clone(),
-                a.version.clone(),
+                if a.built_in {
+                    "built-in".to_string()
+                } else {
+                    a.version.clone()
+                },
                 a.status.clone(),
                 a.instances.to_string(),
                 a.previous.clone().unwrap_or_else(|| "-".into()),
@@ -156,7 +160,13 @@ pub fn detail(d: &AppDetail) -> String {
     out.push(format!("restarts:  {}", d.restarts));
     out.push(format!(
         "signer:    {}",
-        if d.signer.is_empty() { "-" } else { &d.signer }
+        if s.built_in {
+            "built into the node"
+        } else if d.signer.is_empty() {
+            "-"
+        } else {
+            &d.signer
+        }
     ));
     if !d.runs_as.is_empty() {
         out.push(format!("runs as:   {}", d.runs_as));
@@ -166,6 +176,13 @@ pub fn detail(d: &AppDetail) -> String {
     }
     out.push(format!("granted:   {}", list(&d.granted)));
     out.push(format!("denied:    {}", list(&d.denied)));
+    for r in &d.routes {
+        out.push(format!(
+            "route:     {}{}",
+            r.host.as_deref().unwrap_or("*"),
+            r.prefix
+        ));
+    }
     for w in &d.warnings {
         out.push(format!("warning:   {w}"));
     }

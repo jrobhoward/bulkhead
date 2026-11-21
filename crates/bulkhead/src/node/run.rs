@@ -105,6 +105,7 @@ async fn serve(config: NodeConfig, ring: Arc<LogRing>) -> anyhow::Result<()> {
     node.start_quarantine();
     node.start_dr_deploys();
     node.start_dr_follow();
+    node.start_ingress_watch();
     node.start_remote_admin().await?;
     #[cfg(unix)]
     reload_on_hangup(node.clone());

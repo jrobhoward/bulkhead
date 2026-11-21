@@ -13,10 +13,10 @@
 //! - `freebsd` (feature `channel`, FreeBSD): system calls rustix lacks.
 //! - `app` (feature `app`): a native app as an executable, with the
 //!   process functions.
-//! - `runner` (feature `runner`, Linux and FreeBSD): `bulkhead-runner`,
-//!   the launcher that restricts itself (Landlock and seccomp on Linux,
-//!   Capsicum on FreeBSD) and then loads a rustbridge plugin or executes
-//!   the app.
+//!
+//! The launcher that restricts an app (Landlock and seccomp on Linux,
+//! Capsicum on FreeBSD) is a crate of its own, `bulkhead-runner` (ROADMAP
+//! CR1): what the node, apps and drivers link holds no sandbox.
 
 pub mod driver;
 pub mod hot;
@@ -41,6 +41,3 @@ pub mod sender;
 
 #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "tokio"))]
 pub mod sender_async;
-
-#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "runner"))]
-pub mod runner;

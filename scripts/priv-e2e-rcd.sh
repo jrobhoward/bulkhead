@@ -13,7 +13,7 @@
 # KEEP=1.
 #
 #   cargo build -p bulkhead -p bulkhead-priv                   # as a user
-#   cargo build -p bulkhead-native --bin bulkhead-runner
+#   cargo build -p bulkhead-runner
 #   cargo build -p bulkhead-resolve -p bulkhead-admin -p bulkhead-metrics -p bulkhead-sql
 #   sh scripts/priv-e2e-rcd.sh "$PWD"                           # as root
 set -eu
