@@ -122,6 +122,10 @@ enum Command {
         /// what grows with the cycles).
         #[arg(long)]
         slow_writes: bool,
+        /// A fourth node as the DR node, apart from the witness (ROADMAP
+        /// DR4b), the WAN also between it and the witness.
+        #[arg(long)]
+        apart: bool,
         #[arg(long, default_value_t = 200)]
         heartbeat_ms: u64,
         #[arg(long, default_value_t = 1000)]
@@ -291,6 +295,7 @@ async fn execute(command: Command) -> anyhow::Result<bool> {
             run,
             writes_only,
             slow_writes,
+            apart,
             heartbeat_ms,
             node_timeout_ms,
             lease_ms,
@@ -315,6 +320,7 @@ async fn execute(command: Command) -> anyhow::Result<bool> {
                 },
                 writes_only,
                 slow_writes,
+                apart,
             )
             .await
         }

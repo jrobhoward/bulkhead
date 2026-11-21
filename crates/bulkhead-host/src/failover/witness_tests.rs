@@ -26,6 +26,10 @@ fn answer(witness: &mut Witness, from: u32, msg: FailoverMsg) -> Option<Failover
         Decision::Answer(reply) => Some(reply),
         Decision::Grant(grant) => Some(witness.apply(grant)),
         Decision::Record(record) => Some(witness.apply_record(record)),
+        Decision::GrantThenState(grant) => {
+            witness.apply(grant);
+            Some(witness.dr_state())
+        }
     }
 }
 
@@ -514,4 +518,127 @@ async fn Witness____hand_back_not_active_or_outside_the_pair____refused() {
 
     assert!(active.hand_back(7).is_err());
     assert!(plain.hand_back(2).is_err());
+}
+
+/// A witness for pair [1, 2] that takes DR asks from node 4, a DR node
+/// apart (DR4b).
+fn apart() -> Witness {
+    let mut cfg = config(None);
+    cfg.dr = Some(4);
+    Witness::start(cfg)
+}
+
+fn dr_ask(witness: &mut Witness, from: u32, intent: DrIntent) -> Option<FailoverMsg> {
+    answer(witness, from, FailoverMsg::DrAsk { intent })
+}
+
+fn dr_state(epoch: u64, promoted: u32, fencing: bool, abandoned: Option<u32>) -> FailoverMsg {
+    FailoverMsg::DrState {
+        epoch,
+        promoted,
+        fencing,
+        abandoned,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____dr_ask_from_a_node_it_does_not_name____ignored() {
+    let mut witness = apart();
+    let mut plain = Witness::start(config(None));
+
+    let stranger = dr_ask(&mut witness, 5, DrIntent::Fence { attempt: 1 });
+    let pair_node = dr_ask(&mut witness, 2, DrIntent::Fence { attempt: 1 });
+    let unnamed = dr_ask(&mut plain, 4, DrIntent::Fence { attempt: 1 });
+
+    assert_eq!(stranger, None);
+    assert_eq!(pair_node, None);
+    assert_eq!(unnamed, None);
+    assert!(witness.fencing.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____dr_apart_fences____promoted_on_its_first_ask_once_the_lease_is_gone() {
+    let mut witness = apart();
+    renew(&mut witness, 1, 1);
+
+    let fencing = dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+    tokio::time::advance(Duration::from_millis(3_400)).await;
+    let early = dr_ask(&mut witness, 4, DrIntent::State);
+    tokio::time::advance(Duration::from_millis(200)).await;
+    let granted = dr_ask(&mut witness, 4, DrIntent::State);
+    let again = dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+
+    assert_eq!(fencing, Some(dr_state(1, 1, true, None)));
+    assert_eq!(early, Some(dr_state(1, 1, true, None)));
+    assert_eq!(granted, Some(dr_state(2, 4, false, None)));
+    // Asked again: what is done is only answered.
+    assert_eq!(again, Some(dr_state(2, 4, false, None)));
+    assert_eq!(
+        renew(&mut witness, 1, 1),
+        Some(FailoverMsg::DrActive { epoch: 2, dr: 4 })
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____pair_node_heard_while_the_dr_apart_fences____abandoned_and_said_so() {
+    let mut witness = apart();
+    renew(&mut witness, 1, 1);
+    dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+    tokio::time::advance(Duration::from_millis(100)).await;
+    renew(&mut witness, 2, 1);
+    tokio::time::advance(Duration::from_secs(4)).await;
+
+    let abandoned = dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+    renew(&mut witness, 1, 1);
+    // The same activation asked again (still in flight when it was
+    // abandoned): no new fence.
+    let stale = dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+    let fenced_again = dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 2 });
+
+    assert_eq!(abandoned, Some(dr_state(1, 1, false, Some(2))));
+    assert_eq!(stale, Some(dr_state(1, 1, false, Some(2))));
+    assert_eq!(fenced_again, Some(dr_state(1, 1, true, None)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____dr_apart_hands_back____pair_node_promoted_and_asked_again_only_answered() {
+    let mut witness = apart();
+    dr_ask(&mut witness, 4, DrIntent::Fence { attempt: 1 });
+    dr_ask(&mut witness, 4, DrIntent::State);
+    let before = dr_ask(&mut witness, 4, DrIntent::State);
+
+    let handed = dr_ask(&mut witness, 4, DrIntent::HandBack { to: 2 });
+    let again = dr_ask(&mut witness, 4, DrIntent::HandBack { to: 1 });
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let resumed = answer(
+        &mut witness,
+        2,
+        FailoverMsg::Request {
+            seq: 9,
+            resume: true,
+            epoch: 1,
+            confirmed_ago_ms: 5_000,
+        },
+    );
+
+    assert_eq!(before, Some(dr_state(2, 4, false, None)));
+    assert_eq!(handed, Some(dr_state(3, 2, false, None)));
+    assert_eq!(again, Some(dr_state(3, 2, false, None)));
+    assert_eq!(
+        resumed,
+        Some(FailoverMsg::Granted {
+            seq: 9,
+            epoch: 3,
+            outdated: false
+        })
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn Witness____hand_back_asked_before_the_dr_apart_is_promoted____nothing_done() {
+    let mut witness = apart();
+
+    let early = dr_ask(&mut witness, 4, DrIntent::HandBack { to: 2 });
+
+    assert_eq!(early, Some(dr_state(1, 1, false, None)));
 }

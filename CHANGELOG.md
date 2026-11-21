@@ -8,6 +8,18 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A DR node apart from the witness can be activated and failed back
+  (ROADMAP DR4b): `[dr] witness = N` on it and `[witness] dr = M` on the
+  witness. The witness stays the one authority: the DR node sends it its
+  intent every poll (`DrAsk`: the state, a fence, a hand-back, cluster
+  protocol version 10's new failover messages with `DrState`) and leads
+  only while the witness's answer says it promoted it, so a lost answer or
+  a restart of either recovers at the next one. Without the witness's word
+  in 25 s an activation is not confirmed and nothing runs at site 2; a
+  failback stays frozen, its apps stopped, and goes on asking (audit
+  `dr_failback_unconfirmed`). A fence names the operator's activation, so
+  one still in flight after the witness abandoned it (site 1 heard)
+  starts no new one. Checked with TLC (`DrFailover.tla`'s `DrApart`). `bulkhead-soak dr --apart` drills it with a fourth node.
 - `bulkhead dr activate` is refused while the DR node does not hold the
   primary's deployments: none yet, still fetching them, or the latest
   refused (ROADMAP DR3b). `--allow-missing-apps` activates anyway, running

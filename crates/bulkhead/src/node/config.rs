@@ -99,6 +99,7 @@
 //! # first = 1                   # primary at epoch 1
 //! # lease_ms = 3000             # as on the pair
 //! # margin_ms = 500
+//! # dr = 4                      # a DR node apart from this witness
 //!
 //! # On the disaster-recovery node (the witness, or a node without
 //! # [failover]): a copy of the pair's replicated log, pulled from either,
@@ -110,6 +111,9 @@
 //! # rpo_target_s = 300          # warn while the copy trails by longer
 //! # poll_ms = 1000
 //! # batch_bytes = "1MiB"
+//! # witness = 3                 # on a DR node apart from the witness: activation
+//! #                             # and failback go through it (it names this node
+//! #                             # as witness.dr)
 //!
 //! # A driver app (ROADMAP DA1): the app named "ingress", deployed as any
 //! # app, gets listening sockets the node binds and keeps (it accepts on
@@ -703,6 +707,12 @@ pub struct DrBinding {
     /// See `log_max`.
     #[serde(default = "default_replication_log_age_s")]
     pub log_age_s: u64,
+    /// The pair's witness, on a DR node that is not it (ROADMAP DR4b):
+    /// activation and failback go through it, and it must name this node
+    /// as `witness.dr`. Without it, such a node keeps a copy but cannot be
+    /// activated.
+    #[serde(default)]
+    pub witness: Option<u32>,
 }
 
 fn default_rpo_target_s() -> u64 {
@@ -754,6 +764,10 @@ pub struct WitnessBinding {
     /// As the pair's `margin_ms`.
     #[serde(default = "default_margin_ms")]
     pub margin_ms: u64,
+    /// The disaster-recovery node, when it is not this witness (ROADMAP
+    /// DR4b): the one node whose activation and failback it takes.
+    #[serde(default)]
+    pub dr: Option<u32>,
 }
 
 fn default_lease_ms() -> u64 {
@@ -1906,6 +1920,17 @@ impl NodeConfig {
                     "dr.poll_ms, dr.batch_bytes and dr.rpo_target_s must be more than 0",
                 );
             }
+            if let Some(w) = d.witness {
+                if self.witness.is_some() {
+                    return invalid(
+                        "dr.witness is for a DR node apart from the witness; this node is the \
+                         witness",
+                    );
+                }
+                if w == self.node || d.pair.contains(&w) {
+                    return invalid("dr.witness must be a node other than this one and the pair");
+                }
+            }
         }
         if let Some(w) = &self.witness {
             if !witness_role || self.cluster.address.is_none() {
@@ -1920,6 +1945,14 @@ impl NodeConfig {
             if !timing_ok(w.lease_ms, w.margin_ms) {
                 return invalid(
                     "witness.margin_ms must be more than 0 and less than half of lease_ms",
+                );
+            }
+            if let Some(dr) = w.dr
+                && (dr == self.node || w.pair.contains(&dr))
+            {
+                return invalid(
+                    "witness.dr must be a node other than this one and the pair (a witness that \
+                     is the DR node has [dr] instead)",
                 );
             }
         }

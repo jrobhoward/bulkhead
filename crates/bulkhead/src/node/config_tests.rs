@@ -437,6 +437,7 @@ fn NodeConfig____witness____read_with_defaults() {
             first: 2,
             lease_ms: 3_000,
             margin_ms: 500,
+            dr: None,
         })
     );
 }
@@ -982,9 +983,43 @@ fn NodeConfig____dr_on_the_witness_and_failover_dr____read() {
             batch_bytes: ByteSize::mib(1),
             log_max: ByteSize::mib(64),
             log_age_s: 3600,
+            witness: None,
         })
     );
     assert_eq!(pair.failover.unwrap().dr, Some(3));
+}
+
+#[test]
+fn NodeConfig____dr_apart_from_the_witness____read() {
+    let witness = CLUSTERED.replace("node = 1", "node = 3") + "role = \"witness\"\n";
+    let w = NodeConfig::from_toml_str(&format!(
+        "{witness}[witness]\npair = [1, 2]\nfirst = 1\ndr = 4\n"
+    ))
+    .unwrap();
+    let member = CLUSTERED.replace("node = 1", "node = 4");
+    let d =
+        NodeConfig::from_toml_str(&format!("{member}[dr]\npair = [1, 2]\nwitness = 3\n")).unwrap();
+    let on_witness = NodeConfig::from_toml_str(&format!(
+        "{witness}[witness]\npair = [1, 2]\nfirst = 1\n[dr]\npair = [1, 2]\nwitness = 5\n"
+    ));
+    let names_pair = NodeConfig::from_toml_str(&format!(
+        "{witness}[witness]\npair = [1, 2]\nfirst = 1\ndr = 2\n"
+    ));
+
+    assert_eq!(w.witness.unwrap().dr, Some(4));
+    assert_eq!(d.dr.unwrap().witness, Some(3));
+    assert!(
+        on_witness
+            .unwrap_err()
+            .to_string()
+            .contains("this node is the witness"),
+    );
+    assert!(
+        names_pair
+            .unwrap_err()
+            .to_string()
+            .contains("witness.dr must be")
+    );
 }
 
 #[test]
@@ -1010,6 +1045,14 @@ fn NodeConfig____bad_dr____refused() {
         (
             "data_dir = \"/d\"\nnode = 4\n[dr]\npair = [1, 2]\n".to_string(),
             "cluster.address",
+        ),
+        (
+            format!("{member}[dr]\npair = [1, 2]\nwitness = 4\n"),
+            "dr.witness must be",
+        ),
+        (
+            format!("{member}[dr]\npair = [1, 2]\nwitness = 2\n"),
+            "dr.witness must be",
         ),
     ];
 

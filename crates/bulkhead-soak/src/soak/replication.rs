@@ -112,6 +112,8 @@ pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
             "[apps.ledger]\ngrant = [\"bulkhead:keyvalue\"]\nbuckets = [\"ledger\"]\n".into(),
         ),
         witness_config: String::new(),
+        witness_table: String::new(),
+        apart_config: None,
     };
     let deadline = Instant::now() + Duration::from_secs_f64(args.minutes * 60.0);
     let mut rng = Rng::new(args.seed);

@@ -86,6 +86,32 @@
  *
  * The DR property: the singleton never runs at two sites at once
  * (AtMostOneRunningSites).
+ *
+ * ROADMAP DR4b adds, with DrApart, a DR node D apart from the witness (W is
+ * then the witness only, at site 2 or elsewhere, and never runs the
+ * singleton). W stays the one authority: its kept epoch and promoted node
+ * decide who runs. D only asks and follows:
+ *
+ *   - D and W talk over a link of their own (DWan), lost or held as one
+ *     D fault (MaxDwFaults, counted apart from MaxFaults, so that a site
+ *     fault and a D fault can meet in one run); a crash of D or of W is a
+ *     D fault too.
+ *   - Each tick D sends W its intent, if nothing of its is in flight:
+ *     "state" (none, leading), "fence" (asking, after the operator's
+ *     activation) or "handBack" to a pair node (frozen, after the
+ *     operator's failback). W acts on it and answers with whom it has
+ *     promoted, after acting: fence starts fencing (DrFence's rule) unless
+ *     W fences or has promoted D already; handBack promotes the pair node
+ *     at a new epoch if W has promoted D. DrActivate then promotes D.
+ *   - D leads once an answer says W promoted it (a lost grant recovers by
+ *     itself), and stops once one says W promoted another; frozen, it runs
+ *     nothing and stays frozen until an answer says W promoted another.
+ *   - W's fencing is in memory only: a restart ends it, and D's next fence
+ *     starts it again. A restarted D keeps nothing and leads again only on
+ *     W's word.
+ *   - Rule-off switches: DUnfreezes (a frozen D gives up waiting and leads
+ *     again) and DTrustsDisk (a restarted D leads from its own record that
+ *     it was active).
  *)
 EXTENDS Integers, Sequences, FiniteSets
 
@@ -120,6 +146,11 @@ CONSTANTS Activations, SiteLease, SiteLeaseLen, OperatorRight, SiteFaults
 \* (FALSE: the usual rules); a witness restart counts as a site-lease
 \* renewal (FALSE: it forgets, as if it never renewed).
 CONSTANTS FenceRefusesAll, WitnessResetsSite
+\* DR4b: a DR node D apart from the witness; its faults (link, crash, the
+\* witness's crash), bounded apart; operator failbacks (not faults); D's
+\* crashes; rule-off switches (FALSE is the design).
+CONSTANT D
+CONSTANTS DrApart, MaxDwFaults, HandBacks, DCrashes, DUnfreezes, DTrustsDisk
 
 Max(x, y) == IF x >= y THEN x ELSE y
 Min(x, y) == IF x <= y THEN x ELSE y
@@ -138,8 +169,11 @@ Older(a) == Min(a + 1, Cap)
 Lan(f, t) == <<"lan", f, t>>
 Ser(f, t) == <<"ser", f, t>>
 Wan(f, t) == <<"wan", f, t>>
+DWan(f, t) == <<"dwan", f, t>>
+DChannels == IF DrApart THEN {DWan(D, W), DWan(W, D)} ELSE {}
 Channels == {Lan(A, B), Lan(B, A), Ser(A, B), Ser(B, A)}
             \cup {Wan(n, W) : n \in Pair} \cup {Wan(W, n) : n \in Pair}
+            \cup DChannels
 
 VARIABLES
     role, epoch, alive, lease,
@@ -163,6 +197,12 @@ VARIABLES
     wSiteAge,     \* S38: ticks since the witness last renewed a node's site lease
     wDr,          \* S38: "none", "fencing" or "active" (on disk)
     activations,  \* S38: activations asked for so far
+    dAlive,       \* DR4b: D is up
+    dState,       \* DR4b: "none", "asking", "leading", "frozen"
+    dTo,          \* DR4b: the pair node D hands back to, while frozen
+    dDisk,        \* DR4b: D's own record that it was active (DTrustsDisk only)
+    dwFaults,     \* DR4b: D faults so far
+    failbacks,    \* DR4b: failbacks asked for so far
     chan, q, faults,
     phase,        \* "env", "deliver", "first", "second", "tick"
     first         \* the node whose turn comes first this round
@@ -170,13 +210,16 @@ VARIABLES
 nodeVars == <<role, epoch, alive, lease, asking, asked, inflight, retry, confAge,
               downAge, view, seenAge, opConfirmed, overridden, yielding, beaten, stepped, site>>
 witnessVars == <<wEpoch, wPromoted, wRenewedAge, wAlive, wReleased, wSiteAge, wDr>>
-sw == <<switchovers, sinceSwitch, activations>>
+dVars == <<dAlive, dState, dTo, dDisk, dwFaults, failbacks>>
+sw == <<switchovers, sinceSwitch, activations, dVars>>
 vars == <<nodeVars, witnessVars, chan, q, faults, sw, phase, first>>
 
 Running(n) == alive[n] /\ role[n] = "Primary" /\ (lease[n] > 0 \/ overridden[n])
               /\ (SiteLease => site[n] > 0)
-\* The DR node runs the singleton once activated, while it is up.
-RunningW == wAlive /\ wDr = "active"
+\* The DR node runs the singleton once activated, while it is up: the
+\* witness itself, or with DrApart D, once it has heard so.
+RunningW == ~DrApart /\ wAlive /\ wDr = "active"
+RunningD == DrApart /\ dAlive /\ dState = "leading"
 Confirming(n) == role[n] = "Standby" /\ ~asking[n]
 
 Live(n, p) == view[n][p].age <= Timeout
@@ -224,6 +267,17 @@ Init ==
     /\ wSiteAge = [n \in Pair |-> Cap]
     /\ wDr = "none"
     /\ activations = 0
+    /\ dAlive = TRUE
+    /\ dState = "none"
+    /\ dTo = A
+    /\ dDisk = FALSE
+    /\ dwFaults = 0
+    /\ failbacks = 0
+
+\* DR4b: what D asks W for, by its state.
+DIntent == CASE dState = "asking" -> "fence"
+             [] dState = "frozen" -> "handBack"
+             [] OTHER -> "state"
 
 \* ------------------------------------------------------------------ time
 
@@ -232,10 +286,13 @@ Tick ==
     /\ phase = "tick"
     /\ phase' = "env"
     /\ UNCHANGED first
-    /\ q' = [c \in Channels |->
-               [i \in 1..Len(q[c]) |->
-                  [q[c][i] EXCEPT !.age = Older(@),
-                                  !.due = IF chan[c] = "up" THEN @ - 1 ELSE @]]]
+    /\ LET aged == [c \in Channels |->
+                     [i \in 1..Len(q[c]) |->
+                        [q[c][i] EXCEPT !.age = Older(@),
+                                        !.due = IF chan[c] = "up" THEN @ - 1 ELSE @]]]
+       IN q' = IF DrApart /\ dAlive /\ q[DWan(D, W)] = <<>>
+               THEN Push(aged, DWan(D, W), [k |-> DIntent, to |-> dTo, age |-> 0, due |-> 0])
+               ELSE aged
     /\ lease' = [n \in Pair |-> Max(lease[n] - 1, 0)]
     /\ retry' = [n \in Pair |-> Max(retry[n] - 1, 0)]
     /\ confAge' = [n \in Pair |-> Older(confAge[n])]
@@ -250,7 +307,7 @@ Tick ==
     /\ wSiteAge' = IF SiteLease THEN [n \in Pair |-> Older(wSiteAge[n])] ELSE wSiteAge
     /\ UNCHANGED <<role, epoch, alive, asking, asked, inflight, opConfirmed, overridden,
                    yielding, wEpoch, wPromoted, wAlive, wReleased, chan, faults, switchovers,
-                   wDr, activations>>
+                   wDr, activations, dVars>>
 
 \* ------------------------------------------------------------------ faults
 
@@ -315,11 +372,13 @@ Restart(n) ==
                    witnessVars, chan, q, faults, sw>>
 
 WitnessCrash ==
-    /\ WitnessCrashes /\ faults < MaxFaults /\ wAlive
+    /\ WitnessCrashes /\ wAlive
+    /\ IF DrApart THEN dwFaults < MaxDwFaults ELSE faults < MaxFaults
     /\ wAlive' = FALSE
-    /\ faults' = faults + 1
+    /\ faults' = IF DrApart THEN faults ELSE faults + 1
+    /\ dwFaults' = IF DrApart THEN dwFaults + 1 ELSE dwFaults
     /\ UNCHANGED <<nodeVars, wEpoch, wPromoted, wRenewedAge, wReleased, wSiteAge, wDr, chan, q,
-                   sw>>
+                   switchovers, sinceSwitch, activations, dAlive, dState, dTo, dDisk, failbacks>>
 
 \* With ForgetRenewals the record is lost: the node last promoted counts as
 \* renewed at the restart, never earlier than its true last renewal; the
@@ -336,7 +395,10 @@ WitnessRestart ==
     /\ wSiteAge' = IF ~SiteLease THEN wSiteAge
                    ELSE IF WitnessResetsSite THEN [n \in Pair |-> 0]
                    ELSE [n \in Pair |-> Cap]
-    /\ UNCHANGED <<nodeVars, wEpoch, wPromoted, wDr, chan, q, faults, sw>>
+    \* DR4b: fencing is in memory only (with the witness as DR node too,
+    \* but there the operator asks again, which the model leaves out).
+    /\ wDr' = IF DrApart /\ wDr = "fencing" THEN "none" ELSE wDr
+    /\ UNCHANGED <<nodeVars, wEpoch, wPromoted, chan, q, faults, sw>>
 
 \* ------------------------------------------------------------------ beats
 
@@ -627,30 +689,66 @@ RecvReply(c, m) ==
              /\ Keep(n)
              /\ UNCHANGED site
 
+\* DR4b: W acts on D's intent, then answers with whom it has promoted.
+RecvFromD(c, m) ==
+    LET fence == m.k = "fence" /\ wDr = "none" /\ wPromoted # D
+        back == m.k = "handBack" /\ wPromoted = D /\ wDr = "active"
+        promoted == IF back THEN m.to ELSE wPromoted
+        qq == [q EXCEPT ![c] = Tail(@)]
+    IN /\ q' = Push(qq, DWan(W, D), [k |-> "wState", promoted |-> promoted, age |-> 0, due |-> 0])
+       /\ wDr' = CASE fence -> "fencing" [] back -> "none" [] OTHER -> wDr
+       /\ wEpoch' = IF back THEN wEpoch + 1 ELSE wEpoch
+       /\ wPromoted' = promoted
+       \* As Witness::hand_back's grant, applied: the node handed back to
+       \* counts as just renewed, its partner not at all.
+       /\ wRenewedAge' = IF back THEN [n \in Pair |-> IF n = m.to THEN 0 ELSE Cap]
+                          ELSE wRenewedAge
+       /\ UNCHANGED <<wReleased, wSiteAge>>
+
+\* DR4b: D follows whom W has promoted.
+RecvAtD(m) ==
+    LET mine == m.promoted = D
+    IN /\ dState' = CASE dState \in {"none", "asking"} /\ mine -> "leading"
+                       [] dState \in {"leading", "frozen"} /\ ~mine -> "none"
+                       [] OTHER -> dState
+       /\ dDisk' = IF DTrustsDisk THEN (CASE dState \in {"none", "asking"} /\ mine -> TRUE
+                                          [] dState \in {"leading", "frozen"} /\ ~mine -> FALSE
+                                          [] OTHER -> dDisk)
+                   ELSE dDisk
+
 \* Deliver the frame at the head of an up link; one to a dead receiver is lost.
 Deliver(c) ==
     /\ chan[c] = "up" /\ q[c] # <<>>
     /\ LET m == Head(q[c])
            to == c[3]
-       IN \/ /\ to = W /\ wAlive
+       IN \/ /\ to = W /\ wAlive /\ c[1] # "dwan"
              /\ RecvAtWitness(c, m)
-             /\ UNCHANGED <<nodeVars, wAlive, wDr>>
-          \/ /\ (to = W /\ ~wAlive) \/ (to # W /\ ~alive[to])
+             /\ UNCHANGED <<nodeVars, wAlive, wDr, sw>>
+          \/ /\ to = W /\ wAlive /\ c[1] = "dwan"
+             /\ RecvFromD(c, m)
+             /\ UNCHANGED <<nodeVars, wAlive, sw>>
+          \/ /\ to = D /\ dAlive
+             /\ RecvAtD(m)
              /\ q' = [q EXCEPT ![c] = Tail(@)]
-             /\ UNCHANGED <<nodeVars, witnessVars>>
-          \/ /\ to # W /\ alive[to] /\ m.k = "beat"
+             /\ UNCHANGED <<nodeVars, witnessVars, switchovers, sinceSwitch, activations, dAlive,
+                            dTo, dwFaults, failbacks>>
+          \/ /\ (to = W /\ ~wAlive) \/ (to = D /\ ~dAlive) \/ (to \in Pair /\ ~alive[to])
+             /\ q' = [q EXCEPT ![c] = Tail(@)]
+             /\ UNCHANGED <<nodeVars, witnessVars, sw>>
+          \/ /\ to \in Pair /\ alive[to] /\ m.k = "beat"
              /\ RecvBeat(c, m)
-             /\ UNCHANGED alive
-          \/ /\ to # W /\ alive[to] /\ m.k # "beat"
+             /\ UNCHANGED <<alive, sw>>
+          \/ /\ to \in Pair /\ alive[to] /\ m.k # "beat"
              /\ RecvReply(c, m)
-             /\ UNCHANGED <<alive, view, seenAge, beaten, stepped, witnessVars>>
-    /\ UNCHANGED <<chan, faults, sw>>
+             /\ UNCHANGED <<alive, view, seenAge, beaten, stepped, witnessVars, sw>>
+    /\ UNCHANGED <<chan, faults>>
 
 \* ------------------------------------------------------------------ spec
 
 \* Links in the order frames are delivered within a round.
 Order == <<Lan(A, B), Lan(B, A), Ser(A, B), Ser(B, A),
            Wan(A, W), Wan(B, W), Wan(W, A), Wan(W, B)>>
+         \o (IF DrApart THEN <<DWan(D, W), DWan(W, D)>> ELSE <<>>)
 Deliverable(c) == chan[c] = "up" /\ q[c] # <<>> /\ Head(q[c]).due = 0
 NextDeliverable(c) ==
     /\ Deliverable(c)
@@ -694,7 +792,7 @@ Switchover(n) ==
     /\ switchovers' = switchovers + 1
     /\ sinceSwitch' = 0
     /\ UNCHANGED <<alive, view, seenAge, beaten, stepped, site, witnessVars, chan, faults,
-                   activations>>
+                   activations, dVars>>
 
 \* ------------------------------------------------------------------ S38
 
@@ -726,11 +824,12 @@ SiteDown ==
 
 \* The operator starts an activation at the DR node: it renews nothing more.
 DrFence ==
+    /\ ~DrApart
     /\ activations < Activations /\ wAlive /\ wDr = "none"
     /\ wDr' = "fencing"
     /\ activations' = activations + 1
     /\ UNCHANGED <<nodeVars, wEpoch, wPromoted, wRenewedAge, wAlive, wReleased, wSiteAge, chan, q,
-                   faults, switchovers, sinceSwitch>>
+                   faults, switchovers, sinceSwitch, dVars>>
 
 \* Its wait over, the DR node takes a new epoch and runs the singleton.
 DrWaited ==
@@ -742,13 +841,75 @@ DrActivate ==
     /\ wAlive /\ wDr = "fencing" /\ DrWaited
     /\ wDr' = "active"
     /\ wEpoch' = wEpoch + 1
-    /\ wPromoted' = W
+    /\ wPromoted' = IF DrApart THEN D ELSE W
     /\ UNCHANGED <<nodeVars, wRenewedAge, wAlive, wReleased, wSiteAge, chan, q, faults, sw>>
+
+\* DR4b. The operator asks D to activate: from now on D asks W to fence.
+DOperatorActivate ==
+    /\ DrApart /\ activations < Activations /\ dAlive /\ dState = "none"
+    /\ dState' = "asking"
+    /\ activations' = activations + 1
+    /\ UNCHANGED <<nodeVars, witnessVars, chan, q, faults, switchovers, sinceSwitch, dAlive, dTo,
+                   dDisk, dwFaults, failbacks>>
+
+\* The operator asks D to hand back to pair node n: it stops running and
+\* asks W, until W says it promoted another.
+DOperatorFailback(n) ==
+    /\ DrApart /\ failbacks < HandBacks /\ dAlive /\ dState = "leading"
+    /\ dState' = "frozen"
+    /\ dTo' = n
+    /\ failbacks' = failbacks + 1
+    /\ UNCHANGED <<nodeVars, witnessVars, chan, q, faults, switchovers, sinceSwitch, activations,
+                   dAlive, dDisk, dwFaults>>
+
+\* Rule-off: a frozen D gives up waiting for W and leads again.
+DUnfreeze ==
+    /\ DrApart /\ DUnfreezes /\ dAlive /\ dState = "frozen"
+    /\ dState' = "leading"
+    /\ UNCHANGED <<nodeVars, witnessVars, chan, q, faults, switchovers, sinceSwitch, activations,
+                   dAlive, dTo, dDisk, dwFaults, failbacks>>
+
+DCrash ==
+    /\ DrApart /\ DCrashes /\ dAlive /\ dwFaults < MaxDwFaults
+    /\ dAlive' = FALSE
+    /\ dwFaults' = dwFaults + 1
+    /\ UNCHANGED <<nodeVars, witnessVars, chan, q, faults, switchovers, sinceSwitch, activations,
+                   dState, dTo, dDisk, failbacks>>
+
+\* A restarted D keeps nothing: it follows W again (with DTrustsDisk, it
+\* leads at once if it last knew itself active).
+DRestart ==
+    /\ DrApart /\ ~dAlive
+    /\ dAlive' = TRUE
+    /\ dState' = IF DTrustsDisk /\ dDisk THEN "leading" ELSE "none"
+    /\ UNCHANGED <<nodeVars, witnessVars, chan, q, faults, switchovers, sinceSwitch, activations,
+                   dTo, dDisk, dwFaults, failbacks>>
+
+\* A D fault on its link to W: one direction or both, lost or held.
+DwLose(c, both) ==
+    /\ DrApart /\ dwFaults < MaxDwFaults /\ c \in DChannels
+    /\ \E d \in Dirs(c, both) : chan[d] # "lost"
+    /\ chan' = [d \in Channels |-> IF d \in Dirs(c, both) THEN "lost" ELSE chan[d]]
+    /\ q' = [d \in Channels |-> IF d \in Dirs(c, both) THEN <<>> ELSE q[d]]
+    /\ dwFaults' = dwFaults + 1
+    /\ UNCHANGED <<nodeVars, witnessVars, faults, switchovers, sinceSwitch, activations, dAlive,
+                   dState, dTo, dDisk, failbacks>>
+
+DwHold(c, both) ==
+    /\ DrApart /\ Holds /\ dwFaults < MaxDwFaults /\ c \in DChannels
+    /\ \A d \in Dirs(c, both) : chan[d] = "up"
+    /\ chan' = [d \in Channels |-> IF d \in Dirs(c, both) THEN "held" ELSE chan[d]]
+    /\ dwFaults' = dwFaults + 1
+    /\ UNCHANGED <<nodeVars, witnessVars, q, faults, switchovers, sinceSwitch, activations, dAlive,
+                   dState, dTo, dDisk, failbacks>>
 
 Env ==
     \/ \E held \in BOOLEAN : SiteCut(held)
     \/ SiteDown
     \/ DrFence \/ DrActivate
+    \/ DOperatorActivate \/ \E n \in Pair : DOperatorFailback(n)
+    \/ DUnfreeze \/ DCrash \/ DRestart
+    \/ \E c \in DChannels : \E both \in BOOLEAN : DwLose(c, both) \/ DwHold(c, both)
     \/ \E n \in Pair : Switchover(n)
     \/ \E n \in Pair : OperatorConfirm(n)
     \/ \E c \in Channels : \E both \in BOOLEAN : Hold1(c, both) \/ Lose(c, both)
@@ -788,7 +949,8 @@ EpochBound == wEpoch <= MaxEpoch /\ \A n \in Pair : epoch[n] <= MaxEpoch
 
 \* S38: the singleton runs at one site at most: on A, on B or on the DR node.
 AtMostOneRunningSites ==
-    Cardinality({n \in Pair : Running(n)}) + (IF RunningW THEN 1 ELSE 0) <= 1
+    Cardinality({n \in Pair : Running(n)}) + (IF RunningW THEN 1 ELSE 0)
+        + (IF RunningD THEN 1 ELSE 0) <= 1
 
 \* Vacuity checks: not properties, but invariants a config must violate, to
 \* show the model reaches what the properties are about. NoLeasedRunner:
@@ -810,5 +972,9 @@ NoFastHandover == ~(sinceSwitch >= 0 /\ sinceSwitch < Hold
 NoDrRun == ~RunningW
 NoSiteFence == ~\E n \in Pair : alive[n] /\ role[n] = "Primary" /\ lease[n] > 0 /\ site[n] = 0
                               /\ wDr = "fencing"
+\* DR4b. NoApartRun: D runs the singleton. NoApartHandBack: after a
+\* failback a pair node runs it again.
+NoApartRun == ~RunningD
+NoApartHandBack == ~(failbacks > 0 /\ \E n \in Pair : Running(n))
 
 =============================================================================

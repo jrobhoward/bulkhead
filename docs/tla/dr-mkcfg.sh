@@ -17,6 +17,8 @@ fcfg() {
         [MaxSwitchovers]=0 [FastHandover]=FALSE [ReleaseClears]=TRUE
         [Activations]=1 [SiteLease]=TRUE [SiteLeaseLen]=5 [OperatorRight]=FALSE
         [SiteFaults]=TRUE [FenceRefusesAll]=TRUE [WitnessResetsSite]=TRUE
+        [DrApart]=FALSE [MaxDwFaults]=0 [HandBacks]=0 [DCrashes]=FALSE [DUnfreezes]=FALSE
+        [DTrustsDisk]=FALSE
     )
     local kv
     for kv in $overrides; do c[${kv%%=*}]=${kv#*=}; done
@@ -28,12 +30,14 @@ fcfg() {
         echo "    A = A"
         echo "    B = B"
         echo "    W = W"
+        echo "    D = D"
         local k
         for k in Lease Margin Timeout Delay MaxEpoch QueueLen MaxFaults EchoLease ConfirmOnSend \
                  PersistEpoch ForgetRenewals LanFaults SerialFaults WanFaults Crashes \
                  WitnessCrashes Holds OperatorConfirms SerialLost MaxSwitchovers FastHandover \
                  ReleaseClears Activations SiteLease SiteLeaseLen OperatorRight SiteFaults \
-                 FenceRefusesAll WitnessResetsSite; do
+                 FenceRefusesAll WitnessResetsSite DrApart MaxDwFaults HandBacks DCrashes \
+                 DUnfreezes DTrustsDisk; do
             echo "    $k = ${c[$k]}"
         done
         echo
@@ -69,7 +73,25 @@ fcfg DrF_Off1 "Activations=0 SiteLease=FALSE SiteFaults=FALSE" "$FSAFE"
 # Two faults, by random simulation.
 fcfg DrF_SiteLease2 "MaxFaults=2" "$FSAFE"
 fcfg DrF_Operator2 "MaxFaults=2 SiteLease=FALSE OperatorRight=TRUE" "$FSAFE"
+# ROADMAP DR4b: a DR node apart from the witness, operator fencing. One
+# site fault and one D fault (its link to the witness lost, D crashed or
+# the witness crashed), an activation and a failback, exhaustively; every
+# fault by simulation.
+APART="SiteLease=FALSE OperatorRight=TRUE DrApart=TRUE MaxDwFaults=1 HandBacks=1 DCrashes=TRUE"
+fcfg DrF_Apart_Site1 "$APART $NOFAULTS WitnessCrashes=TRUE" "$FSAFE"
+fcfg DrF_Apart_Site_holds1 "$APART $NOFAULTS WitnessCrashes=TRUE Holds=TRUE" "$FSAFE"
+fcfg DrF_Apart1 "$APART" "$FSAFE"
+fcfg DrF_Apart2 "$APART MaxFaults=2" "$FSAFE"
+# Rule-off: each must find the singleton at two sites, exhaustively with
+# only the faults it needs. A frozen D that leads again on a timeout, W's
+# answer to its hand-back lost (one D fault, no crash: without a loss the
+# answer always reaches D before the pair node's grant, and D stops); a
+# restarted D that leads from its own record (D's crash, no witness crash).
+fcfg DrF_Apart_Unfreeze "$APART $NOFAULTS DUnfreezes=TRUE DCrashes=FALSE" "$FSAFE"
+fcfg DrF_Apart_TrustDisk "$APART $NOFAULTS DTrustsDisk=TRUE" "$FSAFE"
 # Vacuity: each must be violated.
+fcfg DrF_Vac_ApartRun "$APART $NOFAULTS WitnessCrashes=TRUE" "INVARIANT NoApartRun"
+fcfg DrF_Vac_ApartHandBack "$APART $NOFAULTS WitnessCrashes=TRUE" "INVARIANT NoApartHandBack"
 fcfg DrF_Vac_Run "" "INVARIANT NoDrRun"
 fcfg DrF_Vac_OperatorRun "SiteLease=FALSE OperatorRight=TRUE" "INVARIANT NoDrRun"
 fcfg DrF_Vac_SiteFence "" "INVARIANT NoSiteFence"

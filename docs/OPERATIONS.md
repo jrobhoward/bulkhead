@@ -182,7 +182,7 @@ A DR node's resident memory grows with each activation and failback by memory gl
 
 The DR node holds the primary's deployments too (ROADMAP DR3): every ten polls (10 s with the default `poll_ms`) it asks both pair nodes for their deploy state, follows the primary's, fetches the bundles it lacks a 256 KiB chunk at a time by SHA-256, and takes the primary's apps, versions and blue-green sides as its own, deployed and not started (`bulkhead list` there shows them as `dr copy`); they start when the node is activated (DR4). An app removed or upgraded on the primary is removed or upgraded there. Each held app is built as a deploy would build it, against the DR node's own trusted keys, policy, secrets, datasources, buckets and volumes, so keep those at site 2 as on the pair, the pair's `cluster` buckets included (`[buckets.<name>]` with `scope = "cluster"`, allowed on a DR node for this). An app that would not start there is reported, with why, as is one whose grant from site 2's policy differs from the primary's: `bulkhead dr` lists them (`not ready:`, `grants:`), `bulkhead_dr_apps_not_ready` counts them and each is logged as a warning. A DR node takes no deploys of its own: deploy, upgrade, rollback, traffic, start, stop and remove are refused there.
 
-**Activating it** (ROADMAP DR4) is for when site 1 is lost, and only on a DR node that is also the pair's witness (a DR node of its own refuses; ROADMAP DR4b). First make sure both site-1 nodes are down and stay down: powered off, or cut off from everything they serve and from each other. That judgement is yours. A site-1 pair that still hears itself keeps renewing its lease through its own heartbeats and goes on running its singletons and taking writes beside site 2, whatever the witness says (spike S38). Then:
+**Activating it** (ROADMAP DR4) is for when site 1 is lost, on a DR node that is also the pair's witness, or on a DR node apart from the witness that names it (below, "A DR node apart from the witness"). First make sure both site-1 nodes are down and stay down: powered off, or cut off from everything they serve and from each other. That judgement is yours. A site-1 pair that still hears itself keeps renewing its lease through its own heartbeats and goes on running its singletons and taking writes beside site 2, whatever the witness says (spike S38). Then:
 
 ```sh
 bulkhead dr                         # how far the copy trails: about the writes you will lose
@@ -213,6 +213,30 @@ bulkhead dr activate --site-1-down
    - The witness then makes `--to` primary at a new epoch, kept on disk. That node resumes when it next asks, a lease or so later, and the other rejoins it as standby.
    - The DR node holds the pair's apps again and pulls its copy from the pair. Audit records: `dr_failback_asked` and `dr_failback`.
 3. If a site-1 node has not caught up in time, the failback is refused, naming the node and how far it is. The DR node's apps start again and it takes writes as before; ask again later.
+
+**A DR node apart from the witness** (ROADMAP DR4b). The witness and the DR node can be two machines: the witness at site 2 beside the DR node, or at a third site. The witness stays the one authority. The DR node asks it to fence and promote it, and to hand back, and leads only while the witness says it promoted it:
+
+```toml
+# On the witness:
+[witness]
+pair = [1, 2]
+first = 1
+dr = 4                  # the DR node, the only node whose asks it takes
+
+# On the DR node (node 4, no [failover]):
+[dr]
+pair = [1, 2]
+witness = 3
+
+# On both pair nodes:
+[failover]
+dr = 4
+```
+
+- **Activation and failback are the same commands, run on the DR node.** It asks the witness every poll (`poll_ms`) until the witness's state shows it done. The witness fences and waits out the pair's lease as it does for itself, then promotes the DR node on its next ask.
+- **The witness must be reachable.** Without its word in 25 s, `dr activate` answers that it is not confirmed and nothing runs at site 2. The DR node goes on following the witness: an activation the witness had already decided still takes effect at the DR node's next answer. There is no way to activate without the witness. Do not put the witness at site 1: lost with site 1, it leaves nothing to activate.
+- **A failback without the witness's word stays frozen.** If the witness has not confirmed the hand-back in 25 s, `dr failback` says so, and the DR node keeps its apps stopped and takes no writes. It goes on asking, since the witness may have handed back with its answer lost. It never starts again on a timeout. `bulkhead dr` shows `active: epoch N` until the witness's answer arrives.
+- **A restarted DR node leads again only once the witness says it promoted it.** It keeps nothing of its own about that, and starts the held apps then. The audit record of a hand-back left unconfirmed is `dr_failback_unconfirmed`.
 
 Both site-1 nodes must reseed: a node that never did would hold writes the DR node does not, and could not join the pair. A failback carries the data, not the deployments. Site 1's nodes run the deployments they had; a deploy made on the active DR node is not shipped back, and the DR node takes the pair's deployments again once it follows the primary.
 

@@ -118,7 +118,9 @@ pub fn since(frame: &Frame) -> u16 {
             | FailoverMsg::Refused { .. } => 1,
             FailoverMsg::Record { .. } | FailoverMsg::Recorded { .. } => 6,
             FailoverMsg::Release { .. } => 7,
-            FailoverMsg::DrActive { .. } => 10,
+            FailoverMsg::DrActive { .. }
+            | FailoverMsg::DrAsk { .. }
+            | FailoverMsg::DrState { .. } => 10,
         },
     }
 }
@@ -346,7 +348,14 @@ pub(crate) mod blobs {
 pub(crate) mod failover {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::failover::FailoverMsg;
+    use crate::failover::{DrIntent, FailoverMsg};
+
+    #[derive(Serialize, Deserialize)]
+    enum Intent {
+        State,
+        Fence { attempt: u64 },
+        HandBack { to: u32 },
+    }
 
     #[derive(Serialize, Deserialize)]
     enum Wire {
@@ -393,6 +402,15 @@ pub(crate) mod failover {
             epoch: u64,
             dr: u32,
         },
+        DrAsk {
+            intent: Intent,
+        },
+        DrState {
+            epoch: u64,
+            promoted: u32,
+            fencing: bool,
+            abandoned: Option<u32>,
+        },
     }
 
     pub(crate) fn serialize<S: Serializer>(m: &FailoverMsg, s: S) -> Result<S::Ok, S::Error> {
@@ -434,6 +452,24 @@ pub(crate) mod failover {
             FailoverMsg::Recorded { seq, outdated } => Wire::Recorded { seq, outdated },
             FailoverMsg::Release { epoch } => Wire::Release { epoch },
             FailoverMsg::DrActive { epoch, dr } => Wire::DrActive { epoch, dr },
+            FailoverMsg::DrAsk { intent } => Wire::DrAsk {
+                intent: match intent {
+                    DrIntent::State => Intent::State,
+                    DrIntent::Fence { attempt } => Intent::Fence { attempt },
+                    DrIntent::HandBack { to } => Intent::HandBack { to },
+                },
+            },
+            FailoverMsg::DrState {
+                epoch,
+                promoted,
+                fencing,
+                abandoned,
+            } => Wire::DrState {
+                epoch,
+                promoted,
+                fencing,
+                abandoned,
+            },
         };
         wire.serialize(s)
     }
@@ -482,6 +518,24 @@ pub(crate) mod failover {
             Wire::Recorded { seq, outdated } => FailoverMsg::Recorded { seq, outdated },
             Wire::Release { epoch } => FailoverMsg::Release { epoch },
             Wire::DrActive { epoch, dr } => FailoverMsg::DrActive { epoch, dr },
+            Wire::DrAsk { intent } => FailoverMsg::DrAsk {
+                intent: match intent {
+                    Intent::State => DrIntent::State,
+                    Intent::Fence { attempt } => DrIntent::Fence { attempt },
+                    Intent::HandBack { to } => DrIntent::HandBack { to },
+                },
+            },
+            Wire::DrState {
+                epoch,
+                promoted,
+                fencing,
+                abandoned,
+            } => FailoverMsg::DrState {
+                epoch,
+                promoted,
+                fencing,
+                abandoned,
+            },
         })
     }
 }

@@ -26,8 +26,13 @@ fn free_udp() -> String {
 
 /// Keys for nodes 1 to 3 in `dir`, and a peers file listing them.
 fn keys(dir: &Path) -> std::path::PathBuf {
+    keys_for(dir, &[1, 2, 3])
+}
+
+/// Keys for nodes `nodes` in `dir`, and a peers file listing them.
+fn keys_for(dir: &Path, nodes: &[u32]) -> std::path::PathBuf {
     let mut peers = String::from("[peers]\n");
-    for n in [1, 2, 3] {
+    for &n in nodes {
         let (private, public) = generate_key().unwrap();
         let key = dir.join(format!("node-{n}.key"));
         std::fs::write(&key, private).unwrap();
@@ -2001,5 +2006,145 @@ mod format {
     /// Whether a failover view shows the node stale, reseeding from node 3.
     pub(super) fn contains_stale(f: &bulkhead::api::FailoverInfo) -> bool {
         f.role == "down" && f.replication.as_ref().is_some_and(|r| r.stale == Some(3))
+    }
+}
+
+/// A DR node apart from the witness (ROADMAP DR4b): node 4 keeps the copy,
+/// node 3 is the witness only. With the witness down, an activation is
+/// not confirmed and nothing runs at site 2; with it back, node 4 is
+/// activated through it and runs the singleton, and, restarted, runs it
+/// again once the witness says it promoted it. Site 1 back, both its nodes
+/// reseed from node 4, which hands back through the witness to node 1.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____node_apart_from_the_witness____activated_and_failed_back_through_it() {
+    let dir = tempfile::Builder::new()
+        .prefix("pda")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys_for(dir.path(), &[1, 2, 3, 4]);
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let (a1, a2, a3, a4) = (free_udp(), free_udp(), free_udp(), free_udp());
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.vault]\ngrant = [\"bulkhead:keyvalue\"]\n").unwrap();
+    let replicating = |n: u32, a: &str| {
+        format!(
+            "policy = {policy:?}\n{}replication = true\ndr = 4\n",
+            member(n, dir.path(), &peers, a, &a3)
+        )
+    };
+    let wit = format!("{}dr = 4\n", witness(dir.path(), &peers, &a3));
+    let dr = format!(
+        "policy = {policy:?}\n{}[dr]\npair = [1, 2]\npoll_ms = 200\nwitness = 3\n",
+        cluster(4, dir.path(), &peers, &a4, &[&a3])
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &wit).await;
+    let mut d = Process::start(dir.path(), 4, &pk, &dr).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    for n in [&n1, &n2] {
+        n.client
+            .deploy(replicated_singleton(&signer))
+            .await
+            .unwrap();
+    }
+    let runs = |c: &bulkhead::api::Client| {
+        let c = c.clone();
+        move || {
+            let c = c.clone();
+            async move {
+                c.status("vault")
+                    .await
+                    .is_ok_and(|d| d.summary.status == "running")
+            }
+        }
+    };
+    until("node 1 runs the singleton", runs(&n1.client)).await;
+    for i in 0..5 {
+        assert_eq!(
+            call_text(&n1.client, "vault", &format!("set:state:k{i}:v{i}")).await,
+            "ok"
+        );
+    }
+    let committed = n1
+        .client
+        .failover()
+        .await
+        .unwrap()
+        .replication
+        .unwrap()
+        .commit;
+    until_long("the DR node holds the copy and the app", || {
+        let c = d.client.clone();
+        async move {
+            c.dr().await.is_ok_and(|d| {
+                d.commit >= committed
+                    && d.deploys
+                        .is_some_and(|h| h.apps == 1 && h.fetching.is_none())
+            })
+        }
+    })
+    .await;
+    // Site 1 is lost, and the witness is down too.
+    for p in [&mut n1, &mut n2] {
+        p.child.kill().await.unwrap();
+    }
+    w.child.kill().await.unwrap();
+
+    let unconfirmed = d.client.dr_activate(true, false).await.unwrap_err();
+    let idle = d.client.status("vault").await.unwrap().summary.status;
+    let mut w = Process::start(dir.path(), 3, &pk, &wit).await;
+    let activated = d.client.dr_activate(true, false).await.unwrap();
+    until("the DR node runs the singleton", runs(&d.client)).await;
+    let written = call_text(&d.client, "vault", "set:state:site2:written").await;
+    // Restarted while active: it leads again on the witness's word.
+    d.child.kill().await.unwrap();
+    let mut d = Process::start(dir.path(), 4, &pk, &dr).await;
+    until_long("the restarted DR node runs the singleton", runs(&d.client)).await;
+    let kept = call_text(&d.client, "vault", "get:state:site2").await;
+    let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
+    let mut n2 = Process::start(dir.path(), 2, &pk, &replicating(2, &a2)).await;
+    until_long("both site-1 nodes reseeded from node 4", || {
+        let (c1, c2) = (n1.client.clone(), n2.client.clone());
+        async move {
+            let ready = |f: Result<bulkhead::api::FailoverInfo, _>| {
+                f.ok()
+                    .and_then(|f| f.replication)
+                    .is_some_and(|r| r.stale == Some(4) && r.reseeded)
+            };
+            ready(c1.failover().await) && ready(c2.failover().await)
+        }
+    })
+    .await;
+    let handed = d.client.dr_failback(1, 60).await.unwrap();
+    until_long("node 1 runs the singleton again", runs(&n1.client)).await;
+    let back = call_text(&n1.client, "vault", "get:state:site2").await;
+    let after = d.client.dr().await.unwrap();
+    let held = d.client.status("vault").await.unwrap().summary.status;
+
+    assert_eq!(common::kind(&unconfirmed), "conflict");
+    assert!(
+        unconfirmed.to_string().contains("has not promoted"),
+        "{unconfirmed}"
+    );
+    assert_ne!(idle, "running");
+    assert!(
+        activated.message.contains("activated at epoch"),
+        "{}",
+        activated.message
+    );
+    assert_eq!(written, "ok");
+    assert_eq!(kept, "written");
+    assert!(
+        handed.message.contains("handed back to node 1"),
+        "{}",
+        handed.message
+    );
+    assert_eq!(back, "written");
+    assert_eq!(after.active_epoch, None);
+    assert_ne!(held, "running");
+    for p in [&mut n1, &mut n2, &mut w, &mut d] {
+        p.child.kill().await.unwrap();
     }
 }

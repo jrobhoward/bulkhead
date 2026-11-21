@@ -340,8 +340,41 @@ Checked by reading (2026-11-19): each DR action against `failover/witness.rs`, `
 Differences, and what each needs:
 
 - **An activation is abandoned if a pair node is heard while fencing** (`Witness::activate`, `ActivateRefused::Heard`). Not in the model, where the operator is always right; it only removes runs, so it cannot break a property. It catches an operator who is wrong while site 1 still reaches the witness.
-- **A DR node apart from the witness** is not modelled and not built: `bulkhead dr activate` refuses there (ROADMAP DR4b).
+- **A DR node apart from the witness** is modelled and built since DR4b (below).
 - **More than one activation, clock drift between sites, held frames through a site cut exhaustively**: not covered (S38's README, "Not covered").
+
+### A DR node apart from the witness (DR4b)
+
+`DrFailover.tla` with `DrApart` adds a DR node `D` apart from the witness, which is then the witness only and never runs the singleton. The witness stays the one authority. Each tick `D` sends it its intent ("state", "fence" after the operator's activation, "handBack" after the operator's failback) over a link of its own (`DWan`), and the witness acts on it and answers with whom it has promoted (`RecvFromD`). `D` leads once an answer says the witness promoted it, stops once one says another, and frozen for a hand-back runs nothing until such an answer (`RecvAtD`). Its faults are counted apart (`MaxDwFaults`): its link lost or held, its crash, or the witness's crash, which ends fencing as the code's does. A restarted `D` keeps nothing. With `DrApart` off the model is the one above: `DrF_Operator_Site1` found the same 278,140,883 states again (2026-11-20, 1 h 1 min on 4 workers beside the other runs).
+
+Run 2026-11-20 and 21 (TLC 2026.02.28, OpenJDK 21, the 16-core machine, several at once at low priority beside soaks, so the times are not comparable):
+
+| Config | Distinct states | Result |
+| --- | --- | --- |
+| `DrF_Apart_Site1` | over 5.1 billion by 10:20 on 2026-11-21, past its widest level (depth 99) | running: no violation found up to depth 146 |
+| `DrF_Vac_ApartRun` | 3,084,092 (stopped at the violation) | violated, as it must be: `D` runs the singleton |
+| `DrF_Vac_ApartHandBack` | 70,922 generated, by simulation | violated, as it must be: after a failback a pair node runs it again (a 138-step trace) |
+| `DrF_Apart_TrustDisk` | 357,778,875 (stopped at the violation) | violated, as it must be: a `D` restarted after the witness handed back leads from its own record while the pair node runs (71 steps, 1 h 27 min on 4 workers) |
+| `DrF_Apart_Unfreeze` | 208,419,084 (stopped at the violation) | violated, as it must be: a frozen `D` that gives up waiting leads again while the pair node runs, the witness's answer lost (68 steps, 48 min on 4 workers). Without a loss it cannot: the answer reaches `D` before the pair node's grant, in the model's delivery order as on one ordered stream, and stops it |
+
+`DrF_Apart_Site1`: one site fault and one `D` fault, one activation and one failback, the operator right (`OperatorRight`), exhaustively. `DrF_Apart1` and `DrF_Apart2` (every fault, one or two) and `DrF_Apart_Site_holds1` (held links) are written and not run.
+
+Conformance with the code (checked by reading, 2026-11-20):
+
+| Model | Code | Matches |
+| --- | --- | --- |
+| `D` sends its intent each tick, if nothing of its is in flight | `failover/follow.rs`: `DrAsk { intent }` every `[dr] poll_ms` | yes, and more often: the code sends one each poll whether or not the last was answered, as the transport keeps them in order |
+| `RecvFromD` "fence": fencing unless fencing or `D` promoted | `Witness::handle_dr`, `DrIntent::Fence`: `Witness::fence` | yes. The code also names the operator's activation (`attempt`) and fences once per attempt, which the model's operator, never wrong and never refused, does not need (below) |
+| `DrActivate`: once waited, `D` promoted at a new epoch | `Witness::handle_dr`: on `D`'s first ask after the pair's lease is gone, `Witness::activate`, kept on disk before it is answered | yes. The model's `DrActivate` may fire with no ask, which covers the code's |
+| `RecvFromD` "handBack": the pair node promoted at a new epoch | `Witness::hand_back`, kept on disk, if `D` is promoted | yes |
+| The answer: whom it has promoted | `DrState { epoch, promoted, fencing, abandoned }` | yes |
+| `RecvAtD`: lead when promoted, stop when another is; frozen until then | `follow::reconcile` (`dr_lead`, `dr_release`); `failback_apart` freezes and never unfreezes on a timeout (`FailbackRefused::Unconfirmed`) | yes |
+| `DRestart`: `D` keeps nothing | a restarted DR node starts with `leading: None` and leads on the witness's answer (`start_dr` leads at start only on a local witness) | yes |
+| `WitnessRestart` ends fencing | fencing is in memory (`Witness::fencing`) | yes |
+
+Differences:
+- **Abandonment.** The code abandons an activation when a pair node reaches the witness while it fences, and the DR node is answered so (`abandoned`). The model's operator is always right, so no run abandons. A fence still in flight after an abandonment must not start a new one: the DR node's first drill (`bulkhead-soak dr --apart`, 2026-11-20) found it doing so and promoting the DR node unasked once site 1 went quiet. A fence now names the operator's activation (`DrIntent::Fence { attempt }`, when it was asked) and the witness fences once per attempt (`fenced_for`); a restart of the witness ends the session, so no fence sent before it arrives after it.
+- **Answers to the operator.** The code answers `dr activate` and `dr failback` after 25 s without the witness's word and goes on following it; the model has no operator answer, only what runs.
 
 ## Running the specifications
 

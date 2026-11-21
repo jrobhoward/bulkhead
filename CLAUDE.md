@@ -282,10 +282,13 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   a lossy WAN. Activation and failback (DR4): the witness fences and
   promotes the DR node (`witness.rs`, `Runtime::dr_activate`), its copy
   leads (`dr.rs`), a stale pair node reseeds from it (`reseed.rs`), and
-  `Runtime::dr_failback` hands back; their actions are those of
+  `Runtime::dr_failback` hands back; a DR node apart from the witness
+  (DR4b) follows the witness's kept state (`failover/follow.rs`, the
+  witness's `handle_dr`); their actions are those of
   `docs/tla/DrFailover.tla` and `DrReplication.tla`, so a change there
   updates the matching action and reruns `DrF_Operator_Site1` and
-  `DrR_Operator_Site1` (VERIFICATION.md, "Disaster recovery"). Deployments to it (DR3) are the node's:
+  `DrR_Operator_Site1` (and `DrF_Apart_Site1` for DR4b) (VERIFICATION.md,
+  "Disaster recovery"). Deployments to it (DR3) are the node's:
   `crates/bulkhead/src/node/daemon/dr_deploys.rs`, through
   `Runtime::dr_deploys`. The rules are S20's R1 to R7
   and R13 in `docs/tla/VERIFICATION.md`; `tests/simulation/replication.rs`

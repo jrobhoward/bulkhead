@@ -109,6 +109,7 @@ impl Node {
             cfg.lease = Duration::from_millis(w.lease_ms);
             cfg.margin = Duration::from_millis(w.margin_ms);
             cfg.resume = self.store.load_witness()?;
+            cfg.dr = w.dr;
             self.rt
                 .serve_witness_kept(cfg, Some(self.store.witness_persist()))
                 .map_err(|e| NodeError::Invalid(format!("witness: {e}")))?;
@@ -121,6 +122,7 @@ impl Node {
             cfg.rpo_target = Duration::from_secs(d.rpo_target_s);
             cfg.log_bytes = d.log_max.bytes();
             cfg.log_age = Duration::from_secs(d.log_age_s);
+            cfg.witness = d.witness;
             self.rt
                 .start_dr(cfg)
                 .map_err(|e| NodeError::Invalid(format!("dr: {e}")))?;
@@ -321,9 +323,10 @@ impl Node {
                 "this node has no [dr] in its config".into(),
             ));
         };
-        if self.config.witness.is_none() {
+        if self.config.witness.is_none() && self.config.dr.and_then(|d| d.witness).is_none() {
             return Err(NodeError::Refused(
-                "only a DR node that is also the pair's witness can be activated (ROADMAP DR4b)"
+                "this DR node is not the pair's witness and names none: set dr.witness (and \
+                 witness.dr on the witness) to activate it through the witness"
                     .into(),
             ));
         }
@@ -437,6 +440,13 @@ impl Node {
                          them"
                     ),
                 })
+            }
+            Err(e @ FailbackRefused::Unconfirmed(..)) => {
+                // The witness may have handed back already: nothing starts
+                // here until it says it did not (DR4b).
+                self.audit
+                    .record("dr_failback_unconfirmed", json!({ "to": to }));
+                Err(NodeError::Conflict(e.to_string()))
             }
             Err(e) => {
                 self.restore().await;

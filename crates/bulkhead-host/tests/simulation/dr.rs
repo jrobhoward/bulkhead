@@ -81,6 +81,30 @@ fn start(sim: &Sim, dr: u32, log_bytes: u64) -> Vec<FailoverHandle> {
         .collect()
 }
 
+/// As [`start`], with the DR node on node 4 apart from the witness on
+/// node 3 (ROADMAP DR4b): the witness names it, and it follows the witness.
+fn start_apart(sim: &Sim) -> Vec<FailoverHandle> {
+    let mut witness = WitnessConfig::new([1, 2], 1);
+    witness.lease = LEASE;
+    witness.margin = MARGIN;
+    witness.dr = Some(4);
+    sim.node(3).rt.serve_witness(witness).unwrap();
+    let mut copy = DrConfig::new([1, 2]);
+    copy.poll = Duration::from_millis(200);
+    copy.rpo_target = Duration::from_secs(5);
+    copy.witness = Some(3);
+    sim.node(4).rt.start_dr(copy).unwrap();
+    (1..=2)
+        .map(|node| {
+            let mut cfg = FailoverConfig::new(3 - node, Arbiter::Witness(3));
+            cfg.lease = LEASE;
+            cfg.margin = MARGIN;
+            cfg.dr = Some(4);
+            sim.node(node).rt.start_failover(cfg).unwrap()
+        })
+        .collect()
+}
+
 /// The pair node primary with its lease, once it committed its no-op.
 async fn primary(sim: &Sim) -> u32 {
     for _ in 0..200 {
@@ -453,4 +477,80 @@ fn dr____site_1_back_after_activation____reseeded_and_handed_back() {
     assert!(epoch >= 3, "{epoch}");
     assert_eq!(on_1, format!("{},site2", written(10)));
     assert_eq!(on_dr, on_1);
+}
+
+/// A DR node apart from the witness (ROADMAP DR4b), every link to site 2
+/// lossy, its own to the witness too: activated through the witness, it
+/// takes writes; site 1 back, both its nodes reseed from it and it hands
+/// back through the witness to node 1, which then holds exactly its copy
+/// and leads, and the DR node no longer does.
+#[test]
+fn dr____node_of_its_own____activated_and_handed_back_through_the_witness() {
+    let root = tempfile::tempdir().unwrap();
+    let (activated, epoch, on_1, on_dr, after) =
+        simulate_with(208, 4, configure(root.path()), |sim| async move {
+            lossy_wan(&sim, 4);
+            let wan = Faults {
+                delay: Duration::from_millis(30),
+                jitter: Duration::from_millis(10),
+                drop: 0.05,
+            };
+            sim.mesh.set_faults(3, 4, wan);
+            sim.mesh.set_faults(4, 3, wan);
+            let _handles = start_apart(&sim);
+            let p = primary(&sim).await;
+            let kv = sim.node(p).spawn_kv(BUCKET);
+            for i in 0..10 {
+                assert_eq!(set(&kv, &format!("k{i:02}")).await, "ok");
+            }
+            caught_up(&sim, 4, p).await;
+            // Site 1 lost: cut off from everything.
+            for (a, b) in [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4)] {
+                sim.mesh.partition(a, b);
+            }
+            let activated = sim.node(4).rt.dr_activate().await.unwrap();
+            let kv4 = sim.node(4).spawn_kv(BUCKET);
+            assert_eq!(set(&kv4, "site2").await, "ok");
+            sim.mesh.heal_all();
+            lossy_wan(&sim, 4);
+            sim.mesh.set_faults(3, 4, wan);
+            sim.mesh.set_faults(4, 3, wan);
+            for _ in 0..4_000 {
+                pass(50).await;
+                if (1..=2).all(|n| {
+                    sim.node(n)
+                        .rt
+                        .replication_status()
+                        .is_some_and(|s| s.stale == Some(4) && s.reseeded)
+                }) {
+                    break;
+                }
+            }
+            let epoch = sim
+                .node(4)
+                .rt
+                .dr_failback(1, Duration::from_secs(180))
+                .await
+                .unwrap();
+            for _ in 0..400 {
+                if primary_of(&sim, 1) {
+                    break;
+                }
+                pass(50).await;
+            }
+            let after = sim.node(4).rt.dr_active();
+            (
+                activated,
+                epoch,
+                keys(&sim, 1).await,
+                keys(&sim, 4).await,
+                after,
+            )
+        });
+
+    assert!(activated >= 2, "{activated}");
+    assert_eq!(epoch, activated + 1);
+    assert_eq!(on_1, format!("{},site2", written(10)));
+    assert_eq!(on_dr, on_1);
+    assert_eq!(after, None);
 }

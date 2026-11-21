@@ -464,6 +464,32 @@ impl Node {
         Ok(())
     }
 
+    /// On a DR node apart from the witness (ROADMAP DR4b): start the held
+    /// apps whenever this node finds the witness promoted it without an
+    /// activation here having been answered so (an answer lost, a
+    /// restart). `bulkhead dr activate` starts them itself when answered.
+    pub fn start_dr_follow(self: &Arc<Self>) {
+        let Some(mut active) = self.rt.watch_dr_active() else {
+            return;
+        };
+        let (node, mut stop) = (Arc::downgrade(self), self.stop.subscribe());
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stop.wait_for(|s| *s) => return,
+                    changed = active.changed() => if changed.is_err() { return },
+                }
+                let now = *active.borrow_and_update();
+                let Some(n) = node.upgrade() else { return };
+                let running = n.st().desired.order.clone();
+                if now.is_some() && !running.iter().any(|name| n.running(name)) {
+                    tracing::warn!(epoch = ?now, "the witness promoted this DR node; starting the pair's apps");
+                    n.restore().await;
+                }
+            }
+        });
+    }
+
     /// Ship deployments to the DR node, on a pair node with `failover.dr`,
     /// or hold the pair's, on the DR node, until the node stops.
     pub fn start_dr_deploys(self: &Arc<Self>) {

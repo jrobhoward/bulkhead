@@ -56,6 +56,7 @@ use std::time::Duration;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::Instant;
 
+mod follow;
 mod node;
 mod witness;
 
@@ -183,6 +184,9 @@ pub struct WitnessConfig {
     /// The state last kept on disk, for a witness that restarts; `None`
     /// starts at epoch 1 with `first` and no record.
     pub resume: Option<WitnessState>,
+    /// The disaster-recovery node, when it is not this witness (ROADMAP
+    /// DR4b): the one node whose [`FailoverMsg::DrAsk`] it takes.
+    pub dr: Option<u32>,
 }
 
 impl WitnessConfig {
@@ -195,8 +199,35 @@ impl WitnessConfig {
             lease: Duration::from_secs(3),
             margin: Duration::from_millis(500),
             resume: None,
+            dr: None,
         }
     }
+}
+
+/// What a disaster-recovery node apart from the witness asks of it
+/// (ROADMAP DR4b), again each poll until the witness's state shows it done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum DrIntent {
+    /// Only the witness's state.
+    #[default]
+    State,
+    /// Fence for an activation, as `Witness::fence` on a DR node that is
+    /// the witness; the witness then promotes the DR node once the pair's
+    /// lease is gone. `attempt` names the operator's activation (when it
+    /// was asked, in milliseconds since the Unix epoch): the witness fences
+    /// once per attempt, so a fence still in flight after an activation
+    /// was abandoned starts no new one.
+    Fence {
+        /// The operator's activation.
+        attempt: u64,
+    },
+    /// Hand back to pair node `to` (the failback), if the witness has
+    /// promoted the DR node.
+    HandBack {
+        /// The pair node to promote.
+        to: u32,
+    },
 }
 
 /// A node's standing in its pair.
@@ -324,6 +355,26 @@ pub enum FailoverMsg {
         epoch: u64,
         /// The node promoted, the DR node.
         dr: u32,
+    },
+    /// From the disaster-recovery node apart from the witness (ROADMAP
+    /// DR4b), and only from the one the witness names: what it asks.
+    /// Answered with [`FailoverMsg::DrState`].
+    DrAsk {
+        /// What it asks.
+        intent: DrIntent,
+    },
+    /// The witness's state after acting on a [`FailoverMsg::DrAsk`]: what
+    /// the DR node follows.
+    DrState {
+        /// The witness's epoch.
+        epoch: u64,
+        /// The node it promoted at that epoch.
+        promoted: u32,
+        /// It fences for an activation.
+        fencing: bool,
+        /// The pair node heard while it last fenced, which abandoned that
+        /// activation, until it fences again.
+        abandoned: Option<u32>,
     },
 }
 
@@ -499,6 +550,8 @@ pub(crate) struct Shared {
     witness: Mutex<Option<Witness>>,
     persist: Mutex<Option<WitnessPersist>>,
     run_until: watch::Sender<RunUntil>,
+    /// On a DR node apart from the witness (DR4b): its following of it.
+    follow: Mutex<Option<Arc<follow::Follow>>>,
 }
 
 impl Default for Shared {
@@ -509,6 +562,7 @@ impl Default for Shared {
             witness: Mutex::default(),
             persist: Mutex::default(),
             run_until: watch::Sender::new(RunUntil::Always),
+            follow: Mutex::default(),
         }
     }
 }
@@ -554,6 +608,22 @@ impl Shared {
 
     /// A failover message from node `from`.
     pub(crate) fn deliver(&self, rt: &RuntimeInner, from: u32, msg: FailoverMsg) {
+        if matches!(msg, FailoverMsg::DrState { .. }) {
+            // For the DR node apart, from its witness only (DR4b).
+            let follow = self
+                .follow
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            match follow {
+                Some(f) if f.witness == from => f.heard(&msg),
+                _ => tracing::warn!(
+                    from,
+                    "DR state from a node that is not this node's witness; dropped"
+                ),
+            }
+            return;
+        }
         let (decision, seen) = {
             let mut witness = self.witness.lock().unwrap_or_else(PoisonError::into_inner);
             match witness.as_mut() {
@@ -580,6 +650,26 @@ impl Shared {
                 Some(reply) => reply,
                 None => return,
             },
+            Some(Some(Decision::GrantThenState(grant))) => {
+                if self.keep(Change::Grant(grant)).is_none() {
+                    return;
+                }
+                tracing::warn!(
+                    epoch = grant.epoch,
+                    promoted = grant.promoted,
+                    "failover witness: the DR node apart asked, and node {} is promoted",
+                    grant.promoted
+                );
+                match self
+                    .witness
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    Some(w) => w.dr_state(),
+                    None => return,
+                }
+            }
         };
         transport::send(rt, from, Frame::Failover(reply));
     }
@@ -922,11 +1012,22 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// [`ActivateRefused`]: this node is not both the witness and the DR
-    /// node, is active already or fencing, a pair node was heard while it
-    /// fenced, or the new epoch could not be kept.
+    /// On a DR node apart from the witness (`DrConfig::witness`, ROADMAP
+    /// DR4b), the witness does the same at this node's ask, and this node
+    /// leads once the witness says it promoted it.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivateRefused`]: this node is not the witness, nor a DR node
+    /// that names one, is active already or fencing, a pair node was heard
+    /// while it fenced, the new epoch could not be kept, or (apart) the
+    /// witness did not promote this node in time.
     pub async fn dr_activate(&self) -> Result<u64, ActivateRefused> {
         let rt = self.inner().clone();
+        if let Some(follow) = follower(&rt) {
+            let task = tokio::spawn(async move { follow::activate(&rt, &follow).await });
+            return task.await.unwrap_or(Err(ActivateRefused::Fencing));
+        }
         let task = tokio::spawn(async move {
             if rt.services.keyvalue().dr().is_none() {
                 return Err(ActivateRefused::NotHere(
@@ -994,6 +1095,10 @@ impl Runtime {
     /// [`FailbackRefused::NotOfPair`] the copy takes writes again.
     pub async fn dr_failback(&self, to: u32, wait: Duration) -> Result<u64, FailbackRefused> {
         let rt = self.inner().clone();
+        if let Some(follow) = follower(&rt) {
+            let task = tokio::spawn(async move { failback_apart(&rt, &follow, to, wait).await });
+            return task.await.unwrap_or(Err(FailbackRefused::NotActive));
+        }
         let task = tokio::spawn(async move {
             let pair = {
                 let witness = rt
@@ -1012,22 +1117,7 @@ impl Runtime {
             let last = crate::replication::dr_freeze(&rt)
                 .await
                 .ok_or(FailbackRefused::NotActive)?;
-            let deadline = Instant::now() + wait;
-            loop {
-                let behind = rt.services.keyvalue().dr_reseeded().and_then(|r| {
-                    (0..2)
-                        .find(|&i| r[i] != Some(last))
-                        .map(|i| (pair[i], r[i]))
-                });
-                match behind {
-                    None => break,
-                    Some((node, at)) if Instant::now() >= deadline => {
-                        crate::replication::dr_release(&rt, false);
-                        return Err(FailbackRefused::NotCaughtUp { node, at, last });
-                    }
-                    Some(_) => tokio::time::sleep(Duration::from_millis(100)).await,
-                }
-            }
+            wait_reseeded(&rt, pair, last, Instant::now() + wait).await?;
             let grant = {
                 let mut witness = rt
                     .failover
@@ -1060,11 +1150,99 @@ impl Runtime {
     }
 
     /// The epoch this node, the witness, was activated at as the DR node
-    /// (DR4), if it is active.
+    /// (DR4), if it is active; on a DR node apart from the witness, the
+    /// epoch the witness promoted it at, while its copy leads (DR4b).
     #[must_use]
     pub fn dr_active(&self) -> Option<u64> {
         activated_here(self.inner())
     }
+
+    /// On a DR node apart from the witness (DR4b), [`Runtime::dr_active`]
+    /// as it changes: it leads once the witness says it promoted it, which
+    /// may come after an activation was answered, or after a restart.
+    #[must_use]
+    pub fn watch_dr_active(&self) -> Option<watch::Receiver<Option<u64>>> {
+        follower(self.inner()).map(|f| f.watch_active())
+    }
+}
+
+/// Follow `witness` as a DR node apart from it, asking every `poll`
+/// (DR4b).
+pub(crate) fn follow_witness(rt: &Arc<RuntimeInner>, witness: u32, poll: Duration) {
+    follow::start(rt, witness, poll);
+}
+
+/// This node's following of the witness, if it is a DR node apart from it
+/// (DR4b).
+fn follower(rt: &RuntimeInner) -> Option<Arc<follow::Follow>> {
+    if rt
+        .failover
+        .witness
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
+    {
+        return None;
+    }
+    rt.failover
+        .follow
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// Wait until both pair nodes hold the frozen copy's last entry `last`, or
+/// until `deadline`, when the copy takes writes again (the witness was not
+/// asked yet).
+async fn wait_reseeded(
+    rt: &RuntimeInner,
+    pair: [u32; 2],
+    last: u64,
+    deadline: Instant,
+) -> Result<(), FailbackRefused> {
+    loop {
+        let behind = rt.services.keyvalue().dr_reseeded().and_then(|r| {
+            (0..2)
+                .find(|&i| r[i] != Some(last))
+                .map(|i| (pair[i], r[i]))
+        });
+        match behind {
+            None => return Ok(()),
+            Some((node, at)) if Instant::now() >= deadline => {
+                crate::replication::dr_release(rt, false);
+                return Err(FailbackRefused::NotCaughtUp { node, at, last });
+            }
+            Some(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+/// [`Runtime::dr_failback`] on a DR node apart from the witness (DR4b):
+/// freeze, wait for the pair to reseed, then ask the witness to hand back
+/// until it says it did. Without its word in time the copy stays frozen.
+async fn failback_apart(
+    rt: &RuntimeInner,
+    follow: &follow::Follow,
+    to: u32,
+    wait: Duration,
+) -> Result<u64, FailbackRefused> {
+    if follow.leading().is_none() {
+        return Err(FailbackRefused::NotActive);
+    }
+    let pair = rt
+        .services
+        .keyvalue()
+        .dr()
+        .map(|d| d.pair)
+        .ok_or(FailbackRefused::NotActive)?;
+    if !pair.contains(&to) {
+        return Err(FailbackRefused::NotOfPair(to, pair));
+    }
+    let last = crate::replication::dr_freeze(rt)
+        .await
+        .ok_or(FailbackRefused::NotActive)?;
+    wait_reseeded(rt, pair, last, Instant::now() + wait).await?;
+    follow::hand_back(rt, follow, to).await
 }
 
 /// Why the active DR node does not hand back (ROADMAP DR4's failback).
@@ -1094,20 +1272,36 @@ pub enum FailbackRefused {
     /// The new epoch could not be kept on disk.
     #[error("the witness's state was not kept: {0}")]
     NotKept(String),
+    /// The witness, apart from this DR node, has not handed back in time
+    /// (ROADMAP DR4b). The copy stays frozen and the apps stopped, and
+    /// this node goes on asking: it may have handed back already.
+    #[error(
+        "the witness (node {0}) has not confirmed the hand-back within {1} s: out of reach, or \
+         its answer lost; this node stays frozen with its apps stopped and goes on asking, \
+         since it may have handed back already (`bulkhead dr` shows when it has)"
+    )]
+    Unconfirmed(u32, u64),
 }
 
 /// The epoch the witness on this node promoted this node at, if it did
-/// (DR4).
+/// (DR4); on a DR node apart, the epoch its witness promoted it at, while
+/// its copy leads (DR4b).
 pub(crate) fn activated_here(rt: &RuntimeInner) -> Option<u64> {
     let witness = rt
         .failover
         .witness
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    witness
+    if let Some(w) = witness.as_ref() {
+        return (w.activated() && w.promoted == rt.node()).then_some(w.epoch);
+    }
+    drop(witness);
+    rt.failover
+        .follow
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
-        .filter(|w| w.activated() && w.promoted == rt.node())
-        .map(|w| w.epoch)
+        .and_then(|f| f.leading())
 }
 
 /// Set or clear the witness's record that this node's partner is out of

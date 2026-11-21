@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -133,6 +133,24 @@ pub(crate) struct Setup {
     /// table, with the policy too when set: a `[dr]` table makes it the
     /// DR node (ROADMAP DR5).
     pub witness_config: String,
+    /// Added to the witness's `[witness]` table.
+    pub witness_table: String,
+    /// A fourth node, a DR node apart from the witness (ROADMAP DR4b):
+    /// added to its config before its `[cluster]` table, with the policy
+    /// too when set.
+    pub apart_config: Option<String>,
+}
+
+/// `config` with `extra` tables, and the policy if given, before its
+/// `[cluster]` table: the policy is a root key and the tables follow the
+/// root keys.
+fn before_cluster(config: &str, policy: Option<&Path>, extra: &str) -> String {
+    let mut head = String::new();
+    if let Some(policy) = policy {
+        let _ = writeln!(head, "policy = {policy:?}");
+    }
+    head += extra;
+    config.replacen("[cluster]\n", &format!("{head}[cluster]\n"), 1)
 }
 
 /// An app of a [`Setup`]: its name, manifest and program.
@@ -157,6 +175,8 @@ fn singleton(args: &Args) -> anyhow::Result<Setup> {
         failover_config: String::new(),
         policy: None,
         witness_config: String::new(),
+        witness_table: String::new(),
+        apart_config: None,
     })
 }
 
@@ -224,8 +244,9 @@ impl Cluster {
     ) -> anyhow::Result<Self> {
         let dir = &args.dir;
         let t = args.timings;
+        let count: u32 = if setup.apart_config.is_some() { 4 } else { 3 };
         let mut peers_file = String::from("[peers]\n");
-        for n in 1..=3 {
+        for n in 1..=count {
             let public = super::node::bulkhead(
                 &args.bulkhead,
                 dir,
@@ -246,17 +267,17 @@ impl Cluster {
             std::fs::write(dir.join("policy.toml"), policy)?;
         }
 
-        let bound: Vec<_> = (0..3).map(|_| free_udp()).collect::<Result<_, _>>()?;
-        let names: HashMap<_, _> = bound.iter().copied().zip(1..=3).collect();
+        let bound: Vec<_> = (0..count).map(|_| free_udp()).collect::<Result<_, _>>()?;
+        let names: HashMap<_, _> = bound.iter().copied().zip(1..=count).collect();
         let faults = Arc::new(Faults::new(args.seed));
         let mut advertised = Vec::new();
-        for (n, &address) in (1..=3).zip(&bound) {
+        for (n, &address) in (1..=count).zip(&bound) {
             advertised.push(proxy::start(n, address, names.clone(), faults.clone()).await?);
         }
 
         let serial = args.serial.as_ref().map(SerialLine::start).transpose()?;
         let mut nodes = Vec::new();
-        for n in 1..=3_u32 {
+        for n in 1..=count {
             let i = usize::try_from(n - 1)?;
             let node = Node::new(n, &args.bulkhead, dir, socket_path("f", n), events.clone());
             let mut config = format!(
@@ -272,26 +293,25 @@ impl Cluster {
                 t.heartbeat_ms,
                 t.node_timeout_ms,
             );
-            if n != 3 {
-                // The policy is a root key and the extra tables follow the
-                // root keys: both go before `[cluster]`.
-                let mut extra = String::new();
-                if setup.policy.is_some() {
-                    let _ = writeln!(extra, "policy = {:?}", dir.join("policy.toml"));
+            let policy = setup.policy.is_some().then(|| dir.join("policy.toml"));
+            match n {
+                1 | 2 => config = before_cluster(&config, policy.as_deref(), &setup.pair_config[i]),
+                3 if !setup.witness_config.is_empty() => {
+                    config = before_cluster(&config, policy.as_deref(), &setup.witness_config);
                 }
-                extra += &setup.pair_config[i];
-                config = config.replacen("[cluster]\n", &format!("{extra}[cluster]\n"), 1);
+                _ => {}
             }
-            if n == 3 && !setup.witness_config.is_empty() {
-                let mut extra = String::new();
-                if setup.policy.is_some() {
-                    let _ = writeln!(extra, "policy = {:?}", dir.join("policy.toml"));
-                }
-                extra += &setup.witness_config;
-                config = config.replacen("[cluster]\n", &format!("{extra}[cluster]\n"), 1);
+            if n == 4 {
+                let extra = setup.apart_config.as_deref().unwrap_or_default();
+                config = before_cluster(&config, policy.as_deref(), extra);
+                let _ = writeln!(config, "seeds = [\"{}\"]", advertised[2]);
+                std::fs::write(node.config_path(), config)?;
+                nodes.push(node);
+                continue;
             }
             if n == 3 {
                 config += "role = \"witness\"\n[witness]\npair = [1, 2]\nfirst = 1\n";
+                config += &setup.witness_table;
             } else {
                 let _ = write!(
                     config,
@@ -316,8 +336,10 @@ impl Cluster {
             std::fs::write(node.config_path(), config)?;
             nodes.push(node);
         }
-        for i in [2, 0, 1] {
-            nodes[i].spawn().await?;
+        for i in [2, 3, 0, 1] {
+            if let Some(node) = nodes.get_mut(i) {
+                node.spawn().await?;
+            }
         }
         for node in &nodes[..2] {
             for app in &bundles {

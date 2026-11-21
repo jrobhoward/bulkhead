@@ -30,7 +30,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,15 @@ const HOLD: Duration = Duration::from_secs(600);
 
 /// How long the pair nodes have to reseed, and the copies to agree.
 const CONVERGE: Duration = Duration::from_secs(120);
+
+/// The DR node: node 3, the witness, or with `--apart` node 4, a DR node
+/// apart from it (ROADMAP DR4b).
+static DR_NODE: AtomicU32 = AtomicU32::new(3);
+
+/// The DR node's index in the cluster's nodes and sockets.
+fn dr_at() -> usize {
+    usize::try_from(DR_NODE.load(Ordering::Relaxed) - 1).unwrap_or(2)
+}
 
 /// The writers' pause between writes is multiplied by this
 /// (`--slow-writes`: 20).
@@ -141,8 +150,14 @@ fn phantoms(ledger: &Ledger, keys: &BTreeSet<String>) -> Vec<String> {
 }
 
 /// Run, and return whether the run passed.
-pub(crate) async fn run(args: &Args, writes_only: bool, slow_writes: bool) -> anyhow::Result<bool> {
+pub(crate) async fn run(
+    args: &Args,
+    writes_only: bool,
+    slow_writes: bool,
+    apart: bool,
+) -> anyhow::Result<bool> {
     PAUSE_SCALE.store(if slow_writes { 20 } else { 1 }, Ordering::Relaxed);
+    DR_NODE.store(if apart { 4 } else { 3 }, Ordering::Relaxed);
     let events = Arc::new(EventLog::create(&args.dir.join("events.jsonl"))?);
     let bucket = "[buckets.ledger]\ndurability = \"disk\"\nscope = \"cluster\"\n".to_string();
     let counter = std::fs::read_to_string(args.root.join("examples/counter/bulkhead.toml"))?
@@ -163,11 +178,22 @@ pub(crate) async fn run(args: &Args, writes_only: bool, slow_writes: bool) -> an
             },
         ],
         pair_config: [bucket.clone(), bucket.clone()],
-        failover_config: "dr = 3\n".into(),
+        failover_config: format!("dr = {}\n", dr_at() + 1),
         policy: Some(
             "[apps.ledger]\ngrant = [\"bulkhead:keyvalue\"]\nbuckets = [\"ledger\"]\n".into(),
         ),
-        witness_config: format!("[dr]\npair = [1, 2]\npoll_ms = 200\n{bucket}"),
+        witness_config: if apart {
+            String::new()
+        } else {
+            format!("[dr]\npair = [1, 2]\npoll_ms = 200\n{bucket}")
+        },
+        witness_table: if apart {
+            "dr = 4\n".into()
+        } else {
+            String::new()
+        },
+        apart_config: apart
+            .then(|| format!("[dr]\npair = [1, 2]\npoll_ms = 200\nwitness = 3\n{bucket}")),
     };
     let deadline = Instant::now() + Duration::from_secs_f64(args.minutes * 60.0);
     let mut rng = Rng::new(args.seed);
@@ -186,12 +212,12 @@ pub(crate) async fn run(args: &Args, writes_only: bool, slow_writes: bool) -> an
             .map(|n| n.socket().to_path_buf())
             .collect();
         let watcher = tokio::spawn(watch.clone().run(sockets.clone(), events.clone()));
-        let sampler = tokio::spawn(sample(cluster.nodes[2].client(), events.clone()));
+        let sampler = tokio::spawn(sample(cluster.nodes[dr_at()].client(), events.clone()));
         tokio::time::sleep(args.timings.settle()).await;
         // The DR node must hold the pair's apps before a drill: shipped
         // over the WAN, a chunk at a time (DR3).
         let shipping = Instant::now();
-        let held = holds_apps(&cluster.nodes[2].client()).await;
+        let held = holds_apps(&cluster.nodes[dr_at()].client()).await;
         note(
             &events,
             format!(
@@ -292,7 +318,7 @@ async fn writes_alone(
             committed = committed.max(r.commit);
         }
     }
-    let dr = cluster.nodes[2].client();
+    let dr = cluster.nodes[dr_at()].client();
     let caught_up = until(CONVERGE, || async {
         matches!(
             tokio::time::timeout(ADMIN_TIMEOUT, dr.dr()).await,
@@ -328,7 +354,7 @@ async fn cycle(
     // 2. Site 1 lost while writes flow; 3. activation, which is refused
     // while the DR node does not hold the primary's apps (DR3b): wait for
     // them, as an operator would.
-    let dr = cluster.nodes[2].client();
+    let dr = cluster.nodes[dr_at()].client();
     if !holds_apps(&dr).await {
         wrong.push(format!(
             "the DR node did not hold the pair's apps within {HOLD:?} before site 1's loss"
@@ -349,7 +375,7 @@ async fn cycle(
         .map_err(|_| anyhow::anyhow!("activation did not answer in 30 s"))??;
     let activated = Instant::now();
     note(events, done.message);
-    let copy = keys_when(sockets[2].clone(), |_| true).await;
+    let copy = keys_when(sockets[dr_at()].clone(), |_| true).await;
     let window = Window {
         began,
         lost_at,
@@ -358,7 +384,7 @@ async fn cycle(
     };
     let lost = check_copy(ledger, &window, &copy, &mut wrong);
     // 4. Writes at site 2; 5. site 1 back, reseeding meanwhile.
-    let writer = Writer::start(&sockets[2..], rng, ledger.next);
+    let writer = Writer::start(&sockets[dr_at()..=dr_at()], rng, ledger.next);
     tokio::time::sleep(Duration::from_millis(rng.range(5_000, 15_000))).await;
     cluster.node(1).spawn().await?;
     cluster.node(2).spawn().await?;
@@ -416,7 +442,11 @@ async fn site_1_runs(cluster: &Cluster, rng: &mut Rng, events: &EventLog, wrong:
         if ask_refusal {
             ask_refusal = false;
             // Fencing is what is tried here, whatever apps are held.
-            match cluster.nodes[2].client().dr_activate(true, true).await {
+            match cluster.nodes[dr_at()]
+                .client()
+                .dr_activate(true, true)
+                .await
+            {
                 Err(e) if e.to_string().contains("site 1 is not down") => {
                     note(
                         events,
@@ -438,10 +468,17 @@ async fn site_1_runs(cluster: &Cluster, rng: &mut Rng, events: &EventLog, wrong:
 }
 
 /// Both directions between each pair node and the DR node.
+/// The WAN between the sites: site 1's nodes and the witness, and with
+/// `--apart` site 1's nodes and the DR node, and the DR node and the
+/// witness (as if at a third site).
 async fn set_wan(cluster: &Cluster, mode: Mode) {
-    for n in 1..=2 {
-        cluster.set_link(n, 3, mode).await;
-        cluster.set_link(3, n, mode).await;
+    let mut links = vec![(1, 3), (2, 3)];
+    if DR_NODE.load(Ordering::Relaxed) == 4 {
+        links.extend([(1, 4), (2, 4), (3, 4)]);
+    }
+    for (a, b) in links {
+        cluster.set_link(a, b, mode).await;
+        cluster.set_link(b, a, mode).await;
     }
 }
 
@@ -485,7 +522,7 @@ async fn all_reseeded(sockets: &[PathBuf]) -> bool {
             .await;
         let ready = matches!(
             f,
-            Ok(Ok(f)) if f.replication.as_ref().is_some_and(|r| r.stale == Some(3) && r.reseeded)
+            Ok(Ok(f)) if f.replication.as_ref().is_some_and(|r| r.stale == u32::try_from(dr_at() + 1).ok() && r.reseeded)
         );
         if !ready {
             return false;
@@ -505,8 +542,8 @@ async fn fail_back(
     events: &EventLog,
     wrong: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    let dr = bulkhead::api::Client::new(&sockets[2]);
-    let held = keys_when(sockets[2].clone(), |_| true).await;
+    let dr = bulkhead::api::Client::new(&sockets[dr_at()]);
+    let held = keys_when(sockets[dr_at()].clone(), |_| true).await;
     let mut handed = dr.dr_failback(to, 60).await;
     if matches!(&handed, Err(e) if e.to_string().contains("has not reseeded")) {
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -687,7 +724,7 @@ impl Watch {
     async fn run(self, sockets: Vec<PathBuf>, events: Arc<EventLog>) {
         while !self.stop.load(Ordering::Relaxed) {
             let mut running = Vec::new();
-            for (n, socket) in (1..=3).zip(&sockets) {
+            for (n, socket) in (1..).zip(&sockets) {
                 let status = tokio::time::timeout(
                     Duration::from_millis(500),
                     bulkhead::api::Client::new(socket).status(SINGLETON),

@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::{FailoverMsg, WitnessConfig, WitnessState};
+use super::{DrIntent, FailoverMsg, WitnessConfig, WitnessState};
 
 #[derive(Debug)]
 pub(super) struct Witness {
@@ -52,6 +52,16 @@ pub(super) struct Witness {
     keeping: bool,
     /// Fenced for an activation (DR4), and a pair node heard since, if any.
     pub(super) fencing: Option<Option<u32>>,
+    /// While fencing for a DR node apart (DR4b): when the pair's lease is
+    /// gone, and so when its next ask is granted.
+    gone: Option<Instant>,
+    /// The pair node that abandoned the last activation, until the next
+    /// fence (DR4b).
+    abandoned: Option<u32>,
+    /// The last activation it fenced for (DR4b): a fence of no later one
+    /// is only answered. In memory: a restart ends the session, so no
+    /// fence sent before it arrives after it.
+    fenced_for: Option<u64>,
 }
 
 /// Why the witness will not activate the DR node.
@@ -73,6 +83,14 @@ pub enum ActivateRefused {
     /// This node is not the witness, or not the DR node.
     #[error("{0}")]
     NotHere(String),
+    /// The witness, apart from this DR node, has not promoted it in time
+    /// (ROADMAP DR4b): out of reach, or still waiting.
+    #[error(
+        "the witness (node {0}) has not promoted this node within {1} s: out of reach, or still \
+         waiting out the pair's lease; this node goes on following the witness and leads if it \
+         does promote it (`bulkhead dr` shows it)"
+    )]
+    Unconfirmed(u32, u64),
     /// The new epoch could not be kept on disk.
     #[error("the witness's state was not kept: {0}")]
     NotKept(String),
@@ -87,6 +105,9 @@ pub(super) enum Decision {
     Grant(Grant),
     /// Change the record: keep it on disk, then [`Witness::apply_record`].
     Record(Record),
+    /// A grant to or from a DR node apart (DR4b): keep it on disk, then
+    /// [`Witness::apply`], and answer with [`Witness::dr_state`].
+    GrantThenState(Grant),
 }
 
 /// A grant decided and not yet applied.
@@ -148,6 +169,9 @@ impl Witness {
             released: false,
             keeping: false,
             fencing: None,
+            gone: None,
+            abandoned: None,
+            fenced_for: None,
         }
     }
 
@@ -212,6 +236,9 @@ impl Witness {
     }
 
     pub(super) fn handle(&mut self, from: u32, msg: FailoverMsg) -> Option<Decision> {
+        if self.cfg.dr == Some(from) && !self.cfg.pair.contains(&from) {
+            return self.handle_dr(from, msg, Instant::now());
+        }
         let partner = self.partner(from)?;
         if self.keeping {
             return None;
@@ -341,6 +368,62 @@ impl Witness {
         }
     }
 
+    /// An ask from the DR node apart, `dr` (DR4b): act on it, then answer
+    /// with the state it leads to. A fence starts as [`Witness::fence`];
+    /// the activation is decided on the first ask once the pair's lease is
+    /// gone (the DR node asks every poll), or abandoned if a pair node was
+    /// heard meanwhile. A hand-back is [`Witness::hand_back`]. Every ask
+    /// may come again: what is done already is only answered. While a
+    /// change is being kept, nothing is answered.
+    fn handle_dr(&mut self, dr: u32, msg: FailoverMsg, now: Instant) -> Option<Decision> {
+        let FailoverMsg::DrAsk { intent } = msg else {
+            return None;
+        };
+        if self.keeping {
+            return None;
+        }
+        match intent {
+            DrIntent::State => {}
+            DrIntent::Fence { attempt } => {
+                if !self.activated()
+                    && self.fencing.is_none()
+                    && self.fenced_for.is_none_or(|last| attempt > last)
+                    && let Ok(gone) = self.fence(now)
+                {
+                    self.gone = Some(gone);
+                    self.abandoned = None;
+                    self.fenced_for = Some(attempt);
+                }
+            }
+            DrIntent::HandBack { to } => {
+                if self.promoted == dr
+                    && let Ok(grant) = self.hand_back(to)
+                {
+                    return Some(Decision::GrantThenState(grant));
+                }
+            }
+        }
+        if self.gone.is_some_and(|gone| now >= gone) {
+            self.gone = None;
+            match self.activate(dr) {
+                Ok(grant) => return Some(Decision::GrantThenState(grant)),
+                Err(ActivateRefused::Heard(node)) => self.abandoned = Some(node),
+                Err(_) => {}
+            }
+        }
+        Some(Decision::Answer(self.dr_state()))
+    }
+
+    /// What a DR node apart follows (DR4b).
+    pub(super) fn dr_state(&self) -> FailoverMsg {
+        FailoverMsg::DrState {
+            epoch: self.epoch,
+            promoted: self.promoted,
+            fencing: self.fencing.is_some(),
+            abandoned: self.abandoned,
+        }
+    }
+
     /// The grant that hands back from the active DR node to pair node `to`
     /// at a new epoch (DR4's failback), its partner not recorded out of
     /// date: both have reseeded from the DR node, which checked it; keep
@@ -371,6 +454,7 @@ impl Witness {
         self.keeping = false;
         self.released = false;
         self.fencing = None;
+        self.gone = None;
         self.epoch = grant.epoch;
         self.promoted = grant.promoted;
         self.outdated = grant.outdated;
@@ -400,6 +484,7 @@ impl Witness {
     pub(super) fn abandon(&mut self) {
         self.keeping = false;
         self.fencing = None;
+        self.gone = None;
     }
 }
 

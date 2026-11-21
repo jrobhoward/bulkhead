@@ -363,6 +363,9 @@ pub struct DrConfig {
     pub log_bytes: u64,
     /// See [`DrConfig::log_bytes`].
     pub log_age: Duration,
+    /// The pair's witness, when it is not this node (ROADMAP DR4b): this
+    /// node then follows it, and activation and failback go through it.
+    pub witness: Option<u32>,
 }
 
 impl DrConfig {
@@ -377,6 +380,7 @@ impl DrConfig {
             rpo_target: Duration::from_secs(300),
             log_bytes: 64 << 20,
             log_age: Duration::from_secs(3600),
+            witness: None,
         }
     }
 }
@@ -384,7 +388,7 @@ impl DrConfig {
 /// The way into the DR node's task, kept by the keyvalue store.
 #[derive(Debug, Clone)]
 pub(crate) struct DrHandle {
-    pair: [u32; 2],
+    pub(crate) pair: [u32; 2],
     tx: mpsc::UnboundedSender<DrInput>,
     /// Its status, its lag left out, and since when it trails.
     status: watch::Receiver<(DrStatus, Instant)>,
@@ -516,6 +520,9 @@ fn start_dr(rt: &Arc<RuntimeInner>, cfg: &DrConfig) -> Result<(), HostError> {
     // Ticks often enough for rounds a poll apart and for timeouts.
     let tick = (cfg.poll / 2).clamp(Duration::from_millis(50), Duration::from_secs(1));
     tokio::spawn(task.run(rx, tick));
+    if let Some(witness) = cfg.witness.filter(|&w| w != rt.node()) {
+        crate::failover::follow_witness(rt, witness, cfg.poll);
+    }
     Ok(())
 }
 
