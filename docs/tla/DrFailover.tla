@@ -151,6 +151,9 @@ CONSTANTS FenceRefusesAll, WitnessResetsSite
 \* crashes; rule-off switches (FALSE is the design).
 CONSTANT D
 CONSTANTS DrApart, MaxDwFaults, HandBacks, DCrashes, DUnfreezes, DTrustsDisk
+\* Whether D's link to W can be lost or held (among D's faults, with
+\* DCrashes and WitnessCrashes), so that each kind can be checked alone.
+CONSTANT DLinkFaults
 
 Max(x, y) == IF x >= y THEN x ELSE y
 Min(x, y) == IF x <= y THEN x ELSE y
@@ -286,9 +289,12 @@ Tick ==
     /\ phase = "tick"
     /\ phase' = "env"
     /\ UNCHANGED first
+    \* D's frames carry no age anyone reads (D and W act on what they say,
+    \* not when it was sent), so theirs stays 0: the states differ only in
+    \* what matters.
     /\ LET aged == [c \in Channels |->
                      [i \in 1..Len(q[c]) |->
-                        [q[c][i] EXCEPT !.age = Older(@),
+                        [q[c][i] EXCEPT !.age = IF c \in DChannels THEN @ ELSE Older(@),
                                         !.due = IF chan[c] = "up" THEN @ - 1 ELSE @]]]
        IN q' = IF DrApart /\ dAlive /\ q[DWan(D, W)] = <<>>
                THEN Push(aged, DWan(D, W), [k |-> DIntent, to |-> dTo, age |-> 0, due |-> 0])
@@ -887,7 +893,7 @@ DRestart ==
 
 \* A D fault on its link to W: one direction or both, lost or held.
 DwLose(c, both) ==
-    /\ DrApart /\ dwFaults < MaxDwFaults /\ c \in DChannels
+    /\ DrApart /\ DLinkFaults /\ dwFaults < MaxDwFaults /\ c \in DChannels
     /\ \E d \in Dirs(c, both) : chan[d] # "lost"
     /\ chan' = [d \in Channels |-> IF d \in Dirs(c, both) THEN "lost" ELSE chan[d]]
     /\ q' = [d \in Channels |-> IF d \in Dirs(c, both) THEN <<>> ELSE q[d]]
@@ -896,7 +902,7 @@ DwLose(c, both) ==
                    dState, dTo, dDisk, failbacks>>
 
 DwHold(c, both) ==
-    /\ DrApart /\ Holds /\ dwFaults < MaxDwFaults /\ c \in DChannels
+    /\ DrApart /\ DLinkFaults /\ Holds /\ dwFaults < MaxDwFaults /\ c \in DChannels
     /\ \A d \in Dirs(c, both) : chan[d] = "up"
     /\ chan' = [d \in Channels |-> IF d \in Dirs(c, both) THEN "held" ELSE chan[d]]
     /\ dwFaults' = dwFaults + 1

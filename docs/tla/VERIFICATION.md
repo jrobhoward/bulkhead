@@ -351,7 +351,8 @@ Run 2026-11-20 and 21 (TLC 2026.02.28, OpenJDK 21, the 16-core machine, several 
 
 | Config | Distinct states | Result |
 | --- | --- | --- |
-| `DrF_Apart_Site1` | over 5.1 billion by 10:20 on 2026-11-21, past its widest level (depth 99) | running: no violation found up to depth 146 |
+| `DrF_Apart_Site1` | stopped at 6,621,621,728 (depth 176, 57 million still queued), 18 h on 12 workers | no violation found; split into the configs below (ROADMAP DR4c) |
+| `DrF_Apart_Site1_None`, `_Link`, `_DCrash`, `_WCrash` | (running) | each kind of fault on the DR node's side alone, its frames no longer aging (ROADMAP DR4c) |
 | `DrF_Vac_ApartRun` | 3,084,092 (stopped at the violation) | violated, as it must be: `D` runs the singleton |
 | `DrF_Vac_ApartHandBack` | 70,922 generated, by simulation | violated, as it must be: after a failback a pair node runs it again (a 138-step trace) |
 | `DrF_Apart_TrustDisk` | 357,778,875 (stopped at the violation) | violated, as it must be: a `D` restarted after the witness handed back leads from its own record while the pair node runs (71 steps, 1 h 27 min on 4 workers) |
