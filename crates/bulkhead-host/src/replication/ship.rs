@@ -28,18 +28,25 @@ const BATCH: usize = 1024;
 /// well under the transport's frame cap.
 pub(crate) const MAX_BATCH_BYTES: u64 = 4 << 20;
 
-/// About the most bytes of a snapshot chunk.
-pub(crate) const CHUNK_BYTES: usize = 1 << 20;
+/// About the most bytes of a snapshot chunk. Throughput over a lossy WAN
+/// is the same for chunks of 64 KiB to 1 MiB (spike S43), but everything
+/// else between the two nodes waits behind a chunk on their one stream: a
+/// 1 MiB chunk held others up for 23 s over DR5's drill's WAN, 256 KiB
+/// for 6 s.
+pub(crate) const CHUNK_BYTES: usize = 256 << 10;
 
-/// How long a snapshot chunk is waited for before it is asked again, if
-/// the session with the node asked has not changed meanwhile. Frames
+/// How long a snapshot chunk or a batch of entries is waited for before it
+/// is asked again, if the session with the node asked has not changed
+/// meanwhile and the node has answered on it (until then only a probe is
+/// asked, again after a short timeout). Frames
 /// between two nodes go on one ordered stream that QUIC delivers whole, and
 /// a frame from an ended session is discarded, so an ask is lost only when
 /// the session ends: the asker asks again then, at once. On a live
 /// session asking again only queues another copy of the chunk behind the
 /// first: over DR5's drill's WAN (50 ms each way, 5% loss) a 1 MiB chunk
 /// took 10 to 20 s, and chunks asked again every two seconds piled up
-/// faster than they went, holding up the answers behind them. This is only
+/// faster than they went, holding up the answers behind them; a batch of
+/// entries, up to `MAX_BATCH_BYTES`, the same (ROADMAP DR3b). This is only
 /// the backstop.
 pub(crate) const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 

@@ -210,6 +210,54 @@ fn tick____snapshot_chunk_overdue____asked_again_only_after_the_chunk_timeout() 
 }
 
 #[test]
+fn tick____entries_overdue____asked_again_only_after_the_chunk_timeout() {
+    let mut log = log_of(&[], 0);
+    let dr = dr_log();
+    let now = Instant::now();
+    let mut reseed = Reseed::new(3, now);
+    let effects = reseed.tick(&log, now).unwrap();
+    exchange(&mut reseed, &mut log, &dr, effects);
+    let at = Instant::now() + Duration::from_secs(1);
+    let asked = reseed.tick(&log, at).unwrap();
+
+    // A batch on its way over a slow link is not asked for again (DR3b).
+    let soon = reseed.tick(&log, at + TIMEOUT).unwrap();
+    let late = reseed.tick(&log, at + CHUNK_TIMEOUT).unwrap();
+
+    let entries = || {
+        ReseedEffect::Send(DrMsg::Ask {
+            after: 5,
+            after_epoch: 2,
+            max_bytes: BATCH_BYTES,
+            rpo_target_ms: u64::MAX,
+        })
+    };
+    assert_eq!(asked, [entries()]);
+    assert!(soon.is_empty(), "{soon:?}");
+    assert_eq!(late, [entries()]);
+}
+
+#[test]
+fn answer____an_ask_from_the_dr_node____not_taken_as_heard() {
+    let mut log = log_of(&[], 0);
+    let now = Instant::now();
+    let mut reseed = Reseed::new(3, now);
+    let _ = reseed.tick(&log, now).unwrap();
+    let ask = DrMsg::Ask {
+        after: 0,
+        after_epoch: 0,
+        max_bytes: 1 << 20,
+        rpo_target_ms: 300_000,
+    };
+
+    let ignored = reseed.answer(&mut log, ask, now).unwrap();
+    let again = reseed.tick(&log, now + TIMEOUT).unwrap();
+
+    assert!(ignored.is_empty());
+    assert_eq!(again, [probe()]);
+}
+
+#[test]
 fn reconnected____chunk_asked____probe_again_at_the_next_tick() {
     let mut log = log_of(&[], 0);
     let now = Instant::now();

@@ -46,15 +46,21 @@ const POLLS_PER_ASK: u32 = 10;
 /// The DR node asks for the pair's deploy state at most this often.
 const MIN_ASK: Duration = Duration::from_secs(1);
 
-/// The most bytes of a bundle in one answer.
-const CHUNK: u64 = 1 << 20;
+/// The most bytes of a bundle in one answer: as a snapshot chunk, so
+/// other frames between the two nodes wait behind one for seconds, not
+/// tens of seconds, over a slow WAN (spike S43).
+const CHUNK: u64 = 256 << 10;
 
-/// How long the DR node waits for a chunk before asking again.
-const CHUNK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the DR node waits for a chunk before asking again. Frames
+/// between two nodes go on one ordered stream that QUIC delivers whole, so
+/// an ask is lost only when the session ends; this is the backstop, as
+/// for snapshot chunks (`bulkhead_host`'s `ship::CHUNK_TIMEOUT`). At 10 s,
+/// over DR5's drill's WAN, a fetch gave up after three asks.
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Unanswered asks for a chunk before the fetch is dropped until the next
 /// round.
-const CHUNK_MISSES: u32 = 3;
+const CHUNK_MISSES: u32 = 2;
 
 /// Where the DR node keeps the state it holds, with the primary's grants.
 pub(super) const SHIPPED_FILE: &str = "dr-shipped.json";
@@ -405,6 +411,46 @@ impl Node {
             grants_differ: h.grants_differ,
             refused: h.refused,
         }
+    }
+
+    /// Why activating this DR node now would start other apps than the
+    /// primary's (ROADMAP DR3b): it holds no deploy state of a primary's,
+    /// is still fetching the primary's newer one, or refused it. `None`
+    /// when what it holds is the primary's, as far as it knows.
+    pub(super) fn held_short(&self) -> Option<String> {
+        // Kept with the state once held, so true from the start after a
+        // restart, before the held apps are checked again.
+        let holding = matches!(self.store.read_file(SHIPPED_FILE), Ok(Some(_)));
+        let h = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if !holding {
+            return Some(
+                "this node holds none of the pair's deployments yet (`bulkhead dr` shows its \
+                 progress)"
+                    .into(),
+            );
+        }
+        let apps = self.st().desired.apps.len();
+        if let Some(f) = &h.fetching {
+            return Some(format!(
+                "this node is still fetching the primary's deployments ({f}); it holds an \
+                 older state of {apps} apps"
+            ));
+        }
+        h.refused.as_ref().map(|why| {
+            format!(
+                "this node refused the primary's latest deployments ({why}); it holds an older \
+                 state of {apps} apps"
+            )
+        })
+    }
+
+    /// Apps held that would not start here, with why.
+    pub(super) fn held_not_ready(&self) -> BTreeMap<String, String> {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .not_ready
+            .clone()
     }
 
     /// Refuse a change of deployments on a DR node: it holds the primary's.

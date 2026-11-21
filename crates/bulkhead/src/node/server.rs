@@ -442,15 +442,22 @@ fn events(node: &Node) -> Reply {
 }
 
 /// `GET /v1/dr`, the DR copy (ROADMAP DR2),
-/// `POST /v1/dr/activate?site_1_down=true` and
+/// `POST /v1/dr/activate?site_1_down=true[&allow_missing_apps=true]` and
 /// `POST /v1/dr/failback?to=N&wait_s=S` (DR4).
 async fn dr(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)]) -> Reply {
     match (method, rest) {
         (&Method::GET, []) => respond(node.dr()),
-        (&Method::POST, ["activate"]) => match param::<bool>(q, "site_1_down") {
-            Ok(confirmed) => respond(node.dr_activate(confirmed.unwrap_or(false)).await),
-            Err(e) => error(&e),
-        },
+        (&Method::POST, ["activate"]) => {
+            let params = param::<bool>(q, "site_1_down")
+                .and_then(|c| Ok((c, param::<bool>(q, "allow_missing_apps")?)));
+            match params {
+                Ok((confirmed, allow)) => respond(
+                    node.dr_activate(confirmed.unwrap_or(false), allow.unwrap_or(false))
+                        .await,
+                ),
+                Err(e) => error(&e),
+            }
+        }
         (&Method::POST, ["failback"]) => {
             let params = param::<u32>(q, "to").and_then(|to| Ok((to, param::<u64>(q, "wait_s")?)));
             match params {

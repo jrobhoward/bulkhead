@@ -1651,8 +1651,8 @@ async fn dr____site_1_lost_and_activated____copy_serves_writes_and_site_1_is_fen
         p.child.kill().await.unwrap();
     }
 
-    let unconfirmed = w.client.dr_activate(false).await.unwrap_err();
-    let activated = w.client.dr_activate(true).await.unwrap();
+    let unconfirmed = w.client.dr_activate(false, false).await.unwrap_err();
+    let activated = w.client.dr_activate(true, false).await.unwrap();
     until("the DR node runs the singleton", || {
         let c = w.client.clone();
         async move {
@@ -1666,7 +1666,7 @@ async fn dr____site_1_lost_and_activated____copy_serves_writes_and_site_1_is_fen
     let written = call_text(&w.client, "vault", "set:state:new:site2").await;
     let new = call_text(&w.client, "vault", "get:state:new").await;
     let info = w.client.dr().await.unwrap();
-    let again = w.client.dr_activate(true).await.unwrap_err();
+    let again = w.client.dr_activate(true, false).await.unwrap_err();
     // A site-1 node comes back: the witness fences it.
     let mut n1 = Process::start(dir.path(), 1, &pk, &replicating(1, &a1)).await;
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -1714,6 +1714,43 @@ async fn dr____site_1_lost_and_activated____copy_serves_writes_and_site_1_is_fen
     }
 }
 
+/// An activation while the DR node holds none of the pair's deployments
+/// is refused unless the operator allows it (ROADMAP DR3b), and then says
+/// so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dr____activated_holding_no_apps____refused_unless_allowed() {
+    let dir = tempfile::Builder::new()
+        .prefix("pdb")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let peers = keys(dir.path());
+    let signer = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+    let pk = signer.pk.to_base64();
+    let a3 = free_udp();
+    let dr = format!(
+        "{}[dr]\npair = [1, 2]\npoll_ms = 200\n",
+        witness(dir.path(), &peers, &a3)
+    );
+    let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
+
+    let refused = w.client.dr_activate(true, false).await.unwrap_err();
+    let allowed = w.client.dr_activate(true, true).await.unwrap();
+
+    assert_eq!(common::kind(&refused), "refused");
+    assert!(
+        refused.to_string().contains("--allow-missing-apps"),
+        "{refused}"
+    );
+    assert!(
+        allowed
+            .message
+            .contains("holds none of the pair's deployments"),
+        "{}",
+        allowed.message
+    );
+    w.child.kill().await.unwrap();
+}
+
 /// An activation while site 1 is alive and reaches the witness is
 /// abandoned (ROADMAP DR4): the operator's confirmation was wrong, and the
 /// pair goes on as before.
@@ -1759,7 +1796,8 @@ async fn dr____activated_while_site_1_reaches_the_witness____abandoned_and_pair_
     })
     .await;
 
-    let refused = w.client.dr_activate(true).await.unwrap_err();
+    // Fencing is what is tried, whatever apps are held.
+    let refused = w.client.dr_activate(true, true).await.unwrap_err();
     until_long("the pair runs the singleton again", || {
         let (c1, c2) = (n1.client.clone(), n2.client.clone());
         async move {
@@ -1864,7 +1902,7 @@ async fn dr____activated_then_failed_back____site_1_holds_exactly_the_dr_writes(
         p.child.kill().await.unwrap();
     }
     let mut w = Process::start(dir.path(), 3, &pk, &dr).await;
-    w.client.dr_activate(true).await.unwrap();
+    w.client.dr_activate(true, false).await.unwrap();
     until("the DR node runs the singleton", runs(&w.client)).await;
     assert_eq!(
         call_text(&w.client, "vault", "set:state:site2:written").await,

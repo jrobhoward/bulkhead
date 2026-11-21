@@ -478,15 +478,24 @@ impl Client {
 
     /// Activate this DR node (ROADMAP DR4) once site 1 is down or fenced,
     /// which `site_1_down` confirms: it waits out the pair's lease, leads
-    /// from its copy and starts the pair's apps.
+    /// from its copy and starts the pair's apps. Unless
+    /// `allow_missing_apps`, refused while the node does not hold the
+    /// primary's deployments (ROADMAP DR3b).
     ///
     /// # Errors
     ///
     /// Any [`ClientError`]; not found for a node without `[dr]`, refused
-    /// without the confirmation or off the witness, conflict when active
-    /// already or a pair node is heard.
-    pub async fn dr_activate(&self, site_1_down: bool) -> Result<Done, ClientError> {
-        let path = format!("/v1/dr/activate?site_1_down={site_1_down}");
+    /// without the confirmation, off the witness or short of the
+    /// primary's apps, conflict when active already or a pair node is
+    /// heard.
+    pub async fn dr_activate(
+        &self,
+        site_1_down: bool,
+        allow_missing_apps: bool,
+    ) -> Result<Done, ClientError> {
+        let path = format!(
+            "/v1/dr/activate?site_1_down={site_1_down}&allow_missing_apps={allow_missing_apps}"
+        );
         self.json(Method::POST, &path, None).await
     }
 

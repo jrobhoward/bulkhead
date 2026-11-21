@@ -1,0 +1,23 @@
+# S43: bulk transfers between two nodes over an emulated WAN (ROADMAP
+# DR3b). Standalone: quinn as the node uses it (the workspace's version and
+# features), through a UDP proxy with the soak's WAN model (delay, jitter,
+# loss), to decide chunk sizes, streams and congestion control.
+[package]
+name = "s43"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+fastrand = "2"
+anyhow = "1"
+
+[profile.release]
+debug = 1
+
+[workspace]

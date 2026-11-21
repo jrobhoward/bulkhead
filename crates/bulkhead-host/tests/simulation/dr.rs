@@ -42,7 +42,10 @@ fn configure(root: &Path) -> impl Fn(u32, &mut RuntimeConfig) + '_ {
 }
 
 /// The WAN between site 1 (the pair) and `dr`: delay, jitter and loss
-/// each way.
+/// each way. The loss is of whole frames on a live session, which QUIC's
+/// retransmission rules out on a real link: an ask lost so waits for the
+/// backstop (`ship::CHUNK_TIMEOUT`, 60 s), so the waits below allow
+/// minutes of the paused clock.
 fn lossy_wan(sim: &Sim, dr: u32) {
     let wan = Faults {
         delay: Duration::from_millis(50),
@@ -97,7 +100,7 @@ async fn primary(sim: &Sim) -> u32 {
 
 /// Wait until the DR copy holds node `p`'s commit index.
 async fn caught_up(sim: &Sim, dr: u32, p: u32) {
-    for _ in 0..400 {
+    for _ in 0..4_000 {
         let pair = sim.node(p).rt.replication_status().unwrap().commit;
         if sim.node(dr).rt.dr_status().unwrap().commit == pair {
             return;
@@ -261,6 +264,7 @@ fn dr____primary_lost____copy_follows_the_new_primary() {
             for i in 0..10 {
                 assert_eq!(set(&kv, &format!("k{i:02}")).await, "ok");
             }
+            caught_up(&sim, 3, p).await;
             for other in (1..=3).filter(|&o| o != p) {
                 sim.mesh.partition(p, other);
             }
@@ -409,7 +413,7 @@ fn dr____site_1_back_after_activation____reseeded_and_handed_back() {
             sim.mesh.heal_all();
             lossy_wan(&sim, 3);
             let mut stale_read = String::new();
-            for _ in 0..600 {
+            for _ in 0..4_000 {
                 pass(50).await;
                 let reseeded = (1..=2).all(|n| {
                     sim.node(n)
@@ -433,7 +437,7 @@ fn dr____site_1_back_after_activation____reseeded_and_handed_back() {
             let epoch = sim
                 .node(3)
                 .rt
-                .dr_failback(1, Duration::from_secs(30))
+                .dr_failback(1, Duration::from_secs(180))
                 .await
                 .unwrap();
             for _ in 0..400 {

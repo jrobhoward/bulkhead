@@ -8,11 +8,20 @@
 //! commit index alone. It pulls from the node with the highest commit
 //! index, the standby while it is within a batch of it, so the primary
 //! does no more than answer probes. It asks again at once while more is
-//! committed than it holds, and otherwise after `poll`. An answer missing
-//! for long is asked again; after two misses it pulls from the other
-//! node. When the entries it needs are compacted, it takes a snapshot,
-//! chunk by chunk. It holds committed entries only, so its commit index
-//! is its last entry (spike S38's `DrPrefix` and `DrNoConflict`).
+//! committed than it holds, and otherwise after `poll`. When the entries
+//! it needs are compacted, it takes a snapshot, chunk by chunk. It holds
+//! committed entries only, so its commit index is its last entry (spike
+//! S38's `DrPrefix` and `DrNoConflict`).
+//!
+//! Asking again follows the rule of `ship::CHUNK_TIMEOUT` (ROADMAP DR3b).
+//! Until a pair node has answered on the current session, it is sent only
+//! probes, asked again after a short timeout: a probe's answer is small,
+//! so copies of it cost nothing. Once it has answered, its stream is
+//! known to deliver, and a batch or a snapshot chunk asked of it is asked
+//! again only when the session changes, or after `CHUNK_TIMEOUT`: over a
+//! slow link, an answer of a megabyte or more takes many seconds, and
+//! asking again sooner only queues copies of it behind the first. After
+//! two misses it pulls from the other node.
 
 use std::time::Duration;
 
@@ -64,6 +73,10 @@ struct Source {
     heard: bool,
     /// An ask unanswered since.
     asked_at: Option<Instant>,
+    /// That ask was for a batch, not a probe.
+    batch: bool,
+    /// It has answered on the current session: its stream delivers.
+    delivers: bool,
     misses: u32,
     /// Its committed log differs from this copy: never pulled from again.
     differs: bool,
@@ -164,9 +177,29 @@ impl DrReplica {
         })
     }
 
-    /// How long a missing answer is waited for.
+    /// How long a missing probe's answer is waited for.
     fn timeout(&self) -> Duration {
         (self.cfg.poll * 4).max(Duration::from_secs(2))
+    }
+
+    /// How long the answer to source `i`'s ask is waited for: a batch's,
+    /// on a session that delivers, until the backstop.
+    fn ask_timeout(&self, i: usize) -> Duration {
+        if self.sources[i].batch {
+            self.timeout().max(CHUNK_TIMEOUT)
+        } else {
+            self.timeout()
+        }
+    }
+
+    /// A probe: answered with the sender's commit index alone.
+    fn probe(&self) -> DrMsg {
+        DrMsg::Ask {
+            after: self.log.last(),
+            after_epoch: self.log.last_epoch(),
+            max_bytes: 0,
+            rpo_target_ms: u64::try_from(self.cfg.rpo_target.as_millis()).unwrap_or(u64::MAX),
+        }
     }
 
     pub(crate) fn status(&self, now: Instant) -> DrStatus {
@@ -205,6 +238,9 @@ impl DrReplica {
         self.frozen = false;
         self.reseeded = [None; 2];
         self.sources = [Source::default(); 2];
+        // A snapshot kept for a reseed is dropped only by a tick while it
+        // leads: drop it now rather than hold it until the next activation.
+        self.shippers = [Shipper::new(now), Shipper::new(now)];
         self.caught_up_at = Some(now);
         self.next_round = now;
     }
@@ -340,8 +376,17 @@ impl DrReplica {
             return Ok(out);
         }
         let timeout = self.timeout();
+        let delivers = self
+            .receiving
+            .as_ref()
+            .is_some_and(|r| self.sources[r.from].delivers);
         if let Some(r) = &mut self.receiving {
-            if now.duration_since(r.asked_at) >= timeout.max(CHUNK_TIMEOUT) {
+            let wait = if delivers {
+                timeout.max(CHUNK_TIMEOUT)
+            } else {
+                timeout
+            };
+            if now.duration_since(r.asked_at) >= wait {
                 r.misses += 1;
                 if r.misses >= 2 {
                     // The other node starts a snapshot of its own.
@@ -360,7 +405,7 @@ impl DrReplica {
         }
         let pulled = self.sources[self.pulling];
         match pulled.asked_at {
-            Some(at) if now.duration_since(at) >= timeout => {
+            Some(at) if now.duration_since(at) >= self.ask_timeout(self.pulling) => {
                 let s = &mut self.sources[self.pulling];
                 s.misses += 1;
                 s.asked_at = None;
@@ -417,17 +462,20 @@ impl DrReplica {
             // A probe still unanswered and not yet late is not repeated.
             let waiting = self.sources[i]
                 .asked_at
-                .is_some_and(|at| now.duration_since(at) < self.timeout());
+                .is_some_and(|at| now.duration_since(at) < self.ask_timeout(i));
             if !pulled && waiting {
                 continue;
             }
+            // A batch only of a node whose stream delivers; a probe first.
+            let batch = pulled && self.sources[i].delivers;
             self.sources[i].asked_at = Some(now);
+            self.sources[i].batch = batch;
             out.push(DrEffect::Send {
                 to: self.cfg.pair[i],
                 msg: DrMsg::Ask {
                     after,
                     after_epoch,
-                    max_bytes: if pulled { self.cfg.batch_bytes } else { 0 },
+                    max_bytes: if batch { self.cfg.batch_bytes } else { 0 },
                     rpo_target_ms,
                 },
             });
@@ -435,22 +483,32 @@ impl DrReplica {
         self.next_round = now + self.cfg.poll;
     }
 
-    /// The session with pair node `i` changed: a snapshot chunk asked of
-    /// it on the old one is lost, so ask for it again now (entries are
-    /// asked again within a poll anyway).
+    /// The session with pair node `i` changed: whatever was asked of it on
+    /// the old one is lost, so ask again now, starting with a probe, as on
+    /// any session that has not delivered yet.
     pub(crate) fn reconnected(&mut self, i: usize, now: Instant) -> Vec<DrEffect> {
         let mut out = Vec::new();
-        if self.leading.is_none()
-            && let Some(r) = &self.receiving
-            && r.from == i
-            && i == self.pulling
-        {
-            let (index, chunk) = (r.index, r.next_chunk);
-            self.ask_snapshot(index, chunk, now, &mut out);
+        let s = &mut self.sources[i];
+        s.delivers = false;
+        s.batch = false;
+        let lost = s.asked_at.take().is_some();
+        if self.leading.is_some() || self.stopped || i != self.pulling {
+            return out;
+        }
+        if let Some(r) = &self.receiving {
+            if r.from == i {
+                let (index, chunk) = (r.index, r.next_chunk);
+                self.ask_snapshot(index, chunk, now, &mut out);
+            }
+        } else if lost {
+            self.round(now, &mut out);
         }
         out
     }
 
+    /// Ask the node pulled from for chunk `chunk` of the snapshot at
+    /// `index` (any, for chunk 0), or for a probe while its stream has not
+    /// delivered on this session (the chunk is asked once it answers).
     fn ask_snapshot(&mut self, index: u64, chunk: u32, now: Instant, out: &mut Vec<DrEffect>) {
         if chunk == 0 {
             self.receiving = Some(Receiving {
@@ -465,9 +523,14 @@ impl DrReplica {
         } else if let Some(r) = &mut self.receiving {
             r.asked_at = now;
         }
+        let msg = if self.sources[self.pulling].delivers {
+            DrMsg::AskSnapshot { index, chunk }
+        } else {
+            self.probe()
+        };
         out.push(DrEffect::Send {
             to: self.cfg.pair[self.pulling],
-            msg: DrMsg::AskSnapshot { index, chunk },
+            msg,
         });
     }
 
@@ -484,6 +547,28 @@ impl DrReplica {
         }
         if self.stopped {
             return Ok(out);
+        }
+        // An ask from a pair node (one reseeding, just after a failback)
+        // is no answer: it says nothing of what its stream delivers, and a
+        // batch asked of a reseeding node goes unanswered.
+        if matches!(
+            msg,
+            DrMsg::Ask { .. } | DrMsg::AskSnapshot { .. } | DrMsg::Deploys { .. }
+        ) {
+            return Ok(out);
+        }
+        // The first answer on this session: a snapshot chunk held back
+        // for it is asked now (one that is itself a chunk asked the next).
+        let first = !std::mem::replace(&mut self.sources[i].delivers, true);
+        let held_back = first
+            && !matches!(msg, DrMsg::Snapshot { .. })
+            && self
+                .receiving
+                .as_ref()
+                .is_some_and(|r| r.from == i && i == self.pulling);
+        if held_back && let Some(r) = &self.receiving {
+            let (index, chunk) = (r.index, r.next_chunk);
+            self.ask_snapshot(index, chunk, now, &mut out);
         }
         match msg {
             DrMsg::Entries {

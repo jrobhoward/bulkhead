@@ -112,6 +112,16 @@ enum Command {
     Dr {
         #[command(flatten)]
         run: Run,
+        /// No cycles: writes through site 1 for the whole run, the DR node
+        /// pulling its copy over the WAN, then a check that it caught up
+        /// (to tell the DR node's memory over a run of writes alone from
+        /// one of cycles).
+        #[arg(long)]
+        writes_only: bool,
+        /// A twentieth of the writes (to tell what grows with the data from
+        /// what grows with the cycles).
+        #[arg(long)]
+        slow_writes: bool,
         #[arg(long, default_value_t = 200)]
         heartbeat_ms: u64,
         #[arg(long, default_value_t = 1000)]
@@ -279,27 +289,33 @@ async fn execute(command: Command) -> anyhow::Result<bool> {
         }
         Command::Dr {
             run,
+            writes_only,
+            slow_writes,
             heartbeat_ms,
             node_timeout_ms,
             lease_ms,
             margin_ms,
         } => {
             let (dir, root, bulkhead, seed, minutes) = prepare(run)?;
-            dr::run(&failover::Args {
-                dir,
-                root,
-                bulkhead,
-                seed,
-                minutes,
-                episode: Duration::ZERO,
-                timings: failover::Timings {
-                    heartbeat_ms,
-                    node_timeout_ms,
-                    lease_ms,
-                    margin_ms,
+            dr::run(
+                &failover::Args {
+                    dir,
+                    root,
+                    bulkhead,
+                    seed,
+                    minutes,
+                    episode: Duration::ZERO,
+                    timings: failover::Timings {
+                        heartbeat_ms,
+                        node_timeout_ms,
+                        lease_ms,
+                        margin_ms,
+                    },
+                    serial: None,
                 },
-                serial: None,
-            })
+                writes_only,
+                slow_writes,
+            )
             .await
         }
         Command::Cluster {

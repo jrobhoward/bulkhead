@@ -8,6 +8,32 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `bulkhead dr activate` is refused while the DR node does not hold the
+  primary's deployments: none yet, still fetching them, or the latest
+  refused (ROADMAP DR3b). `--allow-missing-apps` activates anyway, running
+  what it holds, and the answer says what is missing; it also names held
+  apps that would not start there. DR5's first drill had activated a DR
+  node holding none of the pair's apps.
+- Snapshot and bundle chunks to and from a DR node are 256 KiB (were
+  1 MiB), and a reseed asks for 1 MiB of entries at once (was 4 MiB);
+  a bundle chunk is asked again after 60 s, twice, then the fetch waits
+  for the next round (was 10 s, three times). Spike S43
+  (`spikes/s43/README.md`): over DR5's drill's WAN the rate is the same
+  for any chunk size, and everything else between the two nodes, the DR
+  node's entries among it, waited 23 s behind a 1 MiB chunk and waits 6 s
+  behind 256 KiB.
+- The DR node, and a site-1 node reseeding from an active one, ask again
+  for a batch of entries as for a snapshot chunk (ROADMAP DR3b): only when
+  the session with the node changes, or after 60 s. A batch (up to 1 MiB
+  by default, then 4 MiB for a reseed) was asked again after 2 s, and over a
+  slow WAN the copies queued as chunks' had. Until a node has answered on
+  a session it is sent only probes, asked again after the short timeout,
+  so an ask sent before the two nodes heard each other costs no wait.
+  A DR node handing back drops the snapshots it kept for the reseeds
+  (it kept them until its next activation).
+  `bulkhead-soak dr --writes-only` writes through site 1 for the whole
+  run, with no cycles, `--slow-writes` writes a twentieth as often, and
+  the drill notes the DR copy's size each minute, beside its memory.
 - A disaster-recovery drill (ROADMAP DR5): `bulkhead-soak dr` and
   `scripts/soak.sh --only dr` (`--dr-minutes`, and in the default set).
   The pair and its witness, also the DR node, with 50 ms (and up to

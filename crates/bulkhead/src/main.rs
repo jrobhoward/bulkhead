@@ -135,11 +135,17 @@ enum DrCommand {
     /// unless --site-1-down confirms that both site-1 nodes are down or
     /// fenced and stay so: a site-1 pair that still hears itself goes on
     /// running beside this node. Abandoned if a site-1 node reaches the
-    /// witness meanwhile.
+    /// witness meanwhile. Refused too while this node does not hold the
+    /// primary's deployments (none yet, still fetching them, or refused),
+    /// unless --allow-missing-apps.
     Activate {
         /// Both site-1 nodes are down or fenced, and stay so until failback.
         #[arg(long)]
         site_1_down: bool,
+        /// Activate even though this node does not hold the primary's
+        /// latest deployments: it runs what it holds.
+        #[arg(long)]
+        allow_missing_apps: bool,
     },
     /// Hand back from this active DR node to site 1 (ROADMAP DR4): start
     /// both site-1 nodes first; each finds itself stale and reseeds from a
@@ -895,8 +901,15 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
         } => done(json, client.switchover().await),
         Command::Dr { action: None } => print(json, &client.dr().await?, format::dr),
         Command::Dr {
-            action: Some(DrCommand::Activate { site_1_down }),
-        } => done(json, client.dr_activate(site_1_down).await),
+            action:
+                Some(DrCommand::Activate {
+                    site_1_down,
+                    allow_missing_apps,
+                }),
+        } => done(
+            json,
+            client.dr_activate(site_1_down, allow_missing_apps).await,
+        ),
         Command::Dr {
             action: Some(DrCommand::Failback { to, wait_s }),
         } => done(json, client.dr_failback(to, wait_s).await),

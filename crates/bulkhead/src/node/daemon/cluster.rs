@@ -1,5 +1,6 @@
 //! The cluster transport, failover and the witness.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::api::{Done, DrInfo, FailoverInfo, MemberInfo, ReleaseInfo, ReplicationInfo};
@@ -304,10 +305,16 @@ impl Node {
     /// # Errors
     ///
     /// [`NodeError::NotFound`] without `[dr]`; [`NodeError::Refused`]
-    /// without the confirmation, or on a DR node that is not the witness;
+    /// without the confirmation, on a DR node that is not the witness, or
+    /// while it does not hold the primary's deployments (none yet, still
+    /// fetching them, or refused) unless `allow_missing_apps`;
     /// [`NodeError::Conflict`] when active already, fencing, or a pair node
     /// was heard while fencing.
-    pub async fn dr_activate(&self, site_1_down: bool) -> Result<Done, NodeError> {
+    pub async fn dr_activate(
+        &self,
+        site_1_down: bool,
+        allow_missing_apps: bool,
+    ) -> Result<Done, NodeError> {
         use bulkhead_host::failover::ActivateRefused;
         let Some(status) = self.config.dr.as_ref().and(self.rt.dr_status()) else {
             return Err(NodeError::NotFound(
@@ -330,9 +337,22 @@ impl Node {
                 status.lag.as_secs(),
             )));
         }
+        let short = self.held_short();
+        if let Some(why) = &short
+            && !allow_missing_apps
+        {
+            return Err(NodeError::Refused(format!(
+                "{why}. Wait for it, or activate with --allow-missing-apps to run only what \
+                 it holds"
+            )));
+        }
         self.audit.record(
             "dr_activate_asked",
-            json!({ "commit": status.commit, "lag_ms": millis(status.lag) }),
+            json!({
+                "commit": status.commit,
+                "lag_ms": millis(status.lag),
+                "apps_short": short,
+            }),
         );
         let epoch = self.rt.dr_activate().await.map_err(|e| match e {
             ActivateRefused::NotHere(why) => NodeError::Refused(why),
@@ -346,14 +366,20 @@ impl Node {
         self.restore().await;
         let deployed: Vec<String> = self.st().desired.apps.keys().cloned().collect();
         let started = deployed.iter().filter(|name| self.running(name)).count();
-        Ok(Done {
-            message: format!(
-                "activated at epoch {epoch}: this node leads from entry {} (writes site 1 \
-                 committed after it are lost) and runs {started} apps; site 1's nodes are fenced \
-                 until failback",
-                status.commit
-            ),
-        })
+        let mut message = format!(
+            "activated at epoch {epoch}: this node leads from entry {} (writes site 1 \
+             committed after it are lost) and runs {started} of {} apps; site 1's nodes are \
+             fenced until failback",
+            status.commit,
+            deployed.len(),
+        );
+        if let Some(why) = short {
+            let _ = write!(message, ". Warning: {why}");
+        }
+        for (app, why) in self.held_not_ready() {
+            let _ = write!(message, ". Warning: {app} would not start here: {why}");
+        }
+        Ok(Done { message })
     }
 
     /// Hand back from this node, the active DR node, to pair node `to`

@@ -19,12 +19,17 @@ use tokio::time::Instant;
 
 use super::core::merge;
 use super::log::{Log, Snapshot};
-use super::ship::{CHUNK_TIMEOUT, DrMsg, MAX_BATCH_BYTES};
+use super::ship::{CHUNK_TIMEOUT, DrMsg};
 use crate::services::keyvalue::storage::BucketDump;
 
-/// How long an answer of entries is waited for before the ask is sent
-/// again (a snapshot chunk's, `CHUNK_TIMEOUT`).
+/// How long a probe's answer is waited for before it is sent again (a
+/// snapshot chunk's or a batch's, `CHUNK_TIMEOUT`).
 const TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The most entry bytes asked for at once: the DR node's default batch,
+/// so an answer holds up other frames between the two nodes no longer
+/// than its own asks' answers do (spike S43).
+pub(crate) const BATCH_BYTES: u64 = 1 << 20;
 
 /// Between asks once caught up.
 const POLL: Duration = Duration::from_millis(200);
@@ -71,8 +76,9 @@ pub(crate) struct Reseed {
     /// before the two nodes heard each other (just started) is dropped,
     /// with no change of session to tell, and a probe's answer is small,
     /// so copies of it cost nothing. Once answered, the session's stream
-    /// is known to deliver, and a snapshot chunk is asked again only when
-    /// the session changes, or after `CHUNK_TIMEOUT`.
+    /// is known to deliver, and a snapshot chunk or a batch of entries is
+    /// asked again only when the session changes, or after
+    /// `CHUNK_TIMEOUT`.
     heard: bool,
 }
 
@@ -119,7 +125,8 @@ impl Reseed {
     pub(crate) fn tick(&mut self, log: &Log, now: Instant) -> Out {
         let mut out = Vec::new();
         let timeout = match self.phase {
-            Phase::Snapshot { .. } if self.heard => CHUNK_TIMEOUT,
+            // A snapshot chunk or a batch of entries (DR3b).
+            _ if self.heard => CHUNK_TIMEOUT,
             _ => TIMEOUT,
         };
         let due = match self.asked_at {
@@ -155,7 +162,7 @@ impl Reseed {
             Phase::Entries => DrMsg::Ask {
                 after: log.last(),
                 after_epoch: log.last_epoch(),
-                max_bytes: MAX_BATCH_BYTES,
+                max_bytes: BATCH_BYTES,
                 // No lag target: the DR node warns of none for a reseed.
                 rpo_target_ms: u64::MAX,
             },
@@ -166,6 +173,14 @@ impl Reseed {
     /// An answer from the DR node.
     pub(crate) fn answer(&mut self, log: &mut Log, msg: DrMsg, now: Instant) -> Out {
         let mut out = Vec::new();
+        if matches!(
+            msg,
+            DrMsg::Ask { .. } | DrMsg::AskSnapshot { .. } | DrMsg::Deploys { .. }
+        ) {
+            // An ask, not an answer (the DR node pulling again just after
+            // a failback): it says nothing of what the session delivers.
+            return Ok(out);
+        }
         if !self.heard {
             // The probe's answer (or a late one to an ask before it): the
             // session delivers; ask for what is needed now.

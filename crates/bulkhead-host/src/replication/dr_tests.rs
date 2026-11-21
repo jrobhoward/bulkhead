@@ -269,7 +269,10 @@ fn lag____pair_unreachable_then_back____grows_then_resets() {
     nodes[0].up = true;
     nodes[1].up = true;
     let back = later + Duration::from_secs(10);
-    let effects = dr.tick(back).unwrap();
+    // Back, each on a new session.
+    let mut effects = dr.reconnected(0, back);
+    effects.extend(dr.reconnected(1, back));
+    effects.extend(dr.tick(back).unwrap());
     exchange(&mut dr, &mut nodes, effects, back);
 
     assert_eq!(caught_up, Duration::ZERO);
@@ -416,10 +419,31 @@ fn leading____both_pair_nodes_take_a_snapshot_at_once____neither_starts_the_othe
     assert_eq!(next_2, (index_2, 1));
 }
 
+/// A probe from the DR node holding nothing.
+fn probe() -> DrMsg {
+    DrMsg::Ask {
+        after: 0,
+        after_epoch: 0,
+        max_bytes: 0,
+        rpo_target_ms: 300_000,
+    }
+}
+
+/// An answer to a probe: `commit` entries committed, none sent.
+fn probed(commit: u64) -> DrMsg {
+    DrMsg::Entries {
+        standby: false,
+        commit,
+        after: 0,
+        entries: Vec::new(),
+    }
+}
+
 #[test]
-fn reconnected____taking_a_snapshot_from_that_node____chunk_asked_again_at_once() {
+fn reconnected____taking_a_snapshot_from_that_node____probe_at_once_then_the_chunk_once_answered() {
     let now = Instant::now();
     let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.answer(1, probed(0), now).unwrap();
     let mut out = Vec::new();
     dr.ask_snapshot(0, 0, now, &mut out);
     dr.answer(
@@ -436,13 +460,21 @@ fn reconnected____taking_a_snapshot_from_that_node____chunk_asked_again_at_once(
     .unwrap();
 
     let other = dr.reconnected(1, now);
-    let again = dr.reconnected(0, now);
+    let probed_again = dr.reconnected(0, now);
+    let asked = dr.answer(1, probed(10), now).unwrap();
     // Nothing more until the backstop.
     let waited = dr.tick(now + Duration::from_secs(10)).unwrap();
 
     assert!(other.is_empty());
     assert_eq!(
-        again,
+        probed_again,
+        [DrEffect::Send {
+            to: 1,
+            msg: probe()
+        }]
+    );
+    assert_eq!(
+        asked,
         [DrEffect::Send {
             to: 1,
             msg: DrMsg::AskSnapshot {
@@ -452,4 +484,91 @@ fn reconnected____taking_a_snapshot_from_that_node____chunk_asked_again_at_once(
         }]
     );
     assert!(waited.is_empty(), "{waited:?}");
+}
+
+#[test]
+fn round____not_heard_on_this_session____probes_only_then_a_batch_once_answered() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+
+    let first = dr.tick(now).unwrap();
+    let batch = dr.answer(1, probed(5), now).unwrap();
+
+    assert_eq!(
+        first,
+        [
+            DrEffect::Send {
+                to: 1,
+                msg: probe()
+            },
+            DrEffect::Send {
+                to: 2,
+                msg: probe()
+            }
+        ]
+    );
+    assert!(
+        matches!(&batch[..], [DrEffect::Send { to: 1, msg: DrMsg::Ask { max_bytes, .. } }] if *max_bytes > 0),
+        "{batch:?}"
+    );
+}
+
+#[test]
+fn tick____batch_overdue_on_a_session_that_delivers____asked_again_only_after_the_chunk_timeout() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.tick(now).unwrap();
+    dr.answer(1, probed(5), now).unwrap();
+    let is_batch_to_1 = |e: &DrEffect| matches!(e, DrEffect::Send { to: 1, msg: DrMsg::Ask { max_bytes, .. } } if *max_bytes > 0);
+
+    // A batch on its way over a slow link is not asked for again (DR3b).
+    let soon = dr.tick(now + Duration::from_secs(10)).unwrap();
+    let late = dr.tick(now + CHUNK_TIMEOUT).unwrap();
+
+    assert!(!soon.iter().any(is_batch_to_1), "{soon:?}");
+    assert!(late.iter().any(is_batch_to_1), "{late:?}");
+}
+
+#[test]
+fn reconnected____batch_asked_of_that_node____probe_at_once() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.tick(now).unwrap();
+    dr.answer(1, probed(5), now).unwrap();
+    let later = now + Duration::from_secs(3);
+
+    let again = dr.reconnected(0, later);
+
+    assert!(
+        again.contains(&DrEffect::Send {
+            to: 1,
+            msg: probe()
+        }),
+        "{again:?}"
+    );
+}
+
+#[test]
+fn answer____an_ask_from_a_reseeding_pair_node____not_taken_as_its_stream_delivering() {
+    let now = Instant::now();
+    let mut dr = DrReplica::new(tuning(), empty_log(), now).unwrap();
+    dr.tick(now).unwrap();
+
+    let ignored = dr.answer(1, probe(), now).unwrap();
+    let later = dr.tick(now + Duration::from_secs(5)).unwrap();
+
+    assert!(ignored.is_empty());
+    // Still probes only, asked again after the short timeout: a batch
+    // asked of a reseeding node would go unanswered until the backstop.
+    assert!(
+        later.iter().all(|e| matches!(
+            e,
+            DrEffect::Send {
+                msg: DrMsg::Ask { max_bytes: 0, .. },
+                ..
+            }
+        )),
+        "{later:?}"
+    );
+    assert!(!later.is_empty());
 }

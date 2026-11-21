@@ -30,7 +30,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,10 @@ const HOLD: Duration = Duration::from_secs(600);
 
 /// How long the pair nodes have to reseed, and the copies to agree.
 const CONVERGE: Duration = Duration::from_secs(120);
+
+/// The writers' pause between writes is multiplied by this
+/// (`--slow-writes`: 20).
+static PAUSE_SCALE: AtomicU64 = AtomicU64::new(1);
 
 /// How a write ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +141,8 @@ fn phantoms(ledger: &Ledger, keys: &BTreeSet<String>) -> Vec<String> {
 }
 
 /// Run, and return whether the run passed.
-pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
+pub(crate) async fn run(args: &Args, writes_only: bool, slow_writes: bool) -> anyhow::Result<bool> {
+    PAUSE_SCALE.store(if slow_writes { 20 } else { 1 }, Ordering::Relaxed);
     let events = Arc::new(EventLog::create(&args.dir.join("events.jsonl"))?);
     let bucket = "[buckets.ledger]\ndurability = \"disk\"\nscope = \"cluster\"\n".to_string();
     let counter = std::fs::read_to_string(args.root.join("examples/counter/bulkhead.toml"))?
@@ -181,18 +186,12 @@ pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
             .map(|n| n.socket().to_path_buf())
             .collect();
         let watcher = tokio::spawn(watch.clone().run(sockets.clone(), events.clone()));
+        let sampler = tokio::spawn(sample(cluster.nodes[2].client(), events.clone()));
         tokio::time::sleep(args.timings.settle()).await;
         // The DR node must hold the pair's apps before a drill: shipped
         // over the WAN, a chunk at a time (DR3).
         let shipping = Instant::now();
-        let dr = cluster.nodes[2].client();
-        let held = until(HOLD, || async {
-            matches!(
-                tokio::time::timeout(ADMIN_TIMEOUT, dr.dr()).await,
-                Ok(Ok(d)) if d.deploys.as_ref().is_some_and(|h| h.apps == 2 && h.fetching.is_none() && h.not_ready.is_empty())
-            )
-        })
-        .await;
+        let held = holds_apps(&cluster.nodes[2].client()).await;
         note(
             &events,
             format!(
@@ -206,7 +205,10 @@ pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
                 "the DR node did not hold the pair's apps within {HOLD:?} over the WAN"
             ));
         }
-        while Instant::now() < deadline && found.is_empty() {
+        if writes_only && found.is_empty() {
+            found.extend(writes_alone(&cluster, &sockets, &mut rng, &mut ledger, deadline).await);
+        }
+        while !writes_only && Instant::now() < deadline && found.is_empty() {
             cycles += 1;
             match cycle(args, &mut cluster, &sockets, &mut rng, &mut ledger, &events).await {
                 Ok((lost, wrong)) => {
@@ -218,6 +220,7 @@ pub(crate) async fn run(args: &Args) -> anyhow::Result<bool> {
             found.extend(watch.take());
         }
         watch.stop();
+        sampler.abort();
         let _ = watcher.await;
         found.extend(watch.take());
         // Dropping the cluster kills every node, recorded.
@@ -252,6 +255,60 @@ fn note(events: &EventLog, text: String) {
     events.record(0, What::Note { text });
 }
 
+/// Note the DR copy's size once a minute (the DR node's memory is sampled
+/// beside it, DR3b).
+async fn sample(dr: bulkhead::api::Client, events: Arc<EventLog>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        if let Ok(Ok(d)) = tokio::time::timeout(ADMIN_TIMEOUT, dr.dr()).await {
+            note(
+                &events,
+                format!(
+                    "dr copy: commit {}, base {}, log_bytes {}, snapshotting {}, active {:?}",
+                    d.commit, d.base, d.log_bytes, d.snapshotting, d.active_epoch
+                ),
+            );
+        }
+    }
+}
+
+/// `--writes-only`: writes through site 1 until `deadline`, then the DR
+/// copy must catch up with the primary's commit index.
+async fn writes_alone(
+    cluster: &Cluster,
+    sockets: &[PathBuf],
+    rng: &mut Rng,
+    ledger: &mut Ledger,
+    deadline: Instant,
+) -> Vec<String> {
+    let writer = Writer::start(&sockets[..2], rng, ledger.next);
+    tokio::time::sleep_until(deadline.into()).await;
+    ledger.absorb(writer.stop().await);
+    let mut committed = 0;
+    for n in &cluster.nodes[..2] {
+        if let Ok(Ok(f)) = tokio::time::timeout(ADMIN_TIMEOUT, n.client().failover()).await
+            && let Some(r) = f.replication
+        {
+            committed = committed.max(r.commit);
+        }
+    }
+    let dr = cluster.nodes[2].client();
+    let caught_up = until(CONVERGE, || async {
+        matches!(
+            tokio::time::timeout(ADMIN_TIMEOUT, dr.dr()).await,
+            Ok(Ok(d)) if d.commit >= committed
+        )
+    })
+    .await;
+    if caught_up {
+        Vec::new()
+    } else {
+        vec![format!(
+            "the DR copy did not reach the pair's commit index {committed} within {CONVERGE:?}"
+        )]
+    }
+}
+
 /// One drill: the acknowledged writes lost at the activation, and what
 /// was found wrong.
 async fn cycle(
@@ -268,8 +325,15 @@ async fn cycle(
     let began = Instant::now();
     let writer = Writer::start(&sockets[..2], rng, ledger.next);
     site_1_runs(cluster, rng, events, &mut wrong).await;
-    // 2. Site 1 lost while writes flow; 3. activation.
+    // 2. Site 1 lost while writes flow; 3. activation, which is refused
+    // while the DR node does not hold the primary's apps (DR3b): wait for
+    // them, as an operator would.
     let dr = cluster.nodes[2].client();
+    if !holds_apps(&dr).await {
+        wrong.push(format!(
+            "the DR node did not hold the pair's apps within {HOLD:?} before site 1's loss"
+        ));
+    }
     let lag = dr.dr().await.map(|d| Duration::from_millis(d.lag_ms))?;
     let lost_at = Instant::now();
     cluster.node(1).kill();
@@ -280,7 +344,7 @@ async fn cycle(
     );
     ledger.absorb(writer.stop().await);
     tokio::time::sleep(AFTER_LOSS).await;
-    let done = tokio::time::timeout(Duration::from_secs(30), dr.dr_activate(true))
+    let done = tokio::time::timeout(Duration::from_secs(30), dr.dr_activate(true, false))
         .await
         .map_err(|_| anyhow::anyhow!("activation did not answer in 30 s"))??;
     let activated = Instant::now();
@@ -333,13 +397,26 @@ struct Window {
 
 /// Site 1 runs for a while under WAN cuts; in some cycles an activation is
 /// asked meanwhile, which must be refused.
+/// Whether the DR node holds both of the pair's apps, ready, with nothing
+/// being fetched, within [`HOLD`].
+async fn holds_apps(dr: &bulkhead::api::Client) -> bool {
+    until(HOLD, || async {
+        matches!(
+            tokio::time::timeout(ADMIN_TIMEOUT, dr.dr()).await,
+            Ok(Ok(d)) if d.deploys.as_ref().is_some_and(|h| h.apps == 2 && h.fetching.is_none() && h.not_ready.is_empty())
+        )
+    })
+    .await
+}
+
 async fn site_1_runs(cluster: &Cluster, rng: &mut Rng, events: &EventLog, wrong: &mut Vec<String>) {
     let end = Instant::now() + Duration::from_millis(rng.range(20_000, 45_000));
     let mut ask_refusal = rng.chance(300);
     while Instant::now() < end {
         if ask_refusal {
             ask_refusal = false;
-            match cluster.nodes[2].client().dr_activate(true).await {
+            // Fencing is what is tried here, whatever apps are held.
+            match cluster.nodes[2].client().dr_activate(true, true).await {
                 Err(e) if e.to_string().contains("site 1 is not down") => {
                     note(
                         events,
@@ -584,7 +661,8 @@ async fn write(
             outcome: outcome(reply.as_deref()),
             at: Instant::now(),
         });
-        tokio::time::sleep(Duration::from_millis(rng.range(20, 200))).await;
+        let scale = PAUSE_SCALE.load(Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(rng.range(20, 200) * scale)).await;
     }
     out
 }
