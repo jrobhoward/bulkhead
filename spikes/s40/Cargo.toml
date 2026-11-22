@@ -1,0 +1,24 @@
+[package]
+name = "s40"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "S40: client libraries that open their own sockets, fenced per app (Linux cgroup BPF or nftables, FreeBSD pf or ipfw)"
+
+[dependencies]
+libc = "0.2.177"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rumqttc = "0.24"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync", "net"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+seccompiler = "0.5"
+
+[profile.release]
+debug = 1
+
+# Standalone: built on the Pi and the VMs from this directory alone, and
+# run as root.
+[workspace]

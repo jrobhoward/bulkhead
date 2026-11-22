@@ -1,0 +1,298 @@
+# Linux 7.0.0-1023-raspi aarch64, 2026-11-22T23:18:27Z, load 0.33 0.09 0.04
+## probe: fence none, landlock net off
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               ok 
+tcp 127.0.0.2:7001 (address not in rules)            ok 
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   ok 
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused connection timed out
+tcp 0.0.0.0:7100 (broad rule, unspecified)           ok 
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) ok 
+tcp [::1]:7001 (IPv6 rule)                           ok 
+tcp [::1]:7002 (IPv6, port not in rules)             refused ECONNREFUSED
+tcp fast open 127.0.0.1:7002 (sendto, port not in rules) ok 1 B
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        ok 1 B
+udp sendto 127.0.0.2:7001 (address not in rules)     ok 1 B
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) ok 1 B
+udp connect 127.0.0.1:7002 (port not in rules)       ok 
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 ok 1 B
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        ok 
+tcp bind :0 (ephemeral)                              ok 
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:40376
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket AF_PACKET SOCK_DGRAM                          refused EPERM
+socket AF_NETLINK SOCK_DGRAM                         refused EPERM
+unix connect @s40-outside (abstract, outside)        refused EPERM
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        ok 4 addresses
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:56524
+## probe: fence none, landlock net on
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b11, BindTcp | ConnectTcp) with 23 port rules; seccomp socket filter on
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               refused EACCES
+tcp 127.0.0.2:7001 (address not in rules)            ok 
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   ok 
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused connection timed out
+tcp 0.0.0.0:7100 (broad rule, unspecified)           ok 
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EACCES
+tcp [::1]:7001 (IPv6 rule)                           ok 
+tcp [::1]:7002 (IPv6, port not in rules)             refused EACCES
+tcp fast open 127.0.0.1:7002 (sendto, port not in rules) refused EACCES
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        ok 1 B
+udp sendto 127.0.0.2:7001 (address not in rules)     ok 1 B
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) ok 1 B
+udp connect 127.0.0.1:7002 (port not in rules)       ok 
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 ok 1 B
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        refused EACCES
+tcp bind :0 (ephemeral)                              refused EACCES
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:40392
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket AF_PACKET SOCK_DGRAM                          refused EPERM
+socket AF_NETLINK SOCK_DGRAM                         refused EPERM
+unix connect @s40-outside (abstract, outside)        refused EPERM
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        ok 4 addresses
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:48549
+## probe: fence bpf, landlock net off
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               refused EPERM
+tcp 127.0.0.2:7001 (address not in rules)            refused EPERM
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   refused EPERM
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused EPERM
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused EPERM
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EPERM
+tcp [::1]:7001 (IPv6 rule)                           ok 
+tcp [::1]:7002 (IPv6, port not in rules)             refused EPERM
+tcp fast open 127.0.0.1:7002 (sendto, port not in rules) refused EPERM
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        refused EPERM
+udp sendto 127.0.0.2:7001 (address not in rules)     refused EPERM
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EPERM
+udp connect 127.0.0.1:7002 (port not in rules)       refused EPERM
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 refused EPERM
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        refused EPERM
+tcp bind :0 (ephemeral)                              refused EPERM
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        refused EPERM
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:40402
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket AF_PACKET SOCK_DGRAM                          refused EPERM
+socket AF_NETLINK SOCK_DGRAM                         refused EPERM
+unix connect @s40-outside (abstract, outside)        refused EPERM
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        refused failed to lookup address information: Temporary failure in name resolution
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:34996
+## probe: fence bpf, landlock net on
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b11, BindTcp | ConnectTcp) with 23 port rules; seccomp socket filter on
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               refused EACCES
+tcp 127.0.0.2:7001 (address not in rules)            refused EPERM
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   refused EPERM
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused EPERM
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused EPERM
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EACCES
+tcp [::1]:7001 (IPv6 rule)                           ok 
+tcp [::1]:7002 (IPv6, port not in rules)             refused EACCES
+tcp fast open 127.0.0.1:7002 (sendto, port not in rules) refused EACCES
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        refused EPERM
+udp sendto 127.0.0.2:7001 (address not in rules)     refused EPERM
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EPERM
+udp connect 127.0.0.1:7002 (port not in rules)       refused EPERM
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 refused EPERM
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        refused EACCES
+tcp bind :0 (ephemeral)                              refused EACCES
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        refused EPERM
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:40412
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket AF_PACKET SOCK_DGRAM                          refused EPERM
+socket AF_NETLINK SOCK_DGRAM                         refused EPERM
+unix connect @s40-outside (abstract, outside)        refused EPERM
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        refused failed to lookup address information: Temporary failure in name resolution
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:34698
+## probe: fence nft, landlock net off
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               refused ECONNREFUSED
+tcp 127.0.0.2:7001 (address not in rules)            refused ECONNREFUSED
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   refused ECONNREFUSED
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused ECONNREFUSED
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused ECONNREFUSED
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused ECONNREFUSED
+tcp [::1]:7001 (IPv6 rule)                           ok 
+tcp [::1]:7002 (IPv6, port not in rules)             refused ECONNREFUSED
+tcp fast open 127.0.0.1:7002 (sendto, port not in rules) refused ECONNREFUSED
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        refused EPERM
+udp sendto 127.0.0.2:7001 (address not in rules)     refused EPERM
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EPERM
+udp connect 127.0.0.1:7002 (port not in rules)       ok 
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 refused EPERM
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        ok 
+tcp bind :0 (ephemeral)                              ok 
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:40424
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket AF_PACKET SOCK_DGRAM                          refused EPERM
+socket AF_NETLINK SOCK_DGRAM                         refused EPERM
+unix connect @s40-outside (abstract, outside)        refused EPERM
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        refused failed to lookup address information: Temporary failure in name resolution
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:43451
+## mqtt: fence none
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+mqtt broker 127.0.0.1:1884 (not in rules): refused Io(Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })
+mqtt connect to 127.0.0.1:1883: 331.759µs and 180.777µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 142986 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 71147 per second
+## mqtt: fence bpf
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+mqtt broker 127.0.0.1:1884 (not in rules): refused Io(Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" })
+mqtt connect to 127.0.0.1:1883: 249.869µs and 111.796µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 143455 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 71468 per second
+## mqtt: fence nft
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+mqtt broker 127.0.0.1:1884 (not in rules): refused Io(Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })
+mqtt connect to 127.0.0.1:1883: 351.517µs and 177.629µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 144544 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 68015 per second
+## bench round 1: fence none, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.2 µs, p99 25.7 µs, 47894 per second (20000 runs)
+udp sendto 64 B: 2322 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3233 MB/s
+## bench round 1: fence bpf, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.4 µs, p99 26.2 µs, 47661 per second (20000 runs)
+udp sendto 64 B: 2429 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2909 MB/s
+## bench round 1: fence bpf, landlock net off, 16 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.4 µs, p99 27.4 µs, 47508 per second (20000 runs)
+udp sendto 64 B: 2409 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2941 MB/s
+## bench round 1: fence bpf, landlock net off, 64 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.7 µs, p99 26.6 µs, 46870 per second (20000 runs)
+udp sendto 64 B: 2555 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2939 MB/s
+## bench round 1: fence nft, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 21.5 µs, p99 28.0 µs, 44921 per second (20000 runs)
+udp sendto 64 B: 2564 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3036 MB/s
+## bench round 1: fence nft, landlock net off, 16 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 22.9 µs, p99 29.5 µs, 42328 per second (20000 runs)
+udp sendto 64 B: 3218 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3094 MB/s
+## bench round 1: fence nft, landlock net off, 64 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 28.5 µs, p99 34.2 µs, 34308 per second (20000 runs)
+udp sendto 64 B: 4949 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3133 MB/s
+## bench round 1: fence bpf, landlock net on, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b11, BindTcp | ConnectTcp) with 2 port rules; seccomp socket filter on
+tcp connect+close: p50 20.4 µs, p99 26.6 µs, 47553 per second (20000 runs)
+udp sendto 64 B: 2419 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3334 MB/s
+## bench round 1: sockets made by the launcher, passed
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect by the launcher, passed: p50 38.3 µs, p99 54.1 µs, 25055 per second (20000 runs)
+udp through the launcher 64 B: 3338 ns per datagram (200000 datagrams)
+## bench round 2: fence none, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.3 µs, p99 32.3 µs, 45828 per second (20000 runs)
+udp sendto 64 B: 2317 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3116 MB/s
+## bench round 2: fence bpf, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.3 µs, p99 30.3 µs, 47233 per second (20000 runs)
+udp sendto 64 B: 2434 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3667 MB/s
+## bench round 2: fence bpf, landlock net off, 16 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.4 µs, p99 26.7 µs, 47448 per second (20000 runs)
+udp sendto 64 B: 2436 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3198 MB/s
+## bench round 2: fence bpf, landlock net off, 64 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 20.6 µs, p99 26.2 µs, 47091 per second (20000 runs)
+udp sendto 64 B: 2569 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3109 MB/s
+## bench round 2: fence nft, landlock net off, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 21.7 µs, p99 28.5 µs, 44592 per second (20000 runs)
+udp sendto 64 B: 2573 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3228 MB/s
+## bench round 2: fence nft, landlock net off, 16 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 23.0 µs, p99 29.6 µs, 42181 per second (20000 runs)
+udp sendto 64 B: 3242 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2974 MB/s
+## bench round 2: fence nft, landlock net off, 64 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect+close: p50 28.1 µs, p99 34.4 µs, 34767 per second (20000 runs)
+udp sendto 64 B: 4954 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2762 MB/s
+## bench round 2: fence bpf, landlock net on, 2 rules
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b11, BindTcp | ConnectTcp) with 2 port rules; seccomp socket filter on
+tcp connect+close: p50 20.4 µs, p99 26.7 µs, 47499 per second (20000 runs)
+udp sendto 64 B: 2447 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3024 MB/s
+## bench round 2: sockets made by the launcher, passed
+s40 enter: landlock fully enforced, net BitFlags<AccessNet>(0b0) with 0 port rules; seccomp socket filter on
+tcp connect by the launcher, passed: p50 38.2 µs, p99 55.0 µs, 25267 per second (20000 runs)
+udp through the launcher 64 B: 3325 ns per datagram (200000 datagrams)
+# done, load 0.62 0.18 0.07

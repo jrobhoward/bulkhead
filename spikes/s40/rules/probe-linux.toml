@@ -1,0 +1,15 @@
+# The probe's rules on Linux (and FreeBSD's ipfw run): the allowed target
+# 127.0.0.1, ports 7001 and 9000-9009 (itself), the broker on 1883, ::1 on
+# 7001, and a broad rule for 7100 that the guard keeps off loopback,
+# link-local and unspecified addresses.
+connect = [
+  { cidr = "127.0.0.1/32", ports = "7001" },
+  { cidr = "127.0.0.1/32", ports = "9000-9009" },
+  { cidr = "127.0.0.1/32", ports = "1883" },
+  { cidr = "::1/128", ports = "7001" },
+  { cidr = "0.0.0.0/0", ports = "7100" },
+]
+bind = [
+  { cidr = "0.0.0.0/0", ports = "9000-9009" },
+  { cidr = "::/0", ports = "9000-9009" },
+]

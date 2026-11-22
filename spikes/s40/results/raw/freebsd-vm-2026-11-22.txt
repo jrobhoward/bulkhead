@@ -1,0 +1,195 @@
+# FreeBSD 15.0-RELEASE amd64, 2026-11-22T23:18:26Z, load { 0.42 0.23 0.14 }
+## phase: no packet filter loaded
+## probe: fence none
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               ok 
+tcp 127.0.0.2:7001 (address not in rules)            ok 
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   ok 
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused connection timed out
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused ENETUNREACH
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) ok 
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        ok 1 B
+udp sendto 127.0.0.2:7001 (address not in rules)     ok 1 B
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) ok 1 B
+udp connect 127.0.0.1:7002 (port not in rules)       ok 
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 refused EISCONN
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        ok 
+tcp bind :0 (ephemeral)                              ok 
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:12260
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket PF_ROUTE SOCK_RAW                             ok 
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        ok 4 addresses
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:52439
+## mqtt: fence none
+mqtt broker 127.0.0.1:1884 (not in rules): refused Io(Os { code: 61, kind: ConnectionRefused, message: "Connection refused" })
+mqtt connect to 127.0.0.1:1883: 197.194µs and 125.457µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 351371 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 133879 per second
+## bench round 1: fence none, 2 rules, lo0
+tcp connect+close: p50 17.9 µs, p99 25.1 µs, 55053 per second (20000 runs)
+udp sendto 64 B: 1350 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2637 MB/s
+## bench round 1: fence none, 2 rules, lo1
+tcp connect+close: p50 16.3 µs, p99 23.8 µs, 65656 per second (20000 runs)
+udp sendto 64 B: 950 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2571 MB/s
+## bench round 1: sockets made by the launcher, passed
+tcp connect by the launcher, passed: p50 29.1 µs, p99 36.6 µs, 35294 per second (20000 runs)
+udp through the launcher 64 B: 1893 ns per datagram (200000 datagrams)
+## bench round 2: fence none, 2 rules, lo0
+tcp connect+close: p50 17.8 µs, p99 24.9 µs, 55732 per second (20000 runs)
+udp sendto 64 B: 1439 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2543 MB/s
+## bench round 2: fence none, 2 rules, lo1
+tcp connect+close: p50 16.4 µs, p99 23.6 µs, 64321 per second (20000 runs)
+udp sendto 64 B: 1238 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2602 MB/s
+## bench round 2: sockets made by the launcher, passed
+tcp connect by the launcher, passed: p50 29.3 µs, p99 36.7 µs, 34932 per second (20000 runs)
+udp through the launcher 64 B: 1744 ns per datagram (200000 datagrams)
+## phase: pf
+## probe: fence pf
+# TCP connect
+tcp 10.40.0.1:7001 (allowed)                         ok 
+tcp 10.40.0.1:7002 (port not in rules)               refused EACCES
+tcp 10.40.0.3:7001 (address not in rules)            refused EACCES
+tcp 10.40.0.1:7100 (broad rule; guard if loopback)   ok 
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused EACCES
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused ENETUNREACH
+tcp [::ffff:10.40.0.1]:7001 (mapped, allowed)        refused EPROTONOSUPPORT
+tcp [::ffff:10.40.0.1]:7002 (mapped, port not in rules) refused EPROTONOSUPPORT
+# UDP
+udp sendto 10.40.0.1:7001 (allowed)                  ok 1 B
+udp sendto 10.40.0.1:7002 (port not in rules)        refused EACCES
+udp sendto 10.40.0.3:7001 (address not in rules)     refused EACCES
+udp sendto [::ffff:10.40.0.1]:7002 (mapped, port not in rules) refused EPROTONOSUPPORT
+udp connect 10.40.0.1:7002 (port not in rules)       ok 
+udp connected to 10.40.0.1:7001, sendto 10.40.0.1:7002 refused EISCONN
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        ok 
+tcp bind :0 (ephemeral)                              ok 
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 10.40.0.2:9002, accept         ok from 10.40.0.2:19665
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket PF_ROUTE SOCK_RAW                             ok 
+# names
+getaddrinfo localhost                                ok [127.0.0.1:1, [::1]:1]
+getaddrinfo example.com (DNS)                        refused failed to lookup address information: Name could not be resolved at this time
+# inbound
+udp bind :9003, datagram from 10.40.0.3 (outside the rules) ok 22 B from 10.40.0.3:34768
+## mqtt: fence pf
+mqtt broker 10.40.0.1:1884 (not in rules): refused Io(Os { code: 13, kind: PermissionDenied, message: "Permission denied" })
+mqtt connect to 10.40.0.1:1883: 256.476µs and 167.898µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 327775 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 112993 per second
+## bench round 1: fence pf, 2 rules
+tcp connect+close: p50 23.9 µs, p99 35.4 µs, 40756 per second (20000 runs)
+udp sendto 64 B: 1211 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 1703 MB/s
+## bench round 1: fence pf, 16 rules
+tcp connect+close: p50 24.4 µs, p99 34.1 µs, 40008 per second (20000 runs)
+udp sendto 64 B: 1284 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2437 MB/s
+## bench round 1: fence pf, 64 rules
+tcp connect+close: p50 23.1 µs, p99 32.3 µs, 50700 per second (20000 runs)
+udp sendto 64 B: 1464 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2827 MB/s
+## bench round 2: fence pf, 2 rules
+tcp connect+close: p50 23.0 µs, p99 37.3 µs, 41030 per second (20000 runs)
+udp sendto 64 B: 1304 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2415 MB/s
+## bench round 2: fence pf, 16 rules
+tcp connect+close: p50 22.1 µs, p99 31.4 µs, 49000 per second (20000 runs)
+udp sendto 64 B: 1232 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2364 MB/s
+## bench round 2: fence pf, 64 rules
+tcp connect+close: p50 25.2 µs, p99 35.0 µs, 39978 per second (20000 runs)
+udp sendto 64 B: 1658 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2367 MB/s
+pf disabled
+## phase: ipfw
+## probe: fence ipfw
+# TCP connect
+tcp 127.0.0.1:7001 (allowed)                         ok 
+tcp 127.0.0.1:7002 (port not in rules)               refused EACCES
+tcp 127.0.0.2:7001 (address not in rules)            refused EACCES
+tcp 127.0.0.1:7100 (broad rule; guard if loopback)   refused EACCES
+tcp 169.254.169.254:7100 (broad rule, link-local)    refused EACCES
+tcp 0.0.0.0:7100 (broad rule, unspecified)           refused ENETUNREACH
+tcp [::ffff:127.0.0.1]:7001 (mapped, allowed)        ok 
+tcp [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EACCES
+# UDP
+udp sendto 127.0.0.1:7001 (allowed)                  ok 1 B
+udp sendto 127.0.0.1:7002 (port not in rules)        refused EACCES
+udp sendto 127.0.0.2:7001 (address not in rules)     refused EACCES
+udp sendto [::ffff:127.0.0.1]:7002 (mapped, port not in rules) refused EACCES
+udp connect 127.0.0.1:7002 (port not in rules)       ok 
+udp connected to 127.0.0.1:7001, sendto 127.0.0.1:7002 refused EISCONN
+# bind and listen
+tcp bind :9001 (in rules)                            ok 
+tcp bind :9100 (not in rules)                        ok 
+tcp bind :0 (ephemeral)                              ok 
+udp bind :9001 (in rules)                            ok 
+udp bind :9100 (not in rules)                        ok 
+listen :9002, connect 127.0.0.1:9002, accept         ok from 127.0.0.1:35917
+# other domains and types
+socket AF_INET SOCK_RAW                              refused EPERM
+socket PF_ROUTE SOCK_RAW                             ok 
+# names
+getaddrinfo localhost                                ok [[::1]:1, 127.0.0.1:1]
+getaddrinfo example.com (DNS)                        refused failed to lookup address information: Name could not be resolved at this time
+# inbound
+udp bind :9003, datagram from 127.0.0.2 (outside the rules) ok 22 B from 127.0.0.2:44122
+## mqtt: fence ipfw
+mqtt broker 127.0.0.1:1884 (not in rules): refused Io(Os { code: 13, kind: PermissionDenied, message: "Permission denied" })
+mqtt connect to 127.0.0.1:1883: 256.436µs and 163.229µs
+mqtt QoS 0, 64 B: 100000 of 100000 received, 353705 per second
+mqtt QoS 1, 64 B: 20000 of 20000 acknowledged, 155011 per second
+## bench round 1: fence none, ipfw loaded
+tcp connect+close: p50 16.2 µs, p99 24.0 µs, 61589 per second (20000 runs)
+udp sendto 64 B: 1257 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2390 MB/s
+## bench round 1: fence ipfw, 2 rules
+tcp connect+close: p50 8.7 µs, p99 19.7 µs, 100802 per second (20000 runs)
+udp sendto 64 B: 1654 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2427 MB/s
+## bench round 1: fence ipfw, 16 rules
+tcp connect+close: p50 19.2 µs, p99 28.4 µs, 59226 per second (20000 runs)
+udp sendto 64 B: 1647 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2406 MB/s
+## bench round 1: fence ipfw, 64 rules
+tcp connect+close: p50 21.3 µs, p99 32.5 µs, 47224 per second (20000 runs)
+udp sendto 64 B: 907 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 3004 MB/s
+## bench round 2: fence none, ipfw loaded
+tcp connect+close: p50 18.0 µs, p99 24.7 µs, 54019 per second (20000 runs)
+udp sendto 64 B: 1269 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2522 MB/s
+## bench round 2: fence ipfw, 2 rules
+tcp connect+close: p50 18.0 µs, p99 26.0 µs, 63664 per second (20000 runs)
+udp sendto 64 B: 1136 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2571 MB/s
+## bench round 2: fence ipfw, 16 rules
+tcp connect+close: p50 17.5 µs, p99 25.3 µs, 57802 per second (20000 runs)
+udp sendto 64 B: 1412 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2572 MB/s
+## bench round 2: fence ipfw, 64 rules
+tcp connect+close: p50 21.5 µs, p99 36.9 µs, 44583 per second (20000 runs)
+udp sendto 64 B: 1058 ns per datagram (200000 datagrams)
+tcp bulk 256 MiB: 2444 MB/s
+# done, load { 0.88 0.34 0.18 }

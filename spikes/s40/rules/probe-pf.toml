@@ -1,0 +1,11 @@
+# The probe's rules for FreeBSD's pf run: the jail is 10.40.0.2, the host's
+# targets 10.40.0.1 (allowed) and 10.40.0.3 (not), all on lo1.
+connect = [
+  { cidr = "10.40.0.1/32", ports = "7001" },
+  { cidr = "10.40.0.2/32", ports = "9000-9009" },
+  { cidr = "10.40.0.1/32", ports = "1883" },
+  { cidr = "0.0.0.0/0", ports = "7100" },
+]
+bind = [
+  { cidr = "0.0.0.0/0", ports = "9000-9009" },
+]
