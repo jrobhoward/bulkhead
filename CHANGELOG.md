@@ -210,8 +210,10 @@ All notable changes are recorded here. The format follows
   type (`CallError::TooLarge`, `CastError::TooLarge`, `KvError::Other`,
   `SqlError::TooLarge`, ...), on the callback thread and on sender
   channels alike; a reply over the limit is dropped with a warning. An
-  answer over the limit still ends the instance (ROADMAP, "Smaller open
-  items").
+  answer over the limit (a `get_many` of more than about 16 MiB of
+  values) is refused by the node the same way, with `KvError::Other`
+  for keyvalue, and logged at `warn`; a scan's page already stops at
+  1 MiB.
 - The CLI no longer panics when its output's reader has gone
   (`bulkhead ps | head -n 1`, `bulkhead logs -f app | grep -q ...`):
   it ends quietly with status 0, as Unix tools do on `EPIPE`.

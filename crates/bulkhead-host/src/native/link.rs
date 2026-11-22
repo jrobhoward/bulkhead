@@ -24,8 +24,9 @@ use std::time::{Duration, Instant};
 
 use bulkhead_native::channel::{self, Channel, RING_CAP};
 use bulkhead_native::hot::FromAppHot;
-use bulkhead_native::protocol::{self, ToApp};
+use bulkhead_native::protocol::{self, Answer, KvAnswer, ToApp};
 use tokio::net::unix::pipe;
+use tracing::warn;
 
 use super::port::{Incoming, KvCall};
 
@@ -40,6 +41,40 @@ const WATCH_SLICE: Duration = Duration::from_micros(5);
 /// `since` the last frame longer than the `spin` (ROADMAP T1b).
 pub(crate) fn hinted_idle(nothing_queued: bool, since: Duration, spin: Duration) -> bool {
     nothing_queued && since > spin
+}
+
+/// The frame to send instead of `frame`, encoded as `bytes`, when it is
+/// over the frame limit and an answer whose type has an error to give
+/// ([`protocol::answer_too_large`]): the app would end on a frame past
+/// it (ROADMAP, "Smaller open items"). `None` sends `bytes` as they are.
+pub(crate) fn over_limit_instead(frame: &ToApp, bytes: &[u8]) -> Option<ToApp> {
+    if !protocol::over_limit(bytes) {
+        return None;
+    }
+    let len = bytes.len() - 4;
+    let ToApp::Answer { id, answer } = frame else {
+        warn!(
+            len,
+            frame = to_app_name(frame),
+            "a frame over the limit, sent: the app will end"
+        );
+        return None;
+    };
+    let Some(instead) = protocol::answer_too_large(answer, len) else {
+        warn!(
+            len,
+            "an answer over the frame limit, sent: the app will end"
+        );
+        return None;
+    };
+    warn!(
+        len,
+        "an answer over the frame limit was refused with an error"
+    );
+    Some(ToApp::Answer {
+        id: *id,
+        answer: instead,
+    })
 }
 
 /// Why an app speaking protocol `version` cannot be sent `frame`, if
@@ -277,7 +312,11 @@ impl Link {
         if bulkhead_native::hot::write_to_app_at(&mut out, frame, self.version).is_some() {
             self.send_bytes(&out);
         } else {
-            self.send_bytes(&protocol::encode(frame));
+            let bytes = protocol::encode(frame);
+            match over_limit_instead(frame, &bytes) {
+                Some(instead) => self.send_bytes(&protocol::encode(&instead)),
+                None => self.send_bytes(&bytes),
+            }
         }
         if out.capacity() <= KEPT_BUFFER {
             self.out = out;
@@ -293,7 +332,16 @@ impl Link {
         let mut out = std::mem::take(&mut self.out);
         out.clear();
         bulkhead_native::hot::write_kv_answer(&mut out, id, reply);
-        self.send_bytes(&out);
+        // A value is set by a frame within the limit, so its answer fits;
+        // one past it (a store written by another path) gets the error.
+        let answer = ToApp::Answer {
+            id,
+            answer: Answer::Kv(Ok(KvAnswer::Unit)),
+        };
+        match over_limit_instead(&answer, &out) {
+            Some(instead) => self.send_bytes(&protocol::encode(&instead)),
+            None => self.send_bytes(&out),
+        }
         // A large value's buffer is not kept for the instance's life.
         if out.capacity() <= KEPT_BUFFER {
             self.out = out;

@@ -848,6 +848,16 @@ fn kv(ctx: &mut Ctx, command: &str) -> String {
                     .collect();
                 b.set_many(&entries).map(|()| "ok".into())
             }
+            "bigset" => (0..arg(2).parse().unwrap_or(0))
+                .try_for_each(|i: u32| b.set(&format!("big-{i}"), &vec![b'x'; 1 << 20]))
+                .map(|()| "ok".into()),
+            "bigget" => {
+                let keys: Vec<String> = (0..arg(2).parse().unwrap_or(0))
+                    .map(|i: u32| format!("big-{i}"))
+                    .collect();
+                b.get_many(&keys)
+                    .map(|vs| vs.iter().flatten().count().to_string())
+            }
             "setmany" => {
                 let entries: Vec<(String, Vec<u8>)> = arg(2)
                     .split(',')

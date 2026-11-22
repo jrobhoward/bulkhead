@@ -204,6 +204,25 @@ fn too_large____each_kind_of_request____its_own_error_or_none() {
 }
 
 #[test]
+fn answer_too_large____each_kind_of_answer____its_own_error_or_none() {
+    let n = MAX_FRAME + 1;
+
+    let kv = answer_too_large(&Answer::Kv(Ok(KvAnswer::Values(Vec::new()))), n);
+    let called = answer_too_large(&Answer::Called(Ok(Envelope::new("x", "y"))), n);
+    let sql = answer_too_large(&Answer::Sql(Err(SqlError::Timeout)), n);
+    let unit = answer_too_large(&Answer::Unit, n);
+    let extension = answer_too_large(&Answer::Extension(Ok(Bytes(Vec::new()))), n);
+
+    assert!(
+        matches!(kv, Some(Answer::Kv(Err(KvError::Other(why)))) if why.contains("frame limit"))
+    );
+    assert_eq!(called, Some(Answer::Called(Err(CallError::TooLarge))));
+    assert_eq!(sql, Some(Answer::Sql(Err(SqlError::TooLarge))));
+    assert_eq!(unit, None);
+    assert_eq!(extension, None);
+}
+
+#[test]
 fn over_limit____encoded_frame____only_a_body_past_max_frame() {
     let at = vec![0u8; 4 + MAX_FRAME];
     let past = vec![0u8; 5 + MAX_FRAME];

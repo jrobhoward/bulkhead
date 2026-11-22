@@ -1,0 +1,22 @@
+[package]
+name = "s35"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "S35: ZFS datasets as app volumes, made by the privileged helper through the zfs command"
+
+[dependencies]
+libc = "0.2.177"
+
+# The helper's real fence (its seccomp allow-list and capabilities), to
+# run `zfs` under it, and the runner's Landlock crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+bulkhead-priv = { path = "../../crates/bulkhead-priv" }
+seccompiler = "0.5"
+landlock = "0.4.7"
+
+[profile.release]
+debug = 1
+
+# Standalone: built on the Pi and the FreeBSD VM from this directory alone.
+[workspace]

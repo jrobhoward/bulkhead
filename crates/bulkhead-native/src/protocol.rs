@@ -1505,6 +1505,32 @@ pub fn too_large(request: &Request, len: usize) -> Option<Answer> {
     })
 }
 
+/// The answer the node gives instead of `answer` when its frame of `len`
+/// bytes is over [`MAX_FRAME`] (ROADMAP, "Smaller open items"): the app
+/// would end on such a frame. An error of the answer's own type, as
+/// [`too_large`] gives for a request: a `get_many` or a scan page of more
+/// than about 16 MiB of values gets [`KvError::Other`], a call's reply
+/// [`CallError::TooLarge`]. `None` for an answer whose type carries no
+/// error to give (`Extension`, and those that are never large): that frame
+/// is sent, and the app ends as before.
+#[must_use]
+pub fn answer_too_large(answer: &Answer, len: usize) -> Option<Answer> {
+    let why = || format!("an answer of {len} bytes is over the {MAX_FRAME}-byte frame limit");
+    Some(match answer {
+        Answer::Called(_) => Answer::Called(Err(CallError::TooLarge)),
+        Answer::Kv(_) => Answer::Kv(Err(KvError::Other(why()))),
+        Answer::Groups(_) => Answer::Groups(Err(GroupsError::LimitReached)),
+        Answer::Config(_) => Answer::Config(Err(ConfigError::Other(why()))),
+        Answer::ConfigAll(_) => Answer::ConfigAll(Err(ConfigError::Other(why()))),
+        Answer::Secret(_) => Answer::Secret(Err(SecretError::Unavailable(why()))),
+        Answer::Sql(_) => Answer::Sql(Err(SqlError::TooLarge)),
+        Answer::Net(_) => Answer::Net(Err(NetError::Other(why()))),
+        Answer::Http(_) => Answer::Http(Err(HttpError::Other(why()))),
+        Answer::MetricsText(_) => Answer::MetricsText(Err(NetError::Other(why()))),
+        _ => return None,
+    })
+}
+
 /// Decode a frame's body (without its length prefix).
 ///
 /// # Errors

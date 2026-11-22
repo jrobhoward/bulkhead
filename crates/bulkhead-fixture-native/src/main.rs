@@ -38,7 +38,7 @@
 //! | `vread GUEST`, `vwrite GUEST` | read or write (`x`) the file at a guest path (`/data/f`) where `BULKHEAD_PREOPENS` puts it: `ok` or `err:` and the OS error |
 //! | `vcat GUEST` | that file's contents, or `err:` and the OS error |
 //! | `dumpable` | `no` if the process is not dumpable, else `yes` (Linux) |
-//! | `kv OP BUCKET ...` | a keyvalue request: `get K`, `set K V`, `del K`, `incr K N`, `many K1,K2`, `setmany K1=V1,K2=V2`, `entry K` (`V@REV`), `rev`, `scan PREFIX`, `cas K EXPECTED V` (`none` for absent), `watch K`, `watchp PREFIX`, `gets N` (the nanoseconds `N` gets of key `t` took), `bigmany N` (`N` values of 1 MiB in one `set_many`); `kv unwatch ID`. A failure is `err:` and the error |
+//! | `kv OP BUCKET ...` | a keyvalue request: `get K`, `set K V`, `del K`, `incr K N`, `many K1,K2`, `setmany K1=V1,K2=V2`, `entry K` (`V@REV`), `rev`, `scan PREFIX`, `cas K EXPECTED V` (`none` for absent), `watch K`, `watchp PREFIX`, `gets N` (the nanoseconds `N` gets of key `t` took), `bigmany N` (`N` values of 1 MiB in one `set_many`), `bigset N` (`big-0` to `big-N-1`, 1 MiB each, set one by one), `bigget N` (how many of those one `get_many` found); `kv unwatch ID`. A failure is `err:` and the error |
 //! | `group OP GROUP [TEXT]` | `join`, `leave`: `ok`; `members`: how many; `publish GROUP TEXT`: to how many |
 //! | `config KEY`, `config-all` | the value (`none`), or every `k=v` |
 //! | `secret NAME` | the secret's text |

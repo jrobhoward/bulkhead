@@ -316,3 +316,32 @@ async fn native_kv____requests_over_the_frame_limit____refused_and_the_instance_
     assert_eq!(after, "ok");
     assert_eq!(a.state(), bulkhead_host::LifecycleState::Active);
 }
+
+/// An answer whose frame would be over the 17 MiB limit (ROADMAP,
+/// "Smaller open items"), a `get_many` of 18 values of 1 MiB, is refused
+/// by the node with an error of its own type: the app would end on such a
+/// frame. One under it is answered, and a scan's page stops at 1 MiB.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kv____answers_over_the_frame_limit____refused_and_the_instance_runs_on() {
+    let a = up("kv-big-answer", AccessMode::Rw);
+    assert_eq!(ask(&a, "kv bigset data 18").await, "ok");
+
+    let under = ask(&a, "kv bigget data 15").await;
+    let many = ask(&a, "kv bigget data 18").await;
+    let scan = ask(&a, "kv scan data big-").await;
+    let after = ask(&a, "kv get data big-0").await;
+
+    assert_eq!(under, "15");
+    assert!(
+        many.contains("answer of") && many.contains("frame limit"),
+        "{many}"
+    );
+    assert!(
+        scan.starts_with("big-0=x"),
+        "{}",
+        &scan[..scan.len().min(200)]
+    );
+    assert!(scan.len() < 2 << 20, "{} bytes", scan.len());
+    assert_eq!(after.len(), 1 << 20);
+    assert_eq!(a.state(), bulkhead_host::LifecycleState::Active);
+}
