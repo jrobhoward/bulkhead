@@ -53,7 +53,7 @@ fn Request____encoded____decodes_the_same(#[case] request: Request) {
 #[case(Reply::Exited { id: 1, code: None, signal: Some(9), memory_limit: true })]
 #[case(Reply::Volume { mountpoint: "/srv/bulkhead/volumes/orders/data".into() })]
 #[case(Reply::Volumes { parent: "tank/bulkhead/volumes".into(), rows: Vec::new() })]
-#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true }] })]
+#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, referenced: 65536, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true }] })]
 fn Reply____encoded____decodes_the_same(#[case] reply: Reply) {
     let bytes = reply.encode();
 

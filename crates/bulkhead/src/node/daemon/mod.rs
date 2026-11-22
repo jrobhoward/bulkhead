@@ -97,6 +97,9 @@ pub struct Node {
     /// How the metrics driver's text is rendered, given to the runtime
     /// (which holds it weakly).
     metrics_text: std::sync::OnceLock<KeptMetricsText>,
+    /// The ZFS volumes as the helper last listed them, for metrics
+    /// (ROADMAP ZV2).
+    volume_rows: volumes::Kept,
     /// The server for the admin driver's streams, given to the runtime
     /// (which holds it weakly).
     #[cfg(feature = "tls")]
@@ -318,10 +321,17 @@ impl Node {
             elsewhere: std::sync::OnceLock::new(),
             leadership: tokio::sync::watch::channel(0).0,
             metrics_text: std::sync::OnceLock::new(),
+            volume_rows: volumes::Kept::default(),
             #[cfg(feature = "tls")]
             admin_streams: std::sync::OnceLock::new(),
             config,
         };
+        volumes::start_refresh(
+            &node.config,
+            &node.rt,
+            &node.volume_rows,
+            node.stop.subscribe(),
+        );
         node.resolver.watch(node.stop.subscribe());
         tokio::spawn(events::forward(
             node.events.clone(),
@@ -334,7 +344,10 @@ impl Node {
         let render: bulkhead_host::MetricsText = {
             let (rt, quic, apps) = (node.rt.clone(), node.quic.clone(), node.apps.clone());
             let held = node.config.dr.is_some().then(|| node.held.clone());
-            Arc::new(move || metrics_text(&rt, &quic, &apps, held.as_ref()))
+            let volume_rows = node.volume_rows.clone();
+            Arc::new(move || {
+                metrics_text(&rt, &quic, &apps, held.as_ref()) + &volumes::metrics(&volume_rows)
+            })
         };
         node.rt.set_metrics_text(&render);
         let _ = node.metrics_text.set(KeptMetricsText(render));
@@ -385,7 +398,7 @@ impl Node {
     #[must_use]
     pub fn metrics(&self) -> String {
         let held = self.config.dr.is_some().then_some(&self.held);
-        metrics_text(&self.rt, &self.quic, &self.apps, held)
+        metrics_text(&self.rt, &self.quic, &self.apps, held) + &volumes::metrics(&self.volume_rows)
     }
 
     /// Reload every HTTPS ingress's certificates from their files. An

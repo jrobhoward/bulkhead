@@ -318,6 +318,9 @@ if [ -n "$ZFS_PARENT" ]; then
     echo "filled: $FILL"
     case "$FILL" in *errno=122*) ;; *) echo "FAILED: the quota did not stop the app (EDQUOT is 122)"; exit 1 ;; esac
     cli volume list
+    QUOTA_METRIC=$(curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_volume_quota_bytes{app="keeper",volume="data"}')
+    echo "metrics (ROADMAP ZV2): $QUOTA_METRIC; $(curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_volume_referenced_bytes{app="keeper"')"
+    [ "$QUOTA_METRIC" = 'bulkhead_volume_quota_bytes{app="keeper",volume="data"} 67108864' ] || { echo "FAILED: no quota metric"; exit 1; }
     if cli volume destroy keeper data 2>&1; then echo "FAILED: destroyed while deployed"; exit 1; fi
     cli remove keeper
     echo "kept after the undeploy: $(zfs list -H -o name "$ZFS_PARENT/keeper/data")"

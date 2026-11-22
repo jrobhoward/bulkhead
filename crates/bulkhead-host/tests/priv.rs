@@ -1373,6 +1373,7 @@ async fn zfs____a_volume____the_apps_filled_to_its_quota_raised_then_destroyed_o
     );
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].refquota, 64 << 20);
+    assert!(raised[0].referenced >= written, "{:?}", raised[0]);
     assert!(
         while_running.is_err_and(|e| e.contains("instances running")),
         "refused while the app runs"

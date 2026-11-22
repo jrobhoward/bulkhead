@@ -328,6 +328,9 @@ pub struct VolumeInfo {
     pub path: String,
     /// A ZFS volume's bytes used, its snapshots included.
     pub used: Option<u64>,
+    /// A ZFS volume's bytes referred to, which its quota counts.
+    #[serde(default)]
+    pub referenced: Option<u64>,
     /// A ZFS volume's quota in bytes.
     pub quota: Option<u64>,
     /// Whether a ZFS volume is mounted; a directory is always there.

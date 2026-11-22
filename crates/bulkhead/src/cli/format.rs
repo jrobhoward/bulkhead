@@ -61,7 +61,8 @@ pub fn apps(apps: &[AppSummary]) -> String {
     )
 }
 
-/// `bulkhead volume list` (ROADMAP ZV1).
+/// `bulkhead volume list` (ROADMAP ZV1): `USED` is what the quota counts,
+/// `WITH SNAPSHOTS` the snapshots' blocks as well.
 pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
     if list.is_empty() {
         return "no volumes".to_string();
@@ -78,15 +79,25 @@ pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
                 v.name.clone(),
                 v.kind.clone(),
                 v.app.clone().unwrap_or_else(|| "-".into()),
-                v.used.map_or_else(|| "-".into(), memory),
+                v.referenced.map_or_else(|| "-".into(), memory),
                 v.quota.map_or_else(|| "-".into(), memory),
+                v.used.map_or_else(|| "-".into(), memory),
                 v.path.clone(),
                 state.to_string(),
             ]
         })
         .collect();
     table(
-        &["VOLUME", "KIND", "APP", "USED", "QUOTA", "PATH", ""],
+        &[
+            "VOLUME",
+            "KIND",
+            "APP",
+            "USED",
+            "QUOTA",
+            "WITH SNAPSHOTS",
+            "PATH",
+            "",
+        ],
         &rows,
     )
 }

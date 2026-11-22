@@ -5,15 +5,16 @@
 use super::*;
 
 /// As OpenZFS 2.4 prints it on Linux and FreeBSD (spike S35).
-const LISTED: &str = "tank/v\t294912\t0\t/srv/v\tno\n\
-                      tank/v/orders\t196608\t0\t/srv/v/orders\tno\n\
-                      tank/v/orders/data\t98304\t67108864\t/srv/v/orders/data\tyes\n\
-                      tank/v/orders/logs\t98304\t1048576\t/srv/v/orders/logs\tno\n";
+const LISTED: &str = "tank/v\t294912\t98304\t0\t/srv/v\tno\n\
+                      tank/v/orders\t196608\t98304\t0\t/srv/v/orders\tno\n\
+                      tank/v/orders/data\t98304\t65536\t67108864\t/srv/v/orders/data\tyes\n\
+                      tank/v/orders/logs\t98304\t98304\t1048576\t/srv/v/orders/logs\tno\n";
 
 fn row(refquota: u64, mounted: bool) -> Row {
     Row {
         name: "tank/v/a/b".into(),
         used: 1,
+        referenced: 1,
         refquota,
         mountpoint: Some("/srv/v/a/b".into()),
         mounted,
@@ -27,6 +28,7 @@ fn parse_list____zfs_output____rows() {
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[2].name, "tank/v/orders/data");
     assert_eq!(rows[2].refquota, 64 << 20);
+    assert_eq!(rows[2].referenced, 65536);
     assert!(rows[2].mounted);
     assert!(!rows[3].mounted);
 }
@@ -34,12 +36,12 @@ fn parse_list____zfs_output____rows() {
 #[test]
 fn parse_list____a_short_line_or_a_bad_size____refused() {
     assert!(parse_list("tank/v\t1\t0\n").is_err());
-    assert!(parse_list("tank/v\tlots\t0\t/srv\tyes\n").is_err());
+    assert!(parse_list("tank/v\tlots\t1\t0\t/srv\tyes\n").is_err());
 }
 
 #[test]
 fn parse_list____no_mountpoint____none() {
-    let rows = parse_list("tank/v\t1\t0\tnone\tno\n").unwrap();
+    let rows = parse_list("tank/v\t1\t1\t0\tnone\tno\n").unwrap();
 
     assert_eq!(rows[0].mountpoint, None);
 }

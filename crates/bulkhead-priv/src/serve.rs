@@ -450,6 +450,7 @@ impl Helper {
                         app: app.to_string(),
                         volume: volume.to_string(),
                         used: r.used,
+                        referenced: r.referenced,
                         refquota: r.refquota,
                         mountpoint: r.mountpoint.clone().unwrap_or_default(),
                         mounted: r.mounted,

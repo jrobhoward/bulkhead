@@ -1,10 +1,17 @@
 //! Volumes (ROADMAP ZV1): where each volume a manifest names comes from,
 //! a directory of node config's `[volumes]` or, with `[volumes.zfs]`, the
 //! app's own ZFS dataset the privileged helper makes; and the operator's
-//! `bulkhead volume list` and `destroy`.
+//! `bulkhead volume list` and `destroy`; and the volumes' use as metrics
+//! (ROADMAP ZV2), kept from the helper's list and refreshed every
+//! [`REFRESH`] and after each change, since a scrape cannot wait on it.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use bulkhead_priv_wire::VolumeRow;
 
 use bulkhead_bundle::manifest::AppManifest;
 
@@ -14,6 +21,88 @@ use super::Node;
 use crate::api::{Done, VolumeInfo};
 use crate::node::config::{NodeConfig, Volumes};
 use crate::node::error::NodeError;
+
+/// How often the kept ZFS volumes are read again from the helper (each
+/// read runs `zfs list`, about 9 ms on a Raspberry Pi 5).
+pub(crate) const REFRESH: Duration = Duration::from_secs(30);
+
+/// The ZFS volumes as the helper last listed them, for metrics.
+pub(crate) type Kept = Arc<Mutex<Vec<VolumeRow>>>;
+
+/// Read the volumes from the helper into `kept`; a failure keeps the last
+/// list and is logged.
+pub(crate) async fn refresh(rt: &bulkhead_host::Runtime, kept: &Kept) {
+    match rt.volumes().await {
+        Ok((_, rows)) => *kept.lock().unwrap_or_else(PoisonError::into_inner) = rows,
+        Err(e) => tracing::warn!(error = %e, "ZFS volumes not listed for metrics"),
+    }
+}
+
+/// With `[volumes.zfs]`, keep `kept` fresh every [`REFRESH`] until `stop`.
+pub(crate) fn start_refresh(
+    config: &NodeConfig,
+    rt: &bulkhead_host::Runtime,
+    kept: &Kept,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) {
+    if config.volumes.zfs.is_none() {
+        return;
+    }
+    let (rt, kept) = (rt.clone(), kept.clone());
+    tokio::spawn(async move {
+        loop {
+            refresh(&rt, &kept).await;
+            tokio::select! {
+                _ = stop.wait_for(|s| *s) => return,
+                () = tokio::time::sleep(REFRESH) => {}
+            }
+        }
+    });
+}
+
+/// A metric family: its name, its help, and its value from a row.
+type Family = (&'static str, &'static str, fn(&VolumeRow) -> u64);
+
+/// The kept volumes in the Prometheus text format: what each refers to
+/// (what its quota counts), what it uses with its snapshots, and its
+/// quota, labelled by app and volume. Nothing without a volume.
+pub(crate) fn metrics(kept: &Kept) -> String {
+    let rows = kept.lock().unwrap_or_else(PoisonError::into_inner);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut text = String::new();
+    let families: [Family; 3] = [
+        (
+            "bulkhead_volume_referenced_bytes",
+            "Bytes a ZFS volume refers to, which its quota counts.",
+            |r| r.referenced,
+        ),
+        (
+            "bulkhead_volume_used_bytes",
+            "Bytes a ZFS volume uses, its snapshots included.",
+            |r| r.used,
+        ),
+        (
+            "bulkhead_volume_quota_bytes",
+            "A ZFS volume's quota in bytes.",
+            |r| r.refquota,
+        ),
+    ];
+    for (name, help, value) in families {
+        let _ = writeln!(text, "# HELP {name} {help}\n# TYPE {name} gauge");
+        for r in rows.iter() {
+            let _ = writeln!(
+                text,
+                "{name}{{app=\"{}\",volume=\"{}\"}} {}",
+                r.app,
+                r.volume,
+                value(r)
+            );
+        }
+    }
+    text
+}
 
 /// Where a volume comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +225,7 @@ impl Node {
                 app: None,
                 path: dir.display().to_string(),
                 used: None,
+                referenced: None,
                 quota: None,
                 mounted: true,
                 deployed: None,
@@ -145,6 +235,12 @@ impl Node {
             return Ok(out);
         }
         let (_, rows) = self.rt.volumes().await.map_err(NodeError::Internal)?;
+        rows.clone_into(
+            &mut self
+                .volume_rows
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
         let deployed = |app: &str| self.st().desired.apps.contains_key(app);
         out.extend(rows.into_iter().map(|r| VolumeInfo {
             deployed: Some(deployed(&r.app)),
@@ -153,6 +249,7 @@ impl Node {
             app: Some(r.app),
             path: r.mountpoint,
             used: Some(r.used),
+            referenced: Some(r.referenced),
             quota: Some(r.refquota),
             mounted: r.mounted,
         }));
@@ -190,6 +287,7 @@ impl Node {
             .map_err(NodeError::Conflict)?;
         self.audit
             .record("volume_destroyed", json!({ "app": app, "volume": volume }));
+        refresh(&self.rt, &self.volume_rows).await;
         Ok(Done {
             message: format!("{app}'s volume {volume} destroyed"),
         })

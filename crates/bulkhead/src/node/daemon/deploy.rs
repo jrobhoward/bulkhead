@@ -382,6 +382,9 @@ impl Node {
             .map_err(NodeError::Invalid)?;
         // The ungranted app's ZFS volumes, never made.
         spec.preopens.retain(|p| !p.host.as_os_str().is_empty());
+        if files && self.config.volumes.zfs.is_some() {
+            super::volumes::refresh(&self.rt, &self.volume_rows).await;
+        }
         if let Some(p) = spec
             .preopens
             .iter()

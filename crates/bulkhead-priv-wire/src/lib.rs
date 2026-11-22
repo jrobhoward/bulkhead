@@ -187,6 +187,8 @@ pub struct VolumeRow {
     pub volume: String,
     /// Bytes used, its snapshots included.
     pub used: u64,
+    /// Bytes it refers to, which its quota counts (snapshots not).
+    pub referenced: u64,
     /// Its quota (`refquota`) in bytes; 0 for none.
     pub refquota: u64,
     /// Where it is mounted, or would be.
@@ -540,6 +542,7 @@ impl Reply {
                     w.str(&row.app);
                     w.str(&row.volume);
                     w.u64(row.used);
+                    w.u64(row.referenced);
                     w.u64(row.refquota);
                     w.str(&row.mountpoint);
                     w.u8(u8::from(row.mounted));
@@ -584,6 +587,7 @@ impl Reply {
                             app: r.str()?,
                             volume: r.str()?,
                             used: r.u64()?,
+                            referenced: r.u64()?,
                             refquota: r.u64()?,
                             mountpoint: r.str()?,
                             mounted: r.bool()?,

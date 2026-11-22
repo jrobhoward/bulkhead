@@ -29,6 +29,8 @@ pub struct Row {
     pub name: String,
     /// Bytes used, snapshots included.
     pub used: u64,
+    /// Bytes it refers to, which `refquota` counts.
+    pub referenced: u64,
     /// Its quota in bytes; 0 for none.
     pub refquota: u64,
     /// Where it mounts; `None` for `none`, `legacy` or `-`.
@@ -48,7 +50,7 @@ pub fn list_args(dataset: &str) -> Vec<String> {
         "-t",
         "filesystem",
         "-o",
-        "name,used,refquota,mountpoint,mounted",
+        "name,used,referenced,refquota,mountpoint,mounted",
         dataset,
     ]
     .map(String::from)
@@ -59,7 +61,7 @@ pub fn list_args(dataset: &str) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// A line without five fields, or a size that is not a number.
+/// A line without six fields, or a size that is not a number.
 pub fn parse_list(out: &str) -> Result<Vec<Row>, String> {
     let num = |s: &str| -> Result<u64, String> {
         if s == "-" || s == "none" {
@@ -73,12 +75,13 @@ pub fn parse_list(out: &str) -> Result<Vec<Row>, String> {
         .filter(|l| !l.is_empty())
         .map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            let [name, used, refquota, mountpoint, mounted] = f[..] else {
+            let [name, used, referenced, refquota, mountpoint, mounted] = f[..] else {
                 return Err(format!("zfs list: {} fields in {line:?}", f.len()));
             };
             Ok(Row {
                 name: name.to_string(),
                 used: num(used)?,
+                referenced: num(referenced)?,
                 refquota: num(refquota)?,
                 mountpoint: (!matches!(mountpoint, "-" | "none" | "legacy"))
                     .then(|| mountpoint.to_string()),

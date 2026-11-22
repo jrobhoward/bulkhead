@@ -8,6 +8,12 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- ZFS volumes' use as metrics (ROADMAP ZV2): `bulkhead_volume_referenced_bytes`
+  (what the quota counts), `bulkhead_volume_used_bytes` (with snapshots)
+  and `bulkhead_volume_quota_bytes`, labelled `app` and `volume`, read
+  from the privileged helper every 30 s and after each deploy or destroy.
+  `bulkhead volume list` shows what the quota counts as `USED`, and the
+  use with snapshots beside it.
 - ZFS volumes (ROADMAP ZV1, spike S35): with `[priv]` and node config's
   `[volumes.zfs]` (`parent`, `max_quota`), a manifest volume that
   `[volumes]` does not name is the app's own dataset,

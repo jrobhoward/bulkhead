@@ -83,3 +83,29 @@ fn sources____against_the_rules____refused_saying_why(
 
     assert!(err.contains(says), "{err}");
 }
+
+#[test]
+fn metrics____two_volumes____three_families_labelled_by_app_and_volume() {
+    let row = |app: &str, volume: &str| VolumeRow {
+        app: app.into(),
+        volume: volume.into(),
+        used: 3,
+        referenced: 2,
+        refquota: 64,
+        mountpoint: "/srv/v".into(),
+        mounted: true,
+    };
+    let kept: Kept = Arc::new(Mutex::new(vec![row("orders", "data"), row("logs", "a")]));
+
+    let text = metrics(&kept);
+
+    assert!(text.contains("# TYPE bulkhead_volume_referenced_bytes gauge\n"));
+    assert!(text.contains("bulkhead_volume_referenced_bytes{app=\"orders\",volume=\"data\"} 2\n"));
+    assert!(text.contains("bulkhead_volume_used_bytes{app=\"logs\",volume=\"a\"} 3\n"));
+    assert!(text.contains("bulkhead_volume_quota_bytes{app=\"orders\",volume=\"data\"} 64\n"));
+}
+
+#[test]
+fn metrics____no_volumes____nothing() {
+    assert_eq!(metrics(&Kept::default()), "");
+}
