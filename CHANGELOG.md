@@ -203,6 +203,9 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- The CLI no longer panics when its output's reader has gone
+  (`bulkhead ps | head -n 1`, `bulkhead logs -f app | grep -q ...`):
+  it ends quietly with status 0, as Unix tools do on `EPIPE`.
 - A restarted HTTP ingress driver (a crash, or a certificate replaced by
   rename, ROADMAP DA2b) answered `404 no route` to the first requests,
   those queued while it restarted among them, until the node's route

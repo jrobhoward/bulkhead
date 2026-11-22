@@ -376,3 +376,25 @@ async fn node____debuggable____dumpable_and_no_new_privs() {
     assert!(environ_readable, "the node's environment was not readable");
     assert_eq!(no_new_privs, "NoNewPrivs:\t1");
 }
+
+/// A reader that has gone (`bulkhead ... | head -n 1`) ends the CLI with
+/// status 0 and no panic, as `EPIPE` ends a Unix tool.
+#[test]
+fn cli____stdout_closed____ends_quietly() {
+    use std::process::{Command, Stdio};
+    let dir = TempDir::new().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bulkhead"))
+        .args(["keygen", "--no-password"])
+        .arg(dir.path().join("k"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+
+    let out = child.wait_with_output().unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{:?}: {stderr}", out.status);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}

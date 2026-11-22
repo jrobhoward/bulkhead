@@ -616,17 +616,36 @@ fn remote_client(
     anyhow::bail!("this build of bulkhead has no remote admin client (cargo feature `tls`)")
 }
 
+/// Write `text` to stdout, then flush. A reader that has gone (`bulkhead
+/// ps | head -n 1`) ends the CLI quietly with status 0, as Unix tools end on
+/// `EPIPE`, instead of the panic `println!` gives.
+fn out(text: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        other => Ok(other?),
+    }
+}
+
+/// [`out`] with a newline.
+fn outln(text: &str) -> anyhow::Result<()> {
+    out(&format!("{text}\n"))
+}
+
 fn print<T: Serialize>(
     json: bool,
     value: &T,
     text: impl FnOnce(&T) -> String,
 ) -> anyhow::Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(value)?);
+        outln(&serde_json::to_string_pretty(value)?)
     } else {
-        println!("{}", text(value));
+        outln(&text(value))
     }
-    Ok(())
 }
 
 async fn read(path: &PathBuf) -> anyhow::Result<Vec<u8>> {
@@ -639,16 +658,13 @@ async fn read(path: &PathBuf) -> anyhow::Result<Vec<u8>> {
 fn make_bundle(json: bool, request: &bundle::BundleRequest<'_>) -> anyhow::Result<()> {
     let b = bundle::bundle(request)?;
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "path": b.path, "app": b.name, "version": b.version,
-                "signer": b.public_key, "priv_files": b.priv_files,
-                "platforms": b.platforms,
-            }))?
-        );
+        outln(&serde_json::to_string_pretty(&serde_json::json!({
+            "path": b.path, "app": b.name, "version": b.version,
+            "signer": b.public_key, "priv_files": b.priv_files,
+            "platforms": b.platforms,
+        }))?)?;
     } else {
-        println!(
+        outln(&format!(
             "wrote {} ({} {} for {}, {} priv file(s), signed by {})",
             b.path.display(),
             b.name,
@@ -656,7 +672,7 @@ fn make_bundle(json: bool, request: &bundle::BundleRequest<'_>) -> anyhow::Resul
             b.platforms.join(", "),
             b.priv_files,
             b.public_key
-        );
+        ))?;
     }
     Ok(())
 }
@@ -668,15 +684,12 @@ async fn follow<T: Serialize + serde::de::DeserializeOwned>(
     mut records: bulkhead::api::Follow<T>,
     text: impl Fn(&T) -> String,
 ) -> anyhow::Result<()> {
-    use std::io::Write;
-
     while let Some(record) = records.next().await? {
         if json {
-            println!("{}", serde_json::to_string(&record)?);
+            outln(&serde_json::to_string(&record)?)?;
         } else {
-            println!("{}", text(&record));
+            outln(&text(&record))?;
         }
-        std::io::stdout().flush()?;
     }
     eprintln!("bulkhead: the node ended the stream");
     Ok(())
@@ -687,8 +700,6 @@ async fn follow<T: Serialize + serde::de::DeserializeOwned>(
 /// when it is back. Ends only on an error from the node itself (no
 /// `[failover]`).
 async fn watch_failover(client: &Client, json: bool) -> anyhow::Result<()> {
-    use std::io::Write;
-
     use bulkhead::api::ClientError;
 
     let mut after = None;
@@ -722,8 +733,7 @@ async fn watch_failover(client: &Client, json: bool) -> anyhow::Result<()> {
             Err(e) => return Err(e.into()),
         };
         if line != last {
-            println!("{line}");
-            std::io::stdout().flush()?;
+            outln(&line)?;
             last = line;
         }
     }
@@ -743,14 +753,12 @@ fn cluster_command(action: ClusterCommand) -> anyhow::Result<()> {
         ClusterCommand::Keygen { path } => cli::cluster::keygen(&path)?,
         ClusterCommand::Pubkey { path } => cli::cluster::pubkey(&path)?,
     };
-    println!("{public}");
-    Ok(())
+    outln(&public.to_string())
 }
 
 /// `bulkhead metrics`: the Prometheus text as the node renders it.
 async fn print_metrics(client: &Client) -> anyhow::Result<()> {
-    print!("{}", client.metrics().await?);
-    Ok(())
+    out(&client.metrics().await?)
 }
 
 async fn run(client: &Client, json: bool, command: Command) -> anyhow::Result<()> {
@@ -780,8 +788,7 @@ async fn run(client: &Client, json: bool, command: Command) -> anyhow::Result<()
             no_password,
         } => {
             let public = bundle::keygen(&prefix, no_password)?;
-            println!("{public}");
-            Ok(())
+            outln(&public)
         }
         #[cfg(feature = "node")]
         Command::Cluster { action } => cluster_command(action),
@@ -931,8 +938,7 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
             let (reply_type, reply) = client
                 .call_to(&target, &content_type, body, timeout_ms)
                 .await?;
-            println!("{}", format::reply(&reply_type, &reply));
-            Ok(())
+            outln(&format::reply(&reply_type, &reply))
         }
         _ => anyhow::bail!("not a runtime command"),
     }
