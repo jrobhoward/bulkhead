@@ -203,6 +203,19 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- The privileged helper's root tests on FreeBSD no longer fail now and
+  then (ROADMAP "Test timing", found in DA4, 2026-11-15). Two causes,
+  both in the tests: each test's helper redefined the same devfs ruleset
+  at its start (`delset`, then the rules), hiding `/dev/null` from
+  another helper's new jail for a moment (`stdin: No such file or
+  directory`), so each now has a ruleset of its own; and the
+  `pids_max` test's threads ran into the jail's `vmemoryuse` before its
+  `nthr`, where FreeBSD's jemalloc faults (SIGSEGV) as a new thread
+  cannot map an arena, so that instance has room for them. 25 runs of
+  the suite four at a time and 5 one at a time pass on the FreeBSD VM.
+  And `share____writable____top_only_the_apps` no longer fails for a
+  user whose group number differs from its user's (the Raspberry Pi 5's).
+
 - The soak's failover check reported a false overlap (found by FB4's
   first hour on FreeBSD): when a node's lease lapsed during a run and
   came back without the gate stopping it, a callback cut off at the end

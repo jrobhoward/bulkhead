@@ -595,7 +595,19 @@ async fn helper____processes_and_threads____held_at_pids_max() {
     let rt = runtime_with(&started, |n| n.pids_max = 24);
     let app = program(&started, &rt);
     let forking = rt.spawn(&app, patient("alpha")).unwrap();
-    let threading = rt.spawn(&app, patient("alpha")).unwrap();
+    // Room in its address space for the threads: on FreeBSD each new thread
+    // may take a jemalloc arena, whose mapping the jail's `vmemoryuse`
+    // (64 MiB by default) refuses, and jemalloc then faults in the thread's
+    // start (SIGSEGV) before `nthr`, the limit this tests, is reached.
+    let threading = rt
+        .spawn(
+            &app,
+            InstanceSpec {
+                memory_max: 512 << 20,
+                ..patient("alpha")
+            },
+        )
+        .unwrap();
 
     let forks = ask(&forking, "forks 40 0").await;
     let threads = ask(&threading, "threads 40").await;

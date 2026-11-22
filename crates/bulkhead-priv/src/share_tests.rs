@@ -102,9 +102,18 @@ fn share____writable____top_only_the_apps() {
     std::fs::write(top.join("old"), b"x").unwrap();
     set(&top, 0o700);
     set(&top.join("old"), 0o600);
+    // A writable top becomes `app:app`, one number for both as the helper's
+    // apps have: here the test's own user, with its own number as a group
+    // it may give (its primary group on most machines; not on the Raspberry
+    // Pi 5, whose `jhoward` is 1000:1003 and in group 1000 too).
     let (uid, gid) = me();
+    let groups = rustix::process::getgroups().unwrap();
+    if gid != uid && !groups.iter().any(|g| g.as_raw() == uid) {
+        eprintln!("skipped: user {uid} is not in group {uid}, which an unprivileged chown needs");
+        return;
+    }
 
-    share(&top, uid, gid, true).unwrap();
+    share(&top, uid, uid, true).unwrap();
 
     assert_eq!(mode(&top), 0o770);
     assert_eq!(mode(&top.join("old")), 0o600);

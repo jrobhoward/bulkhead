@@ -16,6 +16,13 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU16, Ordering};
+
+/// Each test's helper defines a devfs ruleset of its own (FreeBSD): a
+/// helper redefines its ruleset at its start (`delset`, then the rules),
+/// so helpers sharing one hid `/dev/null` from each other's new jails for
+/// a moment (`stdin: No such file or directory`, 2026-11-21).
+static RULESET: AtomicU16 = AtomicU16::new(4300);
 
 /// Whether the helper's tests run: as root, with `BULKHEAD_PRIV_TESTS=1`.
 pub fn enabled() -> bool {
@@ -158,11 +165,13 @@ pub fn start(runner: &Path) -> Started {
     let mut text = format!(
         "node = /bin/false\nnode_args = \nnode_uid = {node_uid}\nnode_gid = {node_uid}\n\
          runner = {}\nuids = {first_uid}-{}\nstate = {}\nbinds = {}\n\
-         memory_max = 1GiB\npids_max = 256\nports = 81\nunconfined = loose\n",
+         memory_max = 1GiB\npids_max = 256\nports = 81\nunconfined = loose\n\
+         devfs_ruleset = {}\n",
         runner.display(),
         first_uid + 99,
         state.display(),
         dir.path().display(),
+        RULESET.fetch_add(1, Ordering::Relaxed),
     );
     if let Some(cg) = &cgroup {
         text.push_str(&format!("cgroup = {}\n", cg.display()));
