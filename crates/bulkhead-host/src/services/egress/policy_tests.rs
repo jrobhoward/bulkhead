@@ -140,3 +140,49 @@ fn within____entry_outside_ceiling____names_it() {
 fn guarded____address____loopback_and_link_local_only(#[case] ip: &str, #[case] expected: bool) {
     assert_eq!(guarded(ip.parse().unwrap()), expected);
 }
+
+#[rstest]
+#[case::ten("10.1.2.3", true)]
+#[case::rfc1918_172("172.20.0.1", true)]
+#[case::outside_172("172.32.0.1", false)]
+#[case::home("192.168.1.1", true)]
+#[case::cgnat("100.64.0.1", true)]
+#[case::ula("fd00::1", true)]
+#[case::mapped("::ffff:10.0.0.1", true)]
+#[case::public("93.184.216.34", false)]
+#[case::public_v6("2606:4700::1", false)]
+fn denied____default_ranges____private_addresses_only(#[case] ip: &str, #[case] expected: bool) {
+    let deny = parse_deny(&crate::config::DEFAULT_EGRESS_DENY.map(String::from)).unwrap();
+
+    assert_eq!(denied(ip.parse().unwrap(), &deny), expected);
+}
+
+#[test]
+fn denied____empty_list____nothing() {
+    assert!(!denied("10.0.0.1".parse().unwrap(), &[]));
+}
+
+#[test]
+fn parse_deny____not_a_cidr____refused_naming_it() {
+    let err = parse_deny(&["10.0.0.0".to_string()]).unwrap_err();
+
+    assert!(err.contains("10.0.0.0"), "{err}");
+}
+
+#[rstest]
+#[case("http://proxy.internal:3128", Some(("proxy.internal", 3128)))]
+#[case("http://10.0.0.9:8080", Some(("10.0.0.9", 8080)))]
+#[case("http://[fd00::9]:3128", Some(("fd00::9", 3128)))]
+#[case("https://proxy:3128", None)]
+#[case("http://user:pw@proxy:3128", None)] // secret-scan: allow (refused: no userinfo)
+#[case("http://proxy:3128/x", None)]
+#[case("http://proxy", None)]
+#[case("http://:3128", None)]
+fn parse_proxy____url____host_and_port_or_refused(
+    #[case] url: &str,
+    #[case] expected: Option<(&str, u16)>,
+) {
+    let got = parse_proxy(url).ok();
+
+    assert_eq!(got, expected.map(|(h, p)| (h.to_string(), p)));
+}

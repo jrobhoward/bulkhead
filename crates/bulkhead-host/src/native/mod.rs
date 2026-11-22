@@ -24,6 +24,8 @@ pub(crate) mod memory;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) mod os;
 pub(crate) mod port;
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "egress"))]
+pub(crate) mod proxy;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) mod sender;
 #[cfg(target_os = "linux")]

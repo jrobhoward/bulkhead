@@ -59,3 +59,60 @@ fn roots____not_a_certificate____refused() {
 
     assert!(config.roots().is_err());
 }
+
+#[test]
+fn identity____none_given____none() {
+    let config = Config::from_args(args("").as_bytes()).unwrap();
+
+    let id = config
+        .identity(|_| unreachable!("nothing to read"))
+        .unwrap();
+
+    assert!(id.is_none());
+}
+
+#[test]
+fn identity____a_certificate_and_its_key____read_through_the_reader() {
+    let made = rcgen::generate_simple_self_signed(vec!["client".to_string()]).unwrap();
+    let (cert_pem, key_pem) = (made.cert.pem(), made.signing_key.serialize_pem());
+    let config = Config::from_args(
+        args(r#", "client_cert": "/driver/c.pem", "client_key": "/driver/k.pem""#).as_bytes(),
+    )
+    .unwrap();
+
+    let id = config
+        .identity(|path| match path {
+            "/driver/c.pem" => Ok(cert_pem.clone().into_bytes()),
+            "/driver/k.pem" => Ok(key_pem.clone().into_bytes()),
+            other => panic!("read {other}"),
+        })
+        .unwrap();
+
+    let (chain, _key) = id.unwrap();
+    assert_eq!(chain.len(), 1);
+}
+
+#[test]
+fn identity____only_a_certificate_or_not_a_key____refused() {
+    let half = Config::from_args(args(r#", "client_cert": "/driver/c.pem""#).as_bytes()).unwrap();
+    let both = Config::from_args(
+        args(r#", "client_cert": "/driver/c.pem", "client_key": "/driver/k.pem""#).as_bytes(),
+    )
+    .unwrap();
+    let made = rcgen::generate_simple_self_signed(vec!["client".to_string()]).unwrap();
+    let cert_pem = made.cert.pem();
+
+    let half = half.identity(|_| Ok(Vec::new())).unwrap_err();
+    let bad_key = both
+        .identity(|p| {
+            Ok(if p.ends_with("c.pem") {
+                cert_pem.clone().into_bytes()
+            } else {
+                b"not a key".to_vec()
+            })
+        })
+        .unwrap_err();
+
+    assert!(half.contains("go together"), "{half}");
+    assert!(bad_key.contains("client key"), "{bad_key}");
+}

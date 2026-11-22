@@ -1047,6 +1047,79 @@ async fn egress____inside_and_outside_the_node_ceiling____fetches_or_refused() {
     n.shutdown().await;
 }
 
+/// A CA certificate as PEM, for an egress CA file.
+fn ca_pem() -> String {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    rcgen::CertifiedIssuer::self_signed(params, key)
+        .unwrap()
+        .pem()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn egress____ca_file_replaced____reload_tls_restarts_the_driver_once() {
+    let address = hello_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let policy = dir.path().join("policy.toml");
+    std::fs::write(
+        &policy,
+        "[apps.fetcher]\ngrant = [\"bulkhead:http-egress\"]\n",
+    )
+    .unwrap();
+    let ca_file = dir.path().join("ca.pem");
+    std::fs::write(&ca_file, ca_pem()).unwrap();
+    let mut n = TestNode::start_native(&format!(
+        "policy = {policy:?}\n[egress]\nsystem_roots = false\nca_file = {ca_file:?}\n"
+    ))
+    .await;
+    let manifest = fast(json!({ "capabilities": {
+        "bulkhead:config": {},
+        "bulkhead:keyvalue": {},
+        "bulkhead:groups": {},
+        "bulkhead:secrets": { "secrets": [] },
+        "bulkhead:sql": {},
+        "bulkhead:metrics": { "prefix": "fetcher" },
+        "bulkhead:http-egress": { "allow": [format!("http://{address}")] }
+    } }));
+    n.client
+        .deploy(app_bundle(
+            &n.key,
+            "fetcher",
+            "1.0.0",
+            &native_sdk(),
+            manifest,
+        ))
+        .await
+        .unwrap();
+    let driver_pid = |ps: Vec<bulkhead::api::InstanceInfo>| {
+        ps.into_iter()
+            .find(|i| i.app == "bulkhead-egress-fetcher")
+            .map(|i| i.pid)
+    };
+    let before = driver_pid(n.client.ps().await.unwrap());
+
+    let unchanged = n.client.reload_tls().await.unwrap();
+    let same = driver_pid(n.client.ps().await.unwrap());
+    std::fs::write(&ca_file, ca_pem()).unwrap();
+    n.client.reload_tls().await.unwrap();
+    let mut restarted = None;
+    for _ in 0..50 {
+        restarted = driver_pid(n.client.ps().await.unwrap());
+        if restarted.is_some() && restarted != before {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let fetched = call(&n, "fetcher", &format!("fetch GET http://{address}/x")).await;
+
+    assert!(before.is_some());
+    assert_eq!(same, before, "nothing changed: {}", unchanged.message);
+    assert_ne!(restarted, before, "the driver restarted with the new roots");
+    assert_eq!(fetched, "200 hi");
+    n.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn egress____an_app_name_too_long_for_its_driver____refused() {
     let mut n = TestNode::start_native("").await;

@@ -66,6 +66,7 @@ struct Start {
     jobs: mpsc::UnboundedReceiver<Job>,
     config: Config,
     metrics: Option<Metrics>,
+    identity: Option<crate::config::Identity>,
 }
 
 impl App for Egress {
@@ -73,6 +74,9 @@ impl App for Egress {
         let config = Config::from_args(args)?;
         // Refused here rather than on the first request.
         config.roots()?;
+        // The app's client certificate (ROADMAP DA4b), from the files the
+        // node bound into this root.
+        let identity = config.identity(bulkhead_sdk::files::read)?;
         let mut sender = bulkhead_native::app::Ctx::current()
             .sender()
             .map_err(|e| format!("sender channel: {e:?}"))?;
@@ -83,6 +87,7 @@ impl App for Egress {
             jobs: jobs_rx,
             config,
             metrics,
+            identity,
         };
         std::thread::Builder::new()
             .name("egress".into())
@@ -148,6 +153,7 @@ async fn run(start: Start) {
         mut jobs,
         config,
         metrics,
+        identity,
     } = start;
     let sender = match AsyncSender::new(sender) {
         Ok(s) => s,
@@ -174,7 +180,11 @@ async fn run(start: Start) {
             }
         });
     }
-    let pool = match Pool::new(&config, Connector::new(wanted, config.connect_timeout())) {
+    let pool = match Pool::new(
+        &config,
+        Connector::new(wanted, config.connect_timeout()),
+        identity,
+    ) {
         Ok(pool) => std::rc::Rc::new(pool),
         Err(e) => {
             bulkhead_sdk::error!("egress for {}: {e}", config.app);

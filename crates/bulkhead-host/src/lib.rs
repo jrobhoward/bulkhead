@@ -70,9 +70,10 @@ pub use bulkhead_bundle::manifest::{RestartType, Strategy};
 /// Address networks (`10.0.0.0/24`), for extensions' node configuration.
 pub use bulkhead_bundle::manifest::{cidr_contains, parse_cidr};
 pub use config::{
-    Blobs, DriverEndpoint, DriverListener, DriverProfile, EGRESS_DRIVER_PREFIX, Egress,
-    HostObjectRequest, HostObjects, ModbusDrivers, NativeConfig, RuntimeConfig, SQL_DRIVER_PREFIX,
-    SecretSource, SharedBucket, SqlDatasource, SqlTls, egress_driver_app,
+    Blobs, DEFAULT_EGRESS_DENY, DriverEndpoint, DriverListener, DriverProfile,
+    EGRESS_DRIVER_PREFIX, Egress, EgressIdentity, HostObjectRequest, HostObjects, ModbusDrivers,
+    NativeConfig, RuntimeConfig, SQL_DRIVER_PREFIX, SecretSource, SharedBucket, SqlDatasource,
+    SqlTls, egress_driver_app,
 };
 pub use error::HostError;
 pub use formats::{FIRST_FORMATS, FinalizeRefused, Finalized};

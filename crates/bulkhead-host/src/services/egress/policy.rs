@@ -219,6 +219,62 @@ pub(crate) fn guarded(ip: IpAddr) -> bool {
     }
 }
 
+/// A deny list ([`crate::config::Egress::deny`]) parsed.
+pub type DenyList = Vec<(IpAddr, u8)>;
+
+/// `deny`'s entries as networks.
+///
+/// # Errors
+///
+/// An entry that is not a CIDR (`10.0.0.0/8`, `fc00::/7`).
+pub fn parse_deny(deny: &[String]) -> Result<DenyList, String> {
+    deny.iter()
+        .map(|d| {
+            bulkhead_bundle::manifest::parse_cidr(d)
+                .ok_or_else(|| format!("deny entry {d:?} is not a CIDR (10.0.0.0/8, fc00::/7)"))
+        })
+        .collect()
+}
+
+/// Whether a name resolving to `ip` is refused by `deny` (ROADMAP DA4b):
+/// `ip`, or the IPv4 address an IPv4-mapped IPv6 one carries, is inside one
+/// of its networks.
+#[cfg_attr(not(feature = "egress"), allow(dead_code))]
+pub(crate) fn denied(ip: IpAddr, deny: &[(IpAddr, u8)]) -> bool {
+    let mapped = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
+    deny.iter().any(|net| {
+        bulkhead_bundle::manifest::cidr_contains(*net, ip)
+            || mapped.is_some_and(|m| bulkhead_bundle::manifest::cidr_contains(*net, m))
+    })
+}
+
+/// The proxy's host and port from `http://host:port` (ROADMAP DA4b); an
+/// IPv6 address in brackets.
+///
+/// # Errors
+///
+/// Another scheme, a user, a path, or no port.
+pub fn parse_proxy(proxy: &str) -> Result<(String, u16), String> {
+    let bad = || format!("proxy {proxy:?} is not http://host:port");
+    let rest = proxy.strip_prefix("http://").ok_or_else(bad)?;
+    if rest.contains(['@', '/', '?', '#']) {
+        return Err(bad());
+    }
+    let (host, port) = rest.rsplit_once(':').ok_or_else(bad)?;
+    let port: u16 = port.parse().map_err(|_| bad())?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.is_empty() || port == 0 {
+        return Err(bad());
+    }
+    Ok((host.to_string(), port))
+}
+
 #[cfg(test)]
 #[path = "policy_tests.rs"]
 mod policy_tests;

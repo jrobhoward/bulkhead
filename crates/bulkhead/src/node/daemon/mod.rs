@@ -426,6 +426,18 @@ impl Node {
             Ok(false) => {}
             Err(e) => failed.push(format!("resolver: {e}")),
         }
+        match self.reload_egress().await {
+            Ok(apps) if !apps.is_empty() => {
+                tracing::info!(
+                    ?apps,
+                    "egress drivers restarted with their roots and identities"
+                );
+                self.audit
+                    .record("egress_restarted", json!({ "apps": apps }));
+            }
+            Ok(_) => {}
+            Err(e) => failed.push(format!("egress: {e}")),
+        }
         #[cfg(feature = "tls")]
         if let Err(e) = self.reload_operators().await {
             failed.push(e.to_string());

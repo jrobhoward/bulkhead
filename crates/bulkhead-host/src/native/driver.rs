@@ -151,9 +151,21 @@ pub(crate) async fn connect_to(
         };
         let timeout = egress.config().connect_timeout;
         let deadline = tokio::time::Instant::now() + timeout;
+        // Through a proxy (ROADMAP DA4b) the node tunnels to the allowed
+        // destination itself; the proxy resolves its name.
+        if let Some((proxy_host, proxy_port)) = egress.proxy() {
+            let addrs = rt
+                .services
+                .names()
+                .resolve(proxy_host, *proxy_port, timeout)
+                .await
+                .map_err(|e| NetError::Other(format!("the egress proxy: {e}")))?;
+            let stream = first_to_accept(proxy_host, addrs, deadline).await?;
+            return super::proxy::tunnel(stream, host, port, deadline).await;
+        }
         let addrs = match reach {
             Reach::Address(ip) => vec![std::net::SocketAddr::new(ip, port)],
-            Reach::Name { allow_loopback } => {
+            Reach::Name => {
                 let addrs: Vec<_> = rt
                     .services
                     .names()
@@ -161,7 +173,7 @@ pub(crate) async fn connect_to(
                     .await
                     .map_err(|e| NetError::Other(e.to_string()))?
                     .into_iter()
-                    .filter(|a| allow_loopback || !crate::services::egress::guarded(a.ip()))
+                    .filter(|a| !egress.refused(a.ip()))
                     .collect();
                 if addrs.is_empty() {
                     return Err(NetError::Denied);

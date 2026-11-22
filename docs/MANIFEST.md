@@ -373,6 +373,12 @@ allow = ["*.internal", "https://api.example.com"]  # the most any app may reach 
 system_roots = true                    # trust the OS root certificates (SSL_CERT_FILE and SSL_CERT_DIR are read)
 ca_file = "/etc/bulkhead/egress-ca.pem" # more CAs, PEM (a private CA)
 allow_loopback = false                 # names resolving to loopback or link-local (169.254.x.x, fe80::) are refused
+deny = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]  # the default: names resolving
+                                       # into these are refused (ROADMAP DA4b); [] for none; an allow entry's address is reached
+#proxy = "http://proxy.internal:3128"  # every request through this proxy: the node sends CONNECT for each allowed destination
+#[egress.identities.shop]              # the app shop's client certificate, presented by its driver when a server asks
+#cert = "/etc/bulkhead/shop-client.pem"
+#key = "/etc/bulkhead/shop-client.key"  # bound read-only at /driver/ in the driver's root, never passed as text
 connect_timeout_ms = 10000
 first_byte_timeout_ms = 30000          # to the response headers; an app's own timeout may only be shorter
 between_bytes_timeout_ms = 30000       # between chunks of a response body

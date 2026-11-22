@@ -108,6 +108,39 @@ impl Node {
         Ok(())
     }
 
+    /// After egress's roots were read again (ROADMAP DA4b): restart each
+    /// running egress driver whose arguments changed (the roots), or that
+    /// holds an identity, whose files it reads at its start. Requests in
+    /// flight in a restarted driver are lost. The apps whose drivers
+    /// restarted.
+    ///
+    /// # Errors
+    ///
+    /// The roots could not be read (the drivers keep theirs), or a driver
+    /// did not start again.
+    pub(super) async fn reload_egress(&self) -> Result<Vec<String>, String> {
+        self.rt.reload_egress_roots()?;
+        let mut restarted = Vec::new();
+        for name in self.apps.names() {
+            let driver = bulkhead_host::egress_driver_app(&name);
+            let (Some(running), Some(app)) = (self.apps.app(&driver), self.apps.app(&name)) else {
+                continue;
+            };
+            let Some(args) = self.rt.egress_driver_args(&name) else {
+                continue;
+            };
+            let changed = running.deployment().manifest.spec.lifecycle.start_args != Some(args);
+            if changed || self.config.egress.identities.contains_key(&name) {
+                self.stop_egress_driver(&name).await;
+                self.ensure_egress_driver(&name, &app.deployment())
+                    .await
+                    .map_err(|e| format!("{driver}: {e}"))?;
+                restarted.push(name);
+            }
+        }
+        Ok(restarted)
+    }
+
     /// Remove `name`'s egress driver, if it runs.
     pub(super) async fn stop_egress_driver(&self, name: &str) {
         let driver = bulkhead_host::egress_driver_app(name);

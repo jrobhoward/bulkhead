@@ -665,7 +665,42 @@ pub struct Egress {
     /// The largest response body an app's request reads; a larger one
     /// fails the request. At most a frame's body (16 MiB).
     pub max_response_body: u64,
+    /// Address ranges (CIDR) a host name may not resolve into (ROADMAP
+    /// DA4b): an address of one of them, also as IPv4-mapped IPv6, is
+    /// refused as loopback is. An address written in an allow entry is
+    /// reached as written. [`DEFAULT_EGRESS_DENY`] by default; empty for
+    /// none.
+    pub deny: Vec<String>,
+    /// An HTTP proxy (`http://host:port`) every driver connection goes
+    /// through: the node connects to it and sends `CONNECT host:port`
+    /// once the destination is allowed (ROADMAP DA4b). The proxy resolves
+    /// names, so [`Egress::deny`] and the loopback guard do not apply.
+    pub proxy: Option<String>,
+    /// A client certificate and key (PEM files) per app, which its egress
+    /// driver presents when a server asks for one (ROADMAP DA4b); bound
+    /// read-only into the driver's root at `/driver/<file name>`.
+    pub identities: std::collections::BTreeMap<String, EgressIdentity>,
 }
+
+/// An app's client certificate for its egress driver ([`Egress::identities`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressIdentity {
+    /// The certificate chain, PEM.
+    pub cert: PathBuf,
+    /// Its private key, PEM.
+    pub key: PathBuf,
+}
+
+/// The ranges a host name may not resolve into by default
+/// ([`Egress::deny`]): the private IPv4 ranges (RFC 1918), shared address
+/// space (RFC 6598) and IPv6 unique local addresses.
+pub const DEFAULT_EGRESS_DENY: [&str; 5] = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "fc00::/7",
+];
 
 impl Default for Egress {
     fn default() -> Self {
@@ -681,6 +716,9 @@ impl Default for Egress {
             pool_max_idle_per_host: 32,
             max_concurrent: 64,
             max_response_body: 16 << 20,
+            deny: DEFAULT_EGRESS_DENY.map(String::from).to_vec(),
+            proxy: None,
+            identities: std::collections::BTreeMap::new(),
         }
     }
 }

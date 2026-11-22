@@ -1022,6 +1022,22 @@ pub struct EgressBinding {
     /// `max_concurrent`.
     #[serde(default = "default_egress_concurrent")]
     pub max_concurrent: u32,
+    /// Address ranges a host name may not resolve into (ROADMAP DA4b):
+    /// the private ranges by default (`bulkhead_host::DEFAULT_EGRESS_DENY`);
+    /// `[]` for none. An address written in an allow entry is reached as
+    /// written.
+    #[serde(default = "default_egress_deny")]
+    pub deny: Vec<String>,
+    /// An HTTP proxy, `http://host:port`, that every request goes
+    /// through: the node asks it for a tunnel (`CONNECT`) to each allowed
+    /// destination (ROADMAP DA4b). It resolves names, so `deny` and the
+    /// loopback guard do not apply then.
+    #[serde(default)]
+    pub proxy: Option<String>,
+    /// A client certificate per app, presented by its egress driver when a
+    /// server asks for one (ROADMAP DA4b), by app name.
+    #[serde(default)]
+    pub identities: BTreeMap<String, EgressIdentityBinding>,
     /// The largest response body an app's request reads (ROADMAP DA4); a
     /// larger one fails the request. At most 16 MiB, a frame's body.
     #[serde(default = "default_egress_max_body")]
@@ -1042,11 +1058,64 @@ impl Default for EgressBinding {
             pool_max_idle_per_host: default_egress_idle_per_host(),
             max_concurrent: default_egress_concurrent(),
             max_response_body: default_egress_max_body(),
+            deny: default_egress_deny(),
+            proxy: None,
+            identities: BTreeMap::new(),
         }
     }
 }
 
+/// `[egress.identities.<app>]`: an app's client certificate and key (PEM
+/// files), bound read-only into its egress driver's root.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressIdentityBinding {
+    /// The certificate chain.
+    pub cert: PathBuf,
+    /// Its private key.
+    pub key: PathBuf,
+}
+
+fn default_egress_deny() -> Vec<String> {
+    bulkhead_host::DEFAULT_EGRESS_DENY
+        .map(String::from)
+        .to_vec()
+}
+
 impl EgressBinding {
+    /// Its deny list, proxy and identities checked.
+    ///
+    /// # Errors
+    ///
+    /// A deny entry that is not a CIDR, a proxy that is not
+    /// `http://host:port`, an identity for a name that is no app's, a
+    /// relative path, or a certificate and key of the same file name.
+    pub fn check(&self) -> Result<(), String> {
+        bulkhead_host::services::egress::parse_deny(&self.deny)
+            .map_err(|e| format!("egress.{e}"))?;
+        if let Some(proxy) = &self.proxy {
+            bulkhead_host::services::egress::parse_proxy(proxy)
+                .map_err(|e| format!("egress.{e}"))?;
+        }
+        for (app, identity) in &self.identities {
+            if !bulkhead_bundle::manifest::is_valid_name(app) {
+                return Err(format!("egress.identities.{app}: not an app name"));
+            }
+            if !identity.cert.is_absolute() || !identity.key.is_absolute() {
+                return Err(format!(
+                    "egress.identities.{app}: cert and key must be absolute paths"
+                ));
+            }
+            if identity.cert.file_name() == identity.key.file_name() {
+                return Err(format!(
+                    "egress.identities.{app}: cert and key have the same file name, and both \
+                     are bound under the driver's /driver/"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The runtime's egress settings.
     #[must_use]
     pub fn runtime(&self) -> bulkhead_host::Egress {
@@ -1062,6 +1131,21 @@ impl EgressBinding {
         e.pool_max_idle_per_host = self.pool_max_idle_per_host;
         e.max_concurrent = self.max_concurrent;
         e.max_response_body = self.max_response_body.bytes();
+        e.deny.clone_from(&self.deny);
+        e.proxy.clone_from(&self.proxy);
+        e.identities = self
+            .identities
+            .iter()
+            .map(|(app, i)| {
+                (
+                    app.clone(),
+                    bulkhead_host::EgressIdentity {
+                        cert: i.cert.clone(),
+                        key: i.key.clone(),
+                    },
+                )
+            })
+            .collect();
         e
     }
 }
@@ -1824,6 +1908,10 @@ impl NodeConfig {
         config.check_sockets()?;
         config.check_native()?;
         config.check_volumes()?;
+        config
+            .egress
+            .check()
+            .map_err(|e| NodeError::Invalid(format!("node config: {e}")))?;
         config.check_drivers()?;
         config.check_http_driver()?;
         config.check_resolver()?;

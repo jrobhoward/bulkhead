@@ -10,11 +10,16 @@
 //! `roots_pem` holds every certificate authority the driver trusts: the
 //! system's (read by the node, when `[egress] system_roots`) and
 //! `[egress] ca_file`'s. Empty, no HTTPS server is trusted.
+//!
+//! `client_cert` and `client_key`, with node config's
+//! `[egress.identities.<app>]` (ROADMAP DA4b), are the paths of the app's
+//! client certificate and key in the driver's root (`/driver/...`), read
+//! at its start and presented when a server asks for a certificate.
 
 use std::time::Duration;
 
-use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use serde::{Deserialize, Serialize};
 
 /// The init arguments.
@@ -35,7 +40,16 @@ pub struct Config {
     /// The trusted certificate authorities, PEM.
     #[serde(default)]
     pub roots_pem: String,
+    /// The client certificate chain's path (PEM), with `client_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_cert: Option<String>,
+    /// The client key's path (PEM), with `client_cert`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<String>,
 }
+
+/// A client certificate chain and its key.
+pub type Identity = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
 
 impl Config {
     /// Read the init arguments.
@@ -71,6 +85,37 @@ impl Config {
             roots.add(cert).map_err(|e| format!("roots: {e}"))?;
         }
         Ok(roots)
+    }
+}
+
+impl Config {
+    /// The client identity, its files read with `read` (the driver's
+    /// `bulkhead_sdk::files::read`); `None` without one.
+    ///
+    /// # Errors
+    ///
+    /// Only one of the two set, a file not read, or not a certificate chain
+    /// and a private key.
+    pub fn identity(
+        &self,
+        read: impl Fn(&str) -> std::io::Result<Vec<u8>>,
+    ) -> Result<Option<Identity>, String> {
+        let (cert, key) = match (&self.client_cert, &self.client_key) {
+            (None, None) => return Ok(None),
+            (Some(c), Some(k)) => (c, k),
+            _ => return Err("client_cert and client_key go together".into()),
+        };
+        let cert_pem = read(cert).map_err(|e| format!("client certificate {cert}: {e}"))?;
+        let chain = CertificateDer::pem_slice_iter(&cert_pem)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("client certificate {cert}: {e}"))?;
+        if chain.is_empty() {
+            return Err(format!("client certificate {cert}: no certificate"));
+        }
+        let key_pem = read(key).map_err(|e| format!("client key {key}: {e}"))?;
+        let key_der = PrivateKeyDer::from_pem_slice(&key_pem)
+            .map_err(|e| format!("client key {key}: {e}"))?;
+        Ok(Some((chain, key_der)))
     }
 }
 

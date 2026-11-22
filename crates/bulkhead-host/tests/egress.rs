@@ -124,7 +124,15 @@ async fn runtime(egress: Egress) -> Node {
         native,
         // A node resolves through its driver; here, a table.
         resolver: bulkhead_host::Resolver::Table(
-            [("localhost".to_string(), vec!["127.0.0.1".parse().unwrap()])].into(),
+            [
+                ("localhost".to_string(), vec!["127.0.0.1".parse().unwrap()]),
+                // A name on the internal network (ROADMAP DA4b's deny list).
+                (
+                    "intranet".to_string(),
+                    vec!["10.255.255.1".parse().unwrap()],
+                ),
+            ]
+            .into(),
         ),
         ..RuntimeConfig::default()
     })
@@ -468,4 +476,255 @@ async fn fetch____two_apps____each_through_its_own_driver_to_its_own_allow_list(
     assert_eq!(drivers.len(), 2, "{drivers:?}");
     a.kill();
     b.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch____name_in_a_denied_range____prohibited_and_reached_with_no_deny_list() {
+    let (address, _) = server(None).await;
+    let local = format!("fetch GET http://localhost:{}/hello", address.port());
+    let allow_local = [format!("http://localhost:{}", address.port())];
+    let mut loopback_denied = Egress::default();
+    loopback_denied.allow_loopback = true;
+    loopback_denied.deny = vec!["127.0.0.0/8".into()];
+    let mut nothing_denied = Egress::default();
+    nothing_denied.allow_loopback = true;
+    nothing_denied.deny = Vec::new();
+    let default = runtime(Egress::default()).await;
+    let denied = runtime(loopback_denied).await;
+    let open = runtime(nothing_denied).await;
+    let a = up(
+        &default,
+        spec("egress-intranet", &["http://intranet".to_string()], true),
+    )
+    .await;
+    let b = up(&denied, spec("egress-denied", &allow_local, true)).await;
+    let c = up(&open, spec("egress-undenied", &allow_local, true)).await;
+
+    let private = ask(&a, "fetch GET http://intranet/").await;
+    let refused = ask(&b, &local).await;
+    let allowed = ask(&c, &local).await;
+
+    assert_eq!(private, "err:prohibited", "10/8 by default");
+    assert_eq!(refused, "err:prohibited");
+    assert_eq!(allowed, "200 hi");
+    for h in [a, b, c] {
+        h.kill();
+    }
+}
+
+/// A CONNECT proxy: it records each request line, refuses with 403 when
+/// `refuse`, and otherwise tunnels to the target.
+async fn proxy(refuse: bool) -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if client.read(&mut byte).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let line = String::from_utf8_lossy(&head)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                log.lock().unwrap().push(line.clone());
+                if refuse {
+                    let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await;
+                    return;
+                }
+                let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+                let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await else {
+                    return;
+                };
+                let _ = client
+                    .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .await;
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            });
+        }
+    });
+    (address, seen)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch____through_a_proxy____tunneled_by_the_node_refusals_answered() {
+    let (address, accepted) = server(None).await;
+    let (open_proxy, seen) = proxy(false).await;
+    let (closed_proxy, refused_seen) = proxy(true).await;
+    let mut via_open = Egress::default();
+    via_open.proxy = Some(format!("http://{open_proxy}"));
+    let mut via_closed = Egress::default();
+    via_closed.proxy = Some(format!("http://{closed_proxy}"));
+    let open = runtime(via_open).await;
+    let closed = runtime(via_closed).await;
+    let allow = [format!("http://{address}")];
+    let a = up(&open, spec("egress-proxied", &allow, true)).await;
+    let b = up(&closed, spec("egress-proxy-refused", &allow, true)).await;
+    let elsewhere = up(
+        &open,
+        spec(
+            "egress-proxy-elsewhere",
+            &["http://127.0.0.1:9".to_string()],
+            true,
+        ),
+    )
+    .await;
+
+    let through = ask(&a, &format!("fetch GET http://{address}/hello")).await;
+    let refused = ask(&b, &format!("fetch GET http://{address}/hello")).await;
+    let not_allowed = ask(&elsewhere, &format!("fetch GET http://{address}/hello")).await;
+    let after = ask(&b, "self").await;
+
+    assert_eq!(through, "200 hi");
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        [format!("CONNECT {address} HTTP/1.1")],
+        "the node asked for the allowed destination alone"
+    );
+    assert!(refused.starts_with("err:"), "{refused}");
+    assert_eq!(refused_seen.lock().unwrap().len(), 1);
+    assert_eq!(not_allowed, "err:denied");
+    assert!(!after.is_empty(), "the instance lives");
+    assert_eq!(
+        accepted.load(Ordering::Relaxed),
+        1,
+        "only the tunnel reached the server"
+    );
+    for h in [a, b, elsewhere] {
+        h.kill();
+    }
+}
+
+/// A CA, a server certificate for 127.0.0.1 and a client certificate it
+/// signed, as PEM files in `dir`; and a server config that requires a
+/// client certificate from that CA, when `require_client`.
+fn mutual_tls(
+    dir: &std::path::Path,
+    require_client: bool,
+) -> (
+    std::path::PathBuf,
+    bulkhead_host::EgressIdentity,
+    Arc<rustls::ServerConfig>,
+) {
+    let ca_key = rcgen::KeyPair::generate().unwrap();
+    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca = rcgen::CertifiedIssuer::self_signed(ca_params, ca_key).unwrap();
+    let leaf_key = rcgen::KeyPair::generate().unwrap();
+    let leaf = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+        .unwrap()
+        .signed_by(&leaf_key, &ca)
+        .unwrap();
+    let client_key = rcgen::KeyPair::generate().unwrap();
+    let client = rcgen::CertificateParams::new(vec!["client".to_string()])
+        .unwrap()
+        .signed_by(&client_key, &ca)
+        .unwrap();
+    let ca_file = dir.join("ca.pem");
+    std::fs::write(&ca_file, ca.pem()).unwrap();
+    let identity = bulkhead_host::EgressIdentity {
+        cert: dir.join("client.pem"),
+        key: dir.join("client.key"),
+    };
+    std::fs::write(&identity.cert, client.pem()).unwrap();
+    std::fs::write(&identity.key, client_key.serialize_pem()).unwrap();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.der().clone()).unwrap();
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        provider.clone(),
+    )
+    .build()
+    .unwrap();
+    let builder = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap();
+    let builder = if require_client {
+        builder.with_client_cert_verifier(verifier)
+    } else {
+        builder.with_no_client_auth()
+    };
+    let tls = builder
+        .with_single_cert(
+            vec![leaf.der().clone()],
+            rustls_pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+        )
+        .unwrap();
+    (ca_file, identity, Arc::new(tls))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch____server_wanting_a_client_certificate____served_with_the_apps_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ca_file, identity, tls) = mutual_tls(dir.path(), true);
+    let (address, _) = server(Some(tls)).await;
+    let mut with_identity = Egress::default();
+    with_identity.system_roots = false;
+    with_identity.ca_file = Some(ca_file.clone());
+    with_identity
+        .identities
+        .insert("egress-mtls".into(), identity);
+    let mut without = Egress::default();
+    without.system_roots = false;
+    without.ca_file = Some(ca_file);
+    let with_identity = runtime(with_identity).await;
+    let without = runtime(without).await;
+    let allow = [format!("https://{address}")];
+    let a = up(&with_identity, spec("egress-mtls", &allow, true)).await;
+    let b = up(&without, spec("egress-no-identity", &allow, true)).await;
+
+    let served = ask(&a, &format!("fetch GET https://{address}/hello")).await;
+    let refused = ask(&b, &format!("fetch GET https://{address}/hello")).await;
+
+    assert_eq!(served, "200 hi");
+    assert!(refused.starts_with("err:"), "{refused}");
+    a.kill();
+    b.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_egress_roots____ca_file_replaced____changed_and_a_new_driver_trusts_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // A server of the new CA's, not asking for a client certificate.
+    let (new_ca, _, tls) = mutual_tls(dir.path(), false);
+    let old_dir = tempfile::tempdir().unwrap();
+    let (old_ca, _, _) = mutual_tls(old_dir.path(), false);
+    let ca_file = dir.path().join("trusted.pem");
+    std::fs::copy(&old_ca, &ca_file).unwrap();
+    let (address, _) = server(Some(tls)).await;
+    let mut egress = Egress::default();
+    egress.system_roots = false;
+    egress.ca_file = Some(ca_file.clone());
+    let rt = runtime(egress).await;
+    let allow = [format!("https://{address}")];
+    let h = up(&rt, spec("egress-reload", &allow, true)).await;
+    let before = ask(&h, &format!("fetch GET https://{address}/hello")).await;
+
+    std::fs::copy(&new_ca, &ca_file).unwrap();
+    let changed = rt.0.reload_egress_roots().unwrap();
+    let again = rt.0.reload_egress_roots().unwrap();
+    let driver = bulkhead_host::egress_driver_app("egress-reload");
+    rt.2.remove(&driver).await.unwrap();
+    rt.2.add(common::egress_driver(&rt.0, "egress-reload", rt.3.clone()))
+        .await
+        .unwrap();
+    let after = ask(&h, &format!("fetch GET https://{address}/hello")).await;
+
+    assert!(before.starts_with("err:tls"), "{before}");
+    assert!(changed);
+    assert!(!again, "nothing changed the second time");
+    assert_eq!(after, "200 hi");
+    h.kill();
 }

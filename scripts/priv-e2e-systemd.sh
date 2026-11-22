@@ -12,7 +12,9 @@
 # `bulkhead`), then, after a restart, over TCP by name with a password the
 # datasource's driver reads from its file. An app granted HTTP egress
 # (the SDK fixture, ROADMAP DA4) fetches the board's route through its
-# egress driver: the node must make the connection, not the driver.
+# egress driver: the node must make the connection, not the driver. The
+# fetcher holds a client certificate (ROADMAP DA4b), its files shared with
+# its driver under the helper; `reload-tls` restarts the driver.
 # A fake Modbus device is polled by the Modbus driver (ROADMAP DA5),
 # its updates going to the same app; the node must open the device's
 # connection, not the driver. With ZFS_PARENT set (a dataset that does
@@ -64,6 +66,11 @@ K=/var/lib/bulkhead-admin; rm -rf $K; install -d -m 0700 -o bulkhead -g bulkhead
 ADMIN_KEY=$(/usr/local/bin/bulkhead cluster pubkey $K/admin.key)
 printf '[operators]\ne2e = ["%s"]\n' "$(/usr/local/bin/bulkhead cluster pubkey $W/operator.key)" > $K/operators.toml
 chown bulkhead:bulkhead $K/admin.key $K/operators.toml; chmod 0600 $K/admin.key $K/operators.toml
+# The fetcher's client certificate (ROADMAP DA4b), the node's files.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+    -subj /CN=fetcher -keyout $K/fetcher-client.key -out $K/fetcher-client.pem 2>/dev/null
+chown bulkhead:bulkhead $K/fetcher-client.key $K/fetcher-client.pem
+chmod 0600 $K/fetcher-client.key $K/fetcher-client.pem
 /usr/local/bin/bulkhead keygen signer --no-password >/dev/null
 SIGNER=$(tail -n 1 signer.pub)
 cp $SRC/examples/board/bulkhead.toml board.toml
@@ -181,6 +188,10 @@ durability = "disk"
 [secrets.pg]
 file = "$K/pg.password"
 
+[egress.identities.fetcher]
+cert = "$K/fetcher-client.pem"
+key = "$K/fetcher-client.key"
+
 $DATASOURCE
 $ZFS_NODE
 [extensions."bulkhead-modbus:modbus".devices.pump-1]
@@ -251,6 +262,13 @@ if command -v strace >/dev/null; then
     sleep 0.3; kill $S1 $S2; wait $S1 $S2 2>/dev/null || true
     echo "connects to :8080 by the node: $(grep -c 'htons(8080)' $W/egress-node.strace), to :9101: $(grep -c 'htons(9101)' $W/egress-node.strace), by the driver: $(grep -c connect $W/egress-driver.strace)"
 fi
+echo "== the driver's client certificate, and reload-tls (ROADMAP DA4b)"
+echo "its files in its root: $(ls /proc/$EGR/root$K 2>&1 | tr '\n' ' ')"
+cli reload-tls
+for i in $(seq 50); do NEW=$(pgrep -f "bulkhead-egress" | head -1); [ -n "$NEW" ] && [ "$NEW" != "$EGR" ] && break; sleep 0.1; done
+[ -n "$NEW" ] && [ "$NEW" != "$EGR" ] || { echo "FAILED: reload-tls did not restart the egress driver holding an identity"; exit 1; }
+echo "the driver restarted (pid $EGR -> $NEW); after: $(cli call fetcher 'fetch GET http://127.0.0.1:8080/board')"
+EGR=$NEW
 echo "== Modbus through its driver (ROADMAP DA5)"
 ps -eo user:12,uid,pid,args | grep "libexec/bulkhead/bulkhead-modbus" | grep -v grep
 MOD=$(pgrep -f "libexec/bulkhead/bulkhead-modbus" | head -1)

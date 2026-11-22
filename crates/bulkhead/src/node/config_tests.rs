@@ -1161,3 +1161,55 @@ fn NodeConfig____bad_volumes_zfs____refused(#[case] text: &str, #[case] says: &s
 
     assert!(err.to_string().contains(says), "{err}");
 }
+
+#[test]
+fn NodeConfig____egress_deny_proxy_identities____read_with_private_ranges_by_default() {
+    let plain = NodeConfig::from_toml_str("data_dir = \"/d\"\n").unwrap();
+    let set = NodeConfig::from_toml_str(
+        r#"
+data_dir = "/d"
+
+[egress]
+deny = ["10.0.0.0/8"]
+proxy = "http://proxy.internal:3128"
+
+[egress.identities.shop]
+cert = "/etc/bulkhead/shop.pem"
+key = "/etc/bulkhead/shop.key"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        plain.egress.runtime().deny,
+        bulkhead_host::DEFAULT_EGRESS_DENY.map(String::from)
+    );
+    let e = set.egress.runtime();
+    assert_eq!(e.deny, ["10.0.0.0/8"]);
+    assert_eq!(e.proxy.as_deref(), Some("http://proxy.internal:3128"));
+    assert_eq!(
+        e.identities["shop"].key,
+        PathBuf::from("/etc/bulkhead/shop.key")
+    );
+}
+
+#[rstest::rstest]
+#[case("[egress]\ndeny = [\"10.0.0.0\"]\n", "not a CIDR")]
+#[case("[egress]\nproxy = \"https://p:3128\"\n", "http://host:port")]
+#[case(
+    "[egress.identities.Shop]\ncert = \"/a.pem\"\nkey = \"/a.key\"\n",
+    "not an app name"
+)]
+#[case(
+    "[egress.identities.shop]\ncert = \"a.pem\"\nkey = \"/a.key\"\n",
+    "absolute"
+)]
+#[case(
+    "[egress.identities.shop]\ncert = \"/x/a.pem\"\nkey = \"/y/a.pem\"\n",
+    "same file name"
+)]
+fn NodeConfig____bad_egress_settings____refused(#[case] text: &str, #[case] says: &str) {
+    let err = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n{text}")).unwrap_err();
+
+    assert!(err.to_string().contains(says), "{err}");
+}

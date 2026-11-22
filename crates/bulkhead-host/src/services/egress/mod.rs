@@ -34,7 +34,7 @@ mod policy;
 
 #[cfg(feature = "egress")]
 pub(crate) use policy::guarded;
-pub use policy::within;
+pub use policy::{parse_deny, parse_proxy, within};
 
 use std::sync::Arc;
 
@@ -78,9 +78,16 @@ pub(crate) struct Shared {
     #[cfg(feature = "egress")]
     config: crate::config::Egress,
     /// The trusted roots for every driver, PEM: the system's (when
-    /// `system_roots`) and the CA file's, read once.
+    /// `system_roots`) and the CA file's, read at the start and again by
+    /// [`Shared::reload_roots`] (ROADMAP DA4b).
     #[cfg(feature = "egress")]
-    roots_pem: String,
+    roots_pem: std::sync::RwLock<String>,
+    /// [`crate::config::Egress::deny`], parsed.
+    #[cfg(feature = "egress")]
+    deny: policy::DenyList,
+    /// [`crate::config::Egress::proxy`] as host and port.
+    #[cfg(feature = "egress")]
+    proxy: Option<(String, u16)>,
     /// Each app's limit on requests in flight, and its semaphore.
     #[cfg(feature = "egress")]
     limits:
@@ -102,12 +109,9 @@ pub(crate) struct Shared {
 pub(crate) enum Reach {
     /// An address an allow entry names: reached as written.
     Address(std::net::IpAddr),
-    /// A host name, resolved on each connect; loopback and link-local
-    /// addresses are refused for it unless `allow_loopback`.
-    Name {
-        /// Node config's `[egress] allow_loopback`.
-        allow_loopback: bool,
-    },
+    /// A host name, resolved on each connect; an address
+    /// [`Shared::refused`] says no to is not connected.
+    Name,
 }
 
 impl Shared {
@@ -124,7 +128,19 @@ impl Shared {
             #[cfg(feature = "egress")]
             config: config.egress.clone(),
             #[cfg(feature = "egress")]
-            roots_pem: roots::pem(&config.egress).map_err(HostError::Egress)?,
+            roots_pem: std::sync::RwLock::new(
+                roots::pem(&config.egress).map_err(HostError::Egress)?,
+            ),
+            #[cfg(feature = "egress")]
+            deny: policy::parse_deny(&config.egress.deny).map_err(HostError::Egress)?,
+            #[cfg(feature = "egress")]
+            proxy: config
+                .egress
+                .proxy
+                .as_deref()
+                .map(policy::parse_proxy)
+                .transpose()
+                .map_err(HostError::Egress)?,
             #[cfg(feature = "egress")]
             limits: std::sync::Mutex::default(),
             #[cfg(feature = "egress")]
@@ -149,14 +165,31 @@ impl Shared {
         #[cfg(feature = "egress")]
         {
             let ms = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-            Some(serde_json::json!({
+            let roots_pem = self
+                .roots_pem
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let mut args = serde_json::json!({
                 "app": app,
                 "connect_timeout_ms": ms(self.config.connect_timeout),
                 "pool_idle_timeout_ms": ms(self.config.pool_idle_timeout),
                 "pool_max_idle_per_host": self.config.pool_max_idle_per_host,
                 "max_response_body": self.config.max_response_body,
-                "roots_pem": self.roots_pem,
-            }))
+                "roots_pem": roots_pem,
+            });
+            // The files' paths in the driver's root, never their contents.
+            if let Some(identity) = self.config.identities.get(app) {
+                let at = |p: &std::path::Path| {
+                    format!(
+                        "/driver/{}",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                };
+                args["client_cert"] = serde_json::Value::String(at(&identity.cert));
+                args["client_key"] = serde_json::Value::String(at(&identity.key));
+            }
+            Some(args)
         }
         #[cfg(not(feature = "egress"))]
         {
@@ -272,15 +305,66 @@ impl Shared {
         }
         Some(match host.parse::<std::net::IpAddr>() {
             Ok(ip) => Reach::Address(ip),
-            Err(_) => Reach::Name {
-                allow_loopback: self.config.allow_loopback,
-            },
+            Err(_) => Reach::Name,
         })
+    }
+
+    /// Whether a host name resolving to `ip` is not connected: loopback and
+    /// link-local unless `allow_loopback`, and the deny list's ranges
+    /// (ROADMAP DA4b).
+    pub(crate) fn refused(&self, ip: std::net::IpAddr) -> bool {
+        (!self.config.allow_loopback && guarded(ip)) || policy::denied(ip, &self.deny)
+    }
+
+    /// The proxy every driver connection goes through, if any.
+    pub(crate) fn proxy(&self) -> Option<&(String, u16)> {
+        self.proxy.as_ref()
+    }
+
+    /// The files `app`'s egress driver reads, bound at `/driver/`: its
+    /// identity's certificate and key, if node config gives it one.
+    pub(crate) fn driver_files(&self, app: &str) -> Vec<std::path::PathBuf> {
+        self.config
+            .identities
+            .get(app)
+            .map(|i| vec![i.cert.clone(), i.key.clone()])
+            .unwrap_or_default()
+    }
+
+    /// Read the trusted roots again (ROADMAP DA4b); whether they changed.
+    /// A failure keeps the roots read before.
+    ///
+    /// # Errors
+    ///
+    /// The CA file cannot be read or holds no certificate.
+    pub(crate) fn reload_roots(&self) -> Result<bool, String> {
+        let pem = roots::pem(&self.config)?;
+        let mut kept = self
+            .roots_pem
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *kept == pem {
+            return Ok(false);
+        }
+        *kept = pem;
+        Ok(true)
     }
 
     /// Node config's egress settings.
     pub(crate) fn config(&self) -> &crate::config::Egress {
         &self.config
+    }
+}
+
+/// Without the `egress` feature no driver runs: nothing to bind or reload.
+#[cfg(not(feature = "egress"))]
+impl Shared {
+    pub(crate) fn driver_files(&self, _app: &str) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    pub(crate) fn reload_roots(&self) -> Result<bool, String> {
+        Ok(false)
     }
 }
 

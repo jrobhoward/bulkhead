@@ -227,6 +227,8 @@ impl RuntimeInner {
             .filter(|_| !self.config.drivers.contains_key(&spec.app))
             .map(|served| crate::config::DriverProfile {
                 egress: Some(served.to_string()),
+                // Its identity's certificate and key (ROADMAP DA4b).
+                files: self.services.egress().driver_files(served),
                 ..crate::config::DriverProfile::default()
             });
         if let Some(profile) = egress
@@ -764,7 +766,27 @@ impl Runtime {
                 }
             }
         }
+        // Each egress driver's identity (ROADMAP DA4b).
+        for (app, identity) in &self.inner.config.egress.identities {
+            let driver = crate::config::egress_driver_app(app);
+            for file in [&identity.cert, &identity.key] {
+                if let Err(e) = self.share_with_app(&driver, file, false).await {
+                    failed.push(format!("{driver}: {e}"));
+                }
+            }
+        }
         failed
+    }
+
+    /// Read egress's trusted roots again (ROADMAP DA4b), for the drivers
+    /// started from now on; whether they changed. A failure keeps the
+    /// roots read before.
+    ///
+    /// # Errors
+    ///
+    /// The CA file cannot be read or holds no certificate.
+    pub fn reload_egress_roots(&self) -> Result<bool, String> {
+        self.inner.services.egress().reload_roots()
     }
 
     /// Give `path`, a directory the node wrote for `app`, to that app's

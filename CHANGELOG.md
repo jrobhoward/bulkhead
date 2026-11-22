@@ -8,6 +8,23 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP egress refuses a host name that resolves into a private range
+  (ROADMAP DA4b): node config's `[egress] deny`, by default 10.0.0.0/8,
+  172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and fc00::/7, answered
+  `destination-IP-prohibited` as loopback is; an address written in an
+  allow entry is reached as before. A site whose apps reach internal
+  services by name sets `deny` (or `deny = []`).
+- HTTP egress through a proxy (`[egress] proxy = "http://host:port"`,
+  ROADMAP DA4b): the node asks it for a tunnel (`CONNECT`) to each
+  allowed destination and hands the tunnel to the driver; no proxy
+  authentication yet.
+- Client certificates for HTTP egress (`[egress.identities.<app>]`
+  `cert`, `key`, ROADMAP DA4b): the app's driver presents them when a
+  server asks; the files are bound read-only into the driver's root.
+- `SIGHUP` and `bulkhead reload-tls` read egress's root certificates
+  again (ROADMAP DA4b) and restart each egress driver whose roots
+  changed, or that holds an identity (audit `egress_restarted`); a new
+  CA no longer needs a node restart.
 - An upgrade snapshots each of the app's ZFS volumes first (ROADMAP ZV3),
   as `@upgrade`, replacing the last upgrade's (audit `volume_snapshot`);
   `bulkhead volume rollback APP VOLUME` (`POST

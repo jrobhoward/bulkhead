@@ -162,19 +162,31 @@ impl std::fmt::Debug for Pool {
 }
 
 impl Pool {
-    /// A pool as `config` describes it, connecting through `connector`.
+    /// A pool as `config` describes it, connecting through `connector`,
+    /// presenting `identity` to a server that asks for a client certificate
+    /// (ROADMAP DA4b).
     ///
     /// # Errors
     ///
-    /// The roots are not certificates, or TLS cannot be set up.
-    pub fn new(config: &Config, connector: Connector) -> Result<Self, String> {
-        let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+    /// The roots are not certificates, the identity's key does not fit, or
+    /// TLS cannot be set up.
+    pub fn new(
+        config: &Config,
+        connector: Connector,
+        identity: Option<crate::config::Identity>,
+    ) -> Result<Self, String> {
+        let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()
         .map_err(|e| format!("TLS: {e}"))?
-        .with_root_certificates(config.roots()?)
-        .with_no_client_auth();
+        .with_root_certificates(config.roots()?);
+        let tls = match identity {
+            Some((chain, key)) => builder
+                .with_client_auth_cert(chain, key)
+                .map_err(|e| format!("client certificate: {e}"))?,
+            None => builder.with_no_client_auth(),
+        };
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls)
             .https_or_http()
