@@ -756,7 +756,12 @@ All notable changes are recorded here. The format follows
   metric; two apps talking by publish, call and cast under messaging
   ACLs; posts in a shared bucket, watched and resumed after a restart;
   tests), each a script that runs and checks its steps, with a crate per
-  chapter (`tut-room-N`, `tut-history-N`). `crates/bulkhead/tests/app_tutorial.rs`
+  chapter (`tut-room-N`, `tut-history-N`); then the same programs on an
+  HA pair through failover and a switchover back (chapter 7), and with a
+  disaster-recovery site through activation and failback (chapter 8),
+  their posts in a `cluster` bucket and the room's watch cursor in a
+  `replicated` one, so each new primary's room resumes where the last
+  stopped. `crates/bulkhead/tests/app_tutorial.rs`
   runs every script and the chapter 5 apps on a node. GETTING_STARTED
   points to it, and WRITING_APPS's minimal app is an executable again
   (`src/main.rs` calling `bulkhead_main()`), not a `cdylib`.

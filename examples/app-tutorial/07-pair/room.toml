@@ -1,0 +1,33 @@
+# Chapters 7 and 8 of examples/app-tutorial: chapter 5's room, run as a
+# singleton on an HA pair. The program is unchanged; its own `cursor`
+# bucket is replicated, so the room on a new primary resumes its watch
+# where the last one stopped.
+[app]
+name = "room"
+version = "0.5.0"
+description = "A chat room on a pair (app tutorial, chapter 7)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+[appserver.placement]
+mode = "singleton"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:metrics"]
+prefix = "room"
+
+[appserver.capabilities."bulkhead:groups"]
+publish = ["chat"]
+
+# Replicated: written through the pair's log, like the cluster buckets,
+# and copied to a DR node. On `disk`, each node would keep its own.
+[appserver.capabilities."bulkhead:keyvalue".buckets]
+cursor = { durability = "replicated" }
+
+[appserver.capabilities."bulkhead:keyvalue".shared]
+posts = "ro"
+
+[appserver.messaging_acl]
+may_call = ["history"]

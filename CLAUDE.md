@@ -143,7 +143,8 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   `examples/tutorial/` is its chapter scripts (`common.sh` shared), not a
   crate. `examples/app-tutorial/` is the app developers' tutorial (ROADMAP
   DOC1): chapter scripts and a crate per chapter (`tut-room-N`,
-  `tut-history-N`), each script checking its own output;
+  `tut-history-N`), each script checking its own output; chapters 7 and
+  8 (a pair and a DR site) source `cluster.sh` too;
   `crates/bulkhead/tests/app_tutorial.rs` runs them (built into
   `target/fixtures/app-tutorial`). `examples/tally` keeps a
   counter in Postgres (`bulkhead:sql`, tutorial chapter 4), run by

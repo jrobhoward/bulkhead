@@ -1,0 +1,26 @@
+# Chapters 7 and 8 of examples/app-tutorial: chapter 5's history, run as a
+# singleton on an HA pair. The program is unchanged; node config makes its
+# `posts` bucket a `cluster` bucket, replicated to the standby.
+[app]
+name = "history"
+version = "0.3.0"
+description = "Keeps the room's posts, on a pair (app tutorial, chapter 7)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+# One instance in the pair, on the primary; started on the standby when it
+# is promoted, once its copy holds every committed write.
+[appserver.placement]
+mode = "singleton"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:groups"]
+join = ["chat"]
+
+[appserver.capabilities."bulkhead:keyvalue".shared]
+posts = "rw"
+
+[appserver.messaging_acl]
+accept_from = ["room"]

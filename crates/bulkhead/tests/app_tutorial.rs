@@ -47,6 +47,8 @@ fn has_bash() -> bool {
 #[case("04-chat.sh")]
 #[case("05-chat.sh")]
 #[case("06-test.sh")]
+#[case("07-pair.sh")]
+#[case("08-dr.sh")]
 fn chapter____run_straight_through____every_expectation_met(#[case] script: &str) {
     if !has_bash() {
         eprintln!("no bash: {script} skipped");
@@ -59,15 +61,25 @@ fn chapter____run_straight_through____every_expectation_met(#[case] script: &str
         .env("AUTO", "1")
         .env("DEMO_DIR", demo.path())
         .env("CARGO_TARGET_DIR", target())
+        // Chapters 7 and 8's cluster ports.
+        .env("PORT_1", common::ports::free_port().unwrap().to_string())
+        .env("PORT_2", common::ports::free_port().unwrap().to_string())
+        .env("PORT_3", common::ports::free_port().unwrap().to_string())
         .output()
         .unwrap();
 
+    let logs: String = ["node.log", "node-1.log", "node-2.log", "node-3.log"]
+        .iter()
+        .filter_map(|f| {
+            let text = std::fs::read_to_string(demo.path().join(f)).ok()?;
+            Some(format!("--- {f}\n{text}\n"))
+        })
+        .collect();
     assert!(
         out.status.success(),
-        "{script} failed\n--- stdout\n{}\n--- stderr\n{}\n--- node log\n{}",
+        "{script} failed\n--- stdout\n{}\n--- stderr\n{}\n{logs}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
-        std::fs::read_to_string(demo.path().join("node.log")).unwrap_or_default(),
     );
 }
 
