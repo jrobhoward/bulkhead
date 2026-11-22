@@ -289,7 +289,7 @@ On restart a node re-verifies every stored bundle and starts the apps `state.jso
 
 ### Upgrades
 
-An upgrade takes the same verify and compile steps, then one of three modes, as the new version's manifest says:
+An upgrade takes the same verify and compile steps, snapshots the app's ZFS volumes through the helper (`Node::snapshot_volumes`, ROADMAP ZV3; an operator rolls one back with the app stopped), then one of three modes, as the new version's manifest says:
 
 - **`snapshot`:** each instance in place: save_snapshot in the old process, a new process from the new version, load_snapshot; a failure reverts that instance with its state intact.
 - **`restart`:** the instances stop and start again from `init` at the new version.

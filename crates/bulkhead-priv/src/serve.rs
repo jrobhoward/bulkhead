@@ -454,6 +454,7 @@ impl Helper {
                         refquota: r.refquota,
                         mountpoint: r.mountpoint.clone().unwrap_or_default(),
                         mounted: r.mounted,
+                        snapshot: zfs::upgrade_snapshot(&rows, &r.name),
                     })
                     .collect();
                 if out.len() > MAX_VOLUMES {
@@ -467,38 +468,35 @@ impl Helper {
             }
             VolumeRequest::Destroy { app, volume } => {
                 names(&app, &volume)?;
-                if self.apps.values().any(|a| *a == app) {
-                    return Err(format!(
-                        "{app} has instances running; its volumes stay until they end"
-                    ));
-                }
+                self.not_running(&app, "its volumes stay until they end")?;
+                destroy_volume(&zfs, &app, &volume)
+            }
+            VolumeRequest::Snapshot { app, volume } => {
+                names(&app, &volume)?;
                 let rows = list()?;
-                let app_ds = format!("{}/{app}", zfs.parent);
-                let vol_ds = format!("{app_ds}/{volume}");
-                if !rows.iter().any(|r| r.name == vol_ds) {
-                    return Err(format!("{app} has no volume {volume}"));
-                }
-                if let Err(e) = zfs::run(&zfs.program, &zfs::destroy_args(&vol_ds)) {
-                    // On Linux a destroy that finds the dataset busy has
-                    // unmounted it already (S35): mount it back.
-                    let _ = zfs::run(
-                        &zfs.program,
-                        &zfs::step_args(zfs::Step::Mount, &zfs.parent, &app, &volume, 0),
-                    );
-                    return Err(e);
-                }
-                eprintln!("bulkhead-priv: volume {vol_ds} destroyed");
-                let others = rows
-                    .iter()
-                    .any(|r| r.name != vol_ds && r.name.starts_with(&format!("{app_ds}/")));
-                if !others
-                    && let Err(e) = zfs::run(&zfs.program, &["destroy".to_string(), app_ds.clone()])
-                {
-                    eprintln!("bulkhead-priv: {app_ds} kept: {e}");
-                }
+                let vol_ds = existing_volume(&zfs, &rows, &app, &volume)?;
+                snapshot_volume(&zfs, &rows, &vol_ds)
+            }
+            VolumeRequest::Rollback { app, volume } => {
+                names(&app, &volume)?;
+                self.not_running(&app, "stop it before rolling a volume back")?;
+                let rows = list()?;
+                let vol_ds = existing_volume(&zfs, &rows, &app, &volume)?;
+                zfs::rollback_fits(&rows, &vol_ds)
+                    .map_err(|why| format!("{app}'s volume {volume}: {why}"))?;
+                zfs::run(&zfs.program, &zfs::rollback_args(&vol_ds))?;
+                eprintln!("bulkhead-priv: volume {vol_ds} rolled back to its upgrade snapshot");
                 Ok(Reply::Done)
             }
         }
+    }
+
+    /// Refuse while an instance of `app` runs, saying `then`.
+    fn not_running(&self, app: &str, then: &str) -> Result<(), String> {
+        if self.apps.values().any(|a| a == app) {
+            return Err(format!("{app} has instances running; {then}"));
+        }
+        Ok(())
     }
 
     /// Make `app`'s `volume` exist at `refquota`, mounted, its root the
@@ -587,4 +585,55 @@ fn refused(reason: &str) -> Reply {
     Reply::Refused {
         reason: reason.to_string(),
     }
+}
+
+/// `app`'s `volume` as a dataset, if `rows` hold it.
+fn existing_volume(
+    zfs: &ZfsConfig,
+    rows: &[zfs::Row],
+    app: &str,
+    volume: &str,
+) -> Result<String, String> {
+    let vol_ds = format!("{}/{app}/{volume}", zfs.parent);
+    if rows.iter().any(|r| r.name == vol_ds) {
+        Ok(vol_ds)
+    } else {
+        Err(format!("{app} has no volume {volume}"))
+    }
+}
+
+/// Remove `app`'s `volume` and its snapshots, and the app's dataset once it
+/// holds no volume.
+fn destroy_volume(zfs: &ZfsConfig, app: &str, volume: &str) -> Result<Reply, String> {
+    let rows = zfs::list(&zfs.program, &zfs.parent)?;
+    let vol_ds = existing_volume(zfs, &rows, app, volume)?;
+    if let Err(e) = zfs::run(&zfs.program, &zfs::destroy_args(&vol_ds)) {
+        // On Linux a destroy that finds the dataset busy has unmounted it
+        // already (S35): mount it back.
+        let _ = zfs::run(
+            &zfs.program,
+            &zfs::step_args(zfs::Step::Mount, &zfs.parent, app, volume, 0),
+        );
+        return Err(e);
+    }
+    eprintln!("bulkhead-priv: volume {vol_ds} destroyed");
+    let others = zfs::volumes(&zfs.parent, &rows)
+        .iter()
+        .any(|(a, v, _)| *a == app && *v != volume);
+    let app_ds = format!("{}/{app}", zfs.parent);
+    if !others && let Err(e) = zfs::run(&zfs.program, &["destroy".to_string(), app_ds.clone()]) {
+        eprintln!("bulkhead-priv: {app_ds} kept: {e}");
+    }
+    Ok(Reply::Done)
+}
+
+/// Take `vol_ds`'s upgrade snapshot (ROADMAP ZV3), replacing the one in
+/// `rows`, if any.
+fn snapshot_volume(zfs: &ZfsConfig, rows: &[zfs::Row], vol_ds: &str) -> Result<Reply, String> {
+    if zfs::upgrade_snapshot(rows, vol_ds).is_some() {
+        zfs::run(&zfs.program, &zfs::destroy_snapshot_args(vol_ds))?;
+    }
+    zfs::run(&zfs.program, &zfs::snapshot_args(vol_ds))?;
+    eprintln!("bulkhead-priv: volume {vol_ds} snapshot before an upgrade");
+    Ok(Reply::Done)
 }

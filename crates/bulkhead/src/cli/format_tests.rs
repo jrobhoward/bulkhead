@@ -531,6 +531,7 @@ fn volumes____a_directory_and_an_undeployed_apps_zfs_volume____one_row_each() {
         quota: None,
         mounted: true,
         deployed: None,
+        snapshot: None,
     };
     let zfs = bulkhead::api::VolumeInfo {
         name: "data".into(),
@@ -542,9 +543,10 @@ fn volumes____a_directory_and_an_undeployed_apps_zfs_volume____one_row_each() {
         quota: Some(64 << 20),
         mounted: true,
         deployed: Some(false),
+        snapshot: Some(1_000),
     };
 
-    let out = volumes(&[dir, zfs]);
+    let out = volumes_at(&[dir, zfs], 1_000 + 2 * 3600 + 5);
 
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 3);
@@ -556,6 +558,7 @@ fn volumes____a_directory_and_an_undeployed_apps_zfs_volume____one_row_each() {
         lines[2]
     );
     assert!(lines[2].ends_with("undeployed"));
+    assert!(lines[2].contains("2h ago"), "{}", lines[2]);
 }
 
 #[test]

@@ -143,6 +143,9 @@ impl Node {
             )));
         }
         self.install(&built).await?;
+        // Before anything runs the new version (ROADMAP ZV3).
+        self.snapshot_volumes(name, &current.current, &version)
+            .await?;
         // A version that starts sending HTTP requests needs its driver.
         self.ensure_egress_driver(name, &built.run).await?;
         self.store.keep_upload(upload, name, &version)?;

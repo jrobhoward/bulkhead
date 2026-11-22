@@ -100,7 +100,9 @@ mode = "rw"
 quota = "64MiB"
 TOML
     /usr/local/bin/bulkhead bundle keeper.toml $T/bulkhead-fixture-sdk --key signer.key --out keeper.rbp >/dev/null
-    chmod 0644 keeper.rbp
+    sed 's/^version = "1.0.0"/version = "1.0.1"/' keeper.toml > keeper-2.toml
+    /usr/local/bin/bulkhead bundle keeper-2.toml $T/bulkhead-fixture-sdk --key signer.key --out keeper-2.rbp >/dev/null
+    chmod 0644 keeper.rbp keeper-2.rbp
     ZFS_NODE="[volumes.zfs]
 parent = \"$ZFS_PARENT\"
 max_quota = \"1GiB\"
@@ -314,6 +316,9 @@ if [ -n "$ZFS_PARENT" ]; then
     ROOT=$($IN_HELPER stat -c '%a %u:%g' $VOL)
     echo "dataset: $(zfs get -H -p -o value refquota "$ZFS_PARENT/keeper/data") bytes of quota, root $ROOT in the helper's namespace; on the host: $(stat -c '%a %u:%g' $VOL)"
     case "$ROOT" in 770\ 0:*|770\ *:0) echo "FAILED: the volume's root is root's"; exit 1 ;; 770\ *) ;; *) echo "FAILED: the volume's root is $ROOT"; exit 1 ;; esac
+    echo "== an upgrade's snapshot (ROADMAP ZV3), before the new version writes"
+    cli upgrade keeper $W/keeper-2.rbp
+    echo "snapshot: $(zfs list -H -t snapshot -o name -r "$ZFS_PARENT/keeper/data")"
     FILL=$(cli call --timeout-ms 60000 keeper 'file-fill /data')
     echo "filled: $FILL"
     case "$FILL" in *errno=122*) ;; *) echo "FAILED: the quota did not stop the app (EDQUOT is 122)"; exit 1 ;; esac
@@ -321,6 +326,14 @@ if [ -n "$ZFS_PARENT" ]; then
     QUOTA_METRIC=$(curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_volume_quota_bytes{app="keeper",volume="data"}')
     echo "metrics (ROADMAP ZV2): $QUOTA_METRIC; $(curl -s http://127.0.0.1:9101/metrics | grep 'bulkhead_volume_referenced_bytes{app="keeper"')"
     [ "$QUOTA_METRIC" = 'bulkhead_volume_quota_bytes{app="keeper",volume="data"} 67108864' ] || { echo "FAILED: no quota metric"; exit 1; }
+    echo "== the new version's writes rolled back by hand (ROADMAP ZV3)"
+    if cli volume rollback keeper data 2>&1; then echo "FAILED: rolled back while running"; exit 1; fi
+    cli stop keeper
+    cli volume rollback keeper data
+    if $IN_HELPER test -e $VOL/fill-0; then echo "FAILED: the rollback left the new version's files"; exit 1; fi
+    echo "the volume is as it was before the upgrade: $($IN_HELPER ls -A $VOL | wc -l) files"
+    cli start keeper
+    cli volume list
     if cli volume destroy keeper data 2>&1; then echo "FAILED: destroyed while deployed"; exit 1; fi
     cli remove keeper
     echo "kept after the undeploy: $(zfs list -H -o name "$ZFS_PARENT/keeper/data")"

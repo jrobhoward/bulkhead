@@ -5,10 +5,11 @@
 use super::*;
 
 /// As OpenZFS 2.4 prints it on Linux and FreeBSD (spike S35).
-const LISTED: &str = "tank/v\t294912\t98304\t0\t/srv/v\tno\n\
-                      tank/v/orders\t196608\t98304\t0\t/srv/v/orders\tno\n\
-                      tank/v/orders/data\t98304\t65536\t67108864\t/srv/v/orders/data\tyes\n\
-                      tank/v/orders/logs\t98304\t98304\t1048576\t/srv/v/orders/logs\tno\n";
+const LISTED: &str = "tank/v\t294912\t98304\t0\t/srv/v\tno\t1795000000\n\
+                      tank/v/orders\t196608\t98304\t0\t/srv/v/orders\tno\t1795000001\n\
+                      tank/v/orders/data\t98304\t65536\t67108864\t/srv/v/orders/data\tyes\t1795000002\n\
+                      tank/v/orders/data@upgrade\t0\t65536\t-\t-\t-\t1795000100\n\
+                      tank/v/orders/logs\t98304\t98304\t1048576\t/srv/v/orders/logs\tno\t1795000003\n";
 
 fn row(refquota: u64, mounted: bool) -> Row {
     Row {
@@ -18,6 +19,7 @@ fn row(refquota: u64, mounted: bool) -> Row {
         refquota,
         mountpoint: Some("/srv/v/a/b".into()),
         mounted,
+        creation: 1,
     }
 }
 
@@ -25,25 +27,76 @@ fn row(refquota: u64, mounted: bool) -> Row {
 fn parse_list____zfs_output____rows() {
     let rows = parse_list(LISTED).unwrap();
 
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     assert_eq!(rows[2].name, "tank/v/orders/data");
     assert_eq!(rows[2].refquota, 64 << 20);
     assert_eq!(rows[2].referenced, 65536);
     assert!(rows[2].mounted);
-    assert!(!rows[3].mounted);
+    assert!(!rows[2].is_snapshot());
+    assert!(rows[3].is_snapshot());
+    assert_eq!(rows[3].mountpoint, None);
+    assert!(!rows[4].mounted);
 }
 
 #[test]
 fn parse_list____a_short_line_or_a_bad_size____refused() {
     assert!(parse_list("tank/v\t1\t0\n").is_err());
-    assert!(parse_list("tank/v\tlots\t1\t0\t/srv\tyes\n").is_err());
+    assert!(parse_list("tank/v\tlots\t1\t0\t/srv\tyes\t1\n").is_err());
 }
 
 #[test]
 fn parse_list____no_mountpoint____none() {
-    let rows = parse_list("tank/v\t1\t1\t0\tnone\tno\n").unwrap();
+    let rows = parse_list("tank/v\t1\t1\t0\tnone\tno\t1\n").unwrap();
 
     assert_eq!(rows[0].mountpoint, None);
+}
+
+#[test]
+fn upgrade_snapshot____listed____its_time_and_none_for_a_volume_without() {
+    let rows = parse_list(LISTED).unwrap();
+
+    assert_eq!(
+        upgrade_snapshot(&rows, "tank/v/orders/data"),
+        Some(1_795_000_100)
+    );
+    assert_eq!(upgrade_snapshot(&rows, "tank/v/orders/logs"), None);
+}
+
+#[test]
+fn rollback_fits____a_snapshot_within_the_quota____yes() {
+    let rows = parse_list(LISTED).unwrap();
+
+    assert!(rollback_fits(&rows, "tank/v/orders/data").is_ok());
+}
+
+#[test]
+fn rollback_fits____none_or_one_past_the_quota____refused_saying_why() {
+    let full = "tank/v/a/b\t67117056\t67117056\t67108864\t/srv/v/a/b\tyes\t1\n\
+                tank/v/a/b@upgrade\t0\t67117056\t-\t-\t-\t2\n";
+    let rows = parse_list(full).unwrap();
+    let listed = parse_list(LISTED).unwrap();
+
+    let over = rollback_fits(&rows, "tank/v/a/b").unwrap_err();
+    let none = rollback_fits(&listed, "tank/v/orders/logs").unwrap_err();
+
+    assert!(over.contains("more than its quota"), "{over}");
+    assert!(none.contains("no upgrade snapshot"), "{none}");
+}
+
+#[test]
+fn snapshot_args____each____on_the_upgrade_snapshot_only() {
+    assert_eq!(
+        snapshot_args("tank/v/o/d"),
+        ["snapshot", "tank/v/o/d@upgrade"]
+    );
+    assert_eq!(
+        destroy_snapshot_args("tank/v/o/d"),
+        ["destroy", "tank/v/o/d@upgrade"]
+    );
+    assert_eq!(
+        rollback_args("tank/v/o/d"),
+        ["rollback", "tank/v/o/d@upgrade"]
+    );
 }
 
 #[test]

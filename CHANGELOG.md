@@ -8,6 +8,16 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- An upgrade snapshots each of the app's ZFS volumes first (ROADMAP ZV3),
+  as `@upgrade`, replacing the last upgrade's (audit `volume_snapshot`);
+  `bulkhead volume rollback APP VOLUME` (`POST
+  /v1/volumes/{app}/{volume}/rollback`, audit `volume_rolled_back`)
+  returns a volume to it, losing what either version wrote since, only
+  while the app is stopped. Nothing rolls back by itself: a rolling or
+  blue-green upgrade runs both versions on the volume. `bulkhead volume
+  list` shows the snapshot's age. A volume full when the snapshot was
+  taken can refer to a few KiB past its quota, and its rollback is
+  refused saying so.
 - ZFS volumes' use as metrics (ROADMAP ZV2): `bulkhead_volume_referenced_bytes`
   (what the quota counts), `bulkhead_volume_used_bytes` (with snapshots)
   and `bulkhead_volume_quota_bytes`, labelled `app` and `volume`, read

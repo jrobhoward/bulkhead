@@ -22,10 +22,15 @@ use std::process::Command;
 /// (FreeBSD accepts `devices` too; its device nodes live in devfs alone).
 pub const FIXED: [&str; 4] = ["exec=off", "setuid=off", "devices=off", "canmount=on"];
 
-/// One filesystem under the parent, from `zfs list -H -p`.
+/// The one snapshot of a volume the helper takes, before each upgrade
+/// (ROADMAP ZV3): `VOLUME@upgrade`, replaced by the next upgrade's. A
+/// constant: the node never names a snapshot.
+pub const UPGRADE_SNAPSHOT: &str = "upgrade";
+
+/// One filesystem or snapshot under the parent, from `zfs list -H -p`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// Its full name.
+    /// Its full name (`DATASET@SNAPSHOT` for a snapshot).
     pub name: String,
     /// Bytes used, snapshots included.
     pub used: u64,
@@ -37,9 +42,20 @@ pub struct Row {
     pub mountpoint: Option<String>,
     /// Whether it is mounted.
     pub mounted: bool,
+    /// When it was made, in Unix seconds.
+    pub creation: u64,
 }
 
-/// The arguments listing `dataset` and every filesystem under it.
+impl Row {
+    /// Whether it is a snapshot.
+    #[must_use]
+    pub fn is_snapshot(&self) -> bool {
+        self.name.contains('@')
+    }
+}
+
+/// The arguments listing `dataset` and every filesystem and snapshot under
+/// it.
 #[must_use]
 pub fn list_args(dataset: &str) -> Vec<String> {
     [
@@ -48,9 +64,9 @@ pub fn list_args(dataset: &str) -> Vec<String> {
         "-p",
         "-r",
         "-t",
-        "filesystem",
+        "filesystem,snapshot",
         "-o",
-        "name,used,referenced,refquota,mountpoint,mounted",
+        "name,used,referenced,refquota,mountpoint,mounted,creation",
         dataset,
     ]
     .map(String::from)
@@ -61,7 +77,7 @@ pub fn list_args(dataset: &str) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// A line without six fields, or a size that is not a number.
+/// A line without seven fields, or a size that is not a number.
 pub fn parse_list(out: &str) -> Result<Vec<Row>, String> {
     let num = |s: &str| -> Result<u64, String> {
         if s == "-" || s == "none" {
@@ -75,7 +91,16 @@ pub fn parse_list(out: &str) -> Result<Vec<Row>, String> {
         .filter(|l| !l.is_empty())
         .map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            let [name, used, referenced, refquota, mountpoint, mounted] = f[..] else {
+            let [
+                name,
+                used,
+                referenced,
+                refquota,
+                mountpoint,
+                mounted,
+                creation,
+            ] = f[..]
+            else {
                 return Err(format!("zfs list: {} fields in {line:?}", f.len()));
             };
             Ok(Row {
@@ -86,6 +111,7 @@ pub fn parse_list(out: &str) -> Result<Vec<Row>, String> {
                 mountpoint: (!matches!(mountpoint, "-" | "none" | "legacy"))
                     .then(|| mountpoint.to_string()),
                 mounted: mounted == "yes",
+                creation: num(creation)?,
             })
         })
         .collect()
@@ -165,12 +191,81 @@ pub fn destroy_args(dataset: &str) -> Vec<String> {
 #[must_use]
 pub fn volumes<'a>(parent: &str, rows: &'a [Row]) -> Vec<(&'a str, &'a str, &'a Row)> {
     rows.iter()
+        .filter(|r| !r.is_snapshot())
         .filter_map(|r| {
             let rest = r.name.strip_prefix(parent)?.strip_prefix('/')?;
             let (app, volume) = rest.split_once('/')?;
             (!volume.contains('/')).then_some((app, volume, r))
         })
         .collect()
+}
+
+/// `dataset`'s upgrade snapshot ([`UPGRADE_SNAPSHOT`]).
+#[must_use]
+pub fn upgrade_snapshot_name(dataset: &str) -> String {
+    format!("{dataset}@{UPGRADE_SNAPSHOT}")
+}
+
+/// When `dataset`'s upgrade snapshot was taken, in `rows`, if it has one.
+#[must_use]
+pub fn upgrade_snapshot(rows: &[Row], dataset: &str) -> Option<u64> {
+    let name = upgrade_snapshot_name(dataset);
+    rows.iter().find(|r| r.name == name).map(|r| r.creation)
+}
+
+/// The arguments taking `dataset`'s upgrade snapshot.
+#[must_use]
+pub fn snapshot_args(dataset: &str) -> Vec<String> {
+    vec!["snapshot".into(), upgrade_snapshot_name(dataset)]
+}
+
+/// The arguments removing `dataset`'s upgrade snapshot (one snapshot
+/// alone: no `-r`).
+#[must_use]
+pub fn destroy_snapshot_args(dataset: &str) -> Vec<String> {
+    vec!["destroy".into(), upgrade_snapshot_name(dataset)]
+}
+
+/// Whether `dataset` (in `rows`) can be rolled back to its upgrade
+/// snapshot: it has one, and the snapshot refers to no more than the
+/// volume's quota. A volume filled to its quota when the snapshot was
+/// taken can refer to a few KiB past it, and ZFS then refuses the rollback
+/// (`out of space`, found by ZV3's e2e run on the Raspberry Pi 5,
+/// 2026-11-22);
+/// lifting the quota for it would leave the volume over its quota, so the
+/// helper refuses instead, saying why.
+///
+/// # Errors
+///
+/// Why not, for the operator.
+pub fn rollback_fits(rows: &[Row], dataset: &str) -> Result<(), String> {
+    let snapshot = upgrade_snapshot_name(dataset);
+    let snap = rows
+        .iter()
+        .find(|r| r.name == snapshot)
+        .ok_or("no upgrade snapshot")?;
+    let quota = rows
+        .iter()
+        .find(|r| r.name == dataset)
+        .map_or(0, |r| r.refquota);
+    if quota > 0 && snap.referenced > quota {
+        return Err(format!(
+            "its upgrade snapshot refers to {} bytes, more than its quota of {quota} (it was \
+             full when the upgrade began), and ZFS cannot roll back into that quota; as root, \
+             raise it (zfs set refquota=... {dataset}) to roll back, and expect the app's next \
+             deploy at the old quota to be refused until it holds less",
+            snap.referenced
+        ));
+    }
+    Ok(())
+}
+
+/// The arguments rolling `dataset` back to its upgrade snapshot, without
+/// `-r`: a newer snapshot (the operator's) makes it fail rather than be
+/// destroyed.
+#[must_use]
+pub fn rollback_args(dataset: &str) -> Vec<String> {
+    vec!["rollback".into(), upgrade_snapshot_name(dataset)]
 }
 
 /// Every filesystem under `parent`, `parent` included.

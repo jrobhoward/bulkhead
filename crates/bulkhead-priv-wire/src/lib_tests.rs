@@ -36,6 +36,8 @@ fn spawn() -> Spawn {
 #[case(Request::Volume(VolumeRequest::Ensure { app: "orders".into(), volume: "data".into(), refquota: 10 << 30 }))]
 #[case(Request::Volume(VolumeRequest::List))]
 #[case(Request::Volume(VolumeRequest::Destroy { app: "orders".into(), volume: "data".into() }))]
+#[case(Request::Volume(VolumeRequest::Snapshot { app: "orders".into(), volume: "data".into() }))]
+#[case(Request::Volume(VolumeRequest::Rollback { app: "orders".into(), volume: "data".into() }))]
 fn Request____encoded____decodes_the_same(#[case] request: Request) {
     let bytes = request.encode();
 
@@ -53,7 +55,8 @@ fn Request____encoded____decodes_the_same(#[case] request: Request) {
 #[case(Reply::Exited { id: 1, code: None, signal: Some(9), memory_limit: true })]
 #[case(Reply::Volume { mountpoint: "/srv/bulkhead/volumes/orders/data".into() })]
 #[case(Reply::Volumes { parent: "tank/bulkhead/volumes".into(), rows: Vec::new() })]
-#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, referenced: 65536, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true }] })]
+#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, referenced: 65536, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true, snapshot: None }] })]
+#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "a".into(), volume: "b".into(), used: 1, referenced: 1, refquota: 1, mountpoint: "/srv/v/a/b".into(), mounted: false, snapshot: Some(1_795_000_000) }] })]
 fn Reply____encoded____decodes_the_same(#[case] reply: Reply) {
     let bytes = reply.encode();
 

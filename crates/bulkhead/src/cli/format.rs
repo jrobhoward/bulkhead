@@ -64,6 +64,15 @@ pub fn apps(apps: &[AppSummary]) -> String {
 /// `bulkhead volume list` (ROADMAP ZV1): `USED` is what the quota counts,
 /// `WITH SNAPSHOTS` the snapshots' blocks as well.
 pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    volumes_at(list, now)
+}
+
+/// [`volumes`] at `now` (Unix seconds), for the age of each upgrade
+/// snapshot (ROADMAP ZV3).
+pub(crate) fn volumes_at(list: &[bulkhead::api::VolumeInfo], now: u64) -> String {
     if list.is_empty() {
         return "no volumes".to_string();
     }
@@ -82,6 +91,8 @@ pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
                 v.referenced.map_or_else(|| "-".into(), memory),
                 v.quota.map_or_else(|| "-".into(), memory),
                 v.used.map_or_else(|| "-".into(), memory),
+                v.snapshot
+                    .map_or_else(|| "-".into(), |t| age(now.saturating_sub(t))),
                 v.path.clone(),
                 state.to_string(),
             ]
@@ -95,6 +106,7 @@ pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
             "USED",
             "QUOTA",
             "WITH SNAPSHOTS",
+            "SNAPSHOT",
             "PATH",
             "",
         ],
@@ -137,6 +149,16 @@ pub fn instances(list: &[InstanceInfo]) -> String {
         ],
         &rows,
     )
+}
+
+/// An age in seconds as one unit, for tables: `40s`, `12m`, `5h`, `3d`.
+fn age(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs}s ago"),
+        60..3600 => format!("{}m ago", secs / 60),
+        3600..86_400 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86_400),
+    }
 }
 
 /// Bytes as KiB or MiB, for tables.

@@ -138,6 +138,16 @@ enum VolumeCommand {
         /// The volume, as the app's manifest names it.
         volume: String,
     },
+    /// Roll an app's ZFS volume back to the snapshot its last upgrade took
+    /// (ROADMAP ZV3), losing everything written since, by either version.
+    /// Refused while the app runs: `bulkhead stop APP` first, `bulkhead
+    /// start APP` after. The snapshot stays, so it can be done again.
+    Rollback {
+        /// The app.
+        app: String,
+        /// The volume, as the app's manifest names it.
+        volume: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -927,6 +937,9 @@ async fn run_volume(client: &Client, json: bool, action: VolumeCommand) -> anyho
         VolumeCommand::List => print(json, &client.volumes().await?, |v| format::volumes(v)),
         VolumeCommand::Destroy { app, volume } => {
             done(json, client.destroy_volume(&app, &volume).await)
+        }
+        VolumeCommand::Rollback { app, volume } => {
+            done(json, client.rollback_volume(&app, &volume).await)
         }
     }
 }

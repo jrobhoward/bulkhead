@@ -842,6 +842,40 @@ impl Runtime {
             app: app.to_string(),
             volume: volume.to_string(),
         };
+        self.volume_done(request).await
+    }
+
+    /// Snapshot `app`'s ZFS volume `volume` as `@upgrade` before an
+    /// upgrade (ROADMAP ZV3), replacing the last one.
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper refused (no such volume, a `zfs` failure)
+    /// or has gone.
+    pub async fn snapshot_volume(&self, app: &str, volume: &str) -> Result<(), String> {
+        let request = VolumeRequest::Snapshot {
+            app: app.to_string(),
+            volume: volume.to_string(),
+        };
+        self.volume_done(request).await
+    }
+
+    /// Roll `app`'s ZFS volume `volume` back to its `@upgrade` snapshot
+    /// (ROADMAP ZV3), discarding what was written since.
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper refused (an instance of the app runs, no
+    /// such volume or snapshot, a newer snapshot) or has gone.
+    pub async fn rollback_volume(&self, app: &str, volume: &str) -> Result<(), String> {
+        let request = VolumeRequest::Rollback {
+            app: app.to_string(),
+            volume: volume.to_string(),
+        };
+        self.volume_done(request).await
+    }
+
+    async fn volume_done(&self, request: VolumeRequest) -> Result<(), String> {
         match self.volume_request(request).await? {
             PrivReply::Done => Ok(()),
             other => Err(format!("the privileged helper answered {other:?}")),

@@ -1420,3 +1420,60 @@ async fn zfs____requests_outside_the_rules____refused_by_the_helper() {
     assert!(bad_app.is_err_and(|e| e.contains("not an app name")));
     assert!(missing.is_err_and(|e| e.contains("no volume")));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zfs____an_upgrade_snapshot____replaced_then_rolled_back_once_the_app_ends() {
+    let Some(started) = zfs_helper("zfs____an_upgrade_snapshot") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let parent = started.zfs_parent.clone().unwrap_or_default();
+    let mp = rt.ensure_volume("delta", "data", 16 << 20).await.unwrap();
+    rt.share_with_app("delta", &mp, true).await.unwrap();
+    let spec = InstanceSpec {
+        granted: [Capability::Filesystem].into(),
+        preopens: vec![bulkhead_host::Preopen {
+            host: mp.clone(),
+            guest: "/data".into(),
+            writable: true,
+        }],
+        ..spec("delta")
+    };
+    let i = rt.spawn(&app, spec).unwrap();
+    let no_snapshot = rt.rollback_volume("delta", "data").await;
+
+    assert_eq!(ask(&i, "vwrite /data/before.txt").await, "ok");
+    rt.snapshot_volume("delta", "data").await.unwrap();
+    assert_eq!(ask(&i, "vwrite /data/kept.txt").await, "ok");
+    // A second upgrade's snapshot replaces the first.
+    rt.snapshot_volume("delta", "data").await.unwrap();
+    let (_, rows) = rt.volumes().await.unwrap();
+    assert_eq!(ask(&i, "vwrite /data/after.txt").await, "ok");
+    let while_running = rt.rollback_volume("delta", "data").await;
+    i.kill();
+    let _ = tokio::time::timeout(Duration::from_secs(5), i.wait()).await;
+    let rolled = rt.rollback_volume("delta", "data").await;
+    let snapshots = std::process::Command::new(privhelper::ZFS)
+        .args(["list", "-H", "-t", "snapshot", "-o", "name", "-r"])
+        .arg(format!("{parent}/delta/data"))
+        .output()
+        .unwrap();
+
+    assert!(no_snapshot.is_err_and(|e| e.contains("no upgrade snapshot")));
+    assert!(rows[0].snapshot.is_some(), "{rows:?}");
+    assert!(
+        while_running.is_err_and(|e| e.contains("instances running")),
+        "refused while the app runs"
+    );
+    assert!(rolled.is_ok(), "{rolled:?}");
+    assert!(mp.join("before.txt").exists());
+    assert!(mp.join("kept.txt").exists(), "the second snapshot holds it");
+    assert!(!mp.join("after.txt").exists(), "written after the snapshot");
+    assert_eq!(
+        String::from_utf8_lossy(&snapshots.stdout).trim(),
+        format!("{parent}/delta/data@upgrade"),
+        "one snapshot"
+    );
+    rt.destroy_volume("delta", "data").await.unwrap();
+}

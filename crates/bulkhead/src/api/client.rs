@@ -419,6 +419,22 @@ impl Client {
             .await
     }
 
+    /// Roll `app`'s ZFS volume `volume` back to the snapshot its last
+    /// upgrade took, losing what was written since (ROADMAP ZV3).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; conflict while the app runs, or when the
+    /// volume has no upgrade snapshot or a newer one.
+    pub async fn rollback_volume(&self, app: &str, volume: &str) -> Result<Done, ClientError> {
+        self.json(
+            Method::POST,
+            &format!("/v1/volumes/{app}/{volume}/rollback"),
+            None,
+        )
+        .await
+    }
+
     /// The node's copy of its pair's replicated log, as a DR node.
     ///
     /// # Errors

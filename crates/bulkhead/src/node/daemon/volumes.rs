@@ -229,6 +229,7 @@ impl Node {
                 quota: None,
                 mounted: true,
                 deployed: None,
+                snapshot: None,
             })
             .collect();
         if self.config.volumes.zfs.is_none() {
@@ -252,8 +253,89 @@ impl Node {
             referenced: Some(r.referenced),
             quota: Some(r.refquota),
             mounted: r.mounted,
+            snapshot: r.snapshot,
         }));
         Ok(out)
+    }
+
+    /// Before `app` moves from version `from` to `to`, snapshot each of its
+    /// ZFS volumes as `@upgrade` (ROADMAP ZV3), replacing the last
+    /// upgrade's, so an operator can roll the volume back if the new
+    /// version wrote what it should not have. Nothing without
+    /// `[volumes.zfs]` or a volume.
+    ///
+    /// # Errors
+    ///
+    /// [`NodeError::Refused`] for a volume the helper could not snapshot:
+    /// the upgrade does not go ahead.
+    pub(super) async fn snapshot_volumes(
+        &self,
+        app: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<(), NodeError> {
+        if self.config.volumes.zfs.is_none() {
+            return Ok(());
+        }
+        let (_, rows) = self.rt.volumes().await.map_err(NodeError::Internal)?;
+        let mine: Vec<String> = rows
+            .into_iter()
+            .filter(|r| r.app == app)
+            .map(|r| r.volume)
+            .collect();
+        if mine.is_empty() {
+            return Ok(());
+        }
+        for volume in &mine {
+            self.rt.snapshot_volume(app, volume).await.map_err(|e| {
+                NodeError::Refused(format!(
+                    "volume '{volume}' not snapshot before the upgrade: {e}"
+                ))
+            })?;
+        }
+        self.audit.record(
+            "volume_snapshot",
+            json!({ "app": app, "volumes": mine, "from": from, "to": to }),
+        );
+        refresh(&self.rt, &self.volume_rows).await;
+        Ok(())
+    }
+
+    /// Roll `app`'s ZFS volume `volume` back to the snapshot its last
+    /// upgrade took (ROADMAP ZV3), losing what was written since. Only
+    /// while the app is stopped or undeployed; the helper refuses too while
+    /// any of its instances runs.
+    ///
+    /// # Errors
+    ///
+    /// [`NodeError::Invalid`] without `[volumes.zfs]`;
+    /// [`NodeError::Conflict`] while the app runs, or the helper refused
+    /// (no such volume or snapshot, a newer snapshot of the operator's).
+    pub async fn rollback_volume(&self, app: &str, volume: &str) -> Result<Done, NodeError> {
+        if self.config.volumes.zfs.is_none() {
+            return Err(NodeError::Invalid(
+                "this node has no ZFS volumes ([volumes.zfs])".into(),
+            ));
+        }
+        let _change = self.change.lock().await;
+        if self.st().desired.apps.get(app).is_some_and(|a| a.running) {
+            return Err(NodeError::Conflict(format!(
+                "{app} is running; stop it first (bulkhead stop {app}): a rollback changes the \
+                 files under its instances"
+            )));
+        }
+        self.rt
+            .rollback_volume(app, volume)
+            .await
+            .map_err(NodeError::Conflict)?;
+        self.audit.record(
+            "volume_rolled_back",
+            json!({ "app": app, "volume": volume }),
+        );
+        refresh(&self.rt, &self.volume_rows).await;
+        Ok(Done {
+            message: format!("{app}'s volume {volume} rolled back to its upgrade snapshot"),
+        })
     }
 
     /// Remove `app`'s ZFS volume `volume` and what it holds, once the app

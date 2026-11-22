@@ -176,6 +176,25 @@ pub enum VolumeRequest {
         /// The volume ([`is_volume_name`]).
         volume: String,
     },
+    /// Snapshot the volume as `@upgrade` before an upgrade (ROADMAP ZV3),
+    /// replacing the one an earlier upgrade took; answered [`Reply::Done`]
+    /// or [`Reply::Refused`].
+    Snapshot {
+        /// The app ([`is_app_name`]).
+        app: String,
+        /// The volume ([`is_volume_name`]).
+        volume: String,
+    },
+    /// Roll the volume back to its `@upgrade` snapshot, discarding what was
+    /// written since. Refused while an instance of the app runs, or when a
+    /// newer snapshot exists; answered [`Reply::Done`] or
+    /// [`Reply::Refused`].
+    Rollback {
+        /// The app ([`is_app_name`]).
+        app: String,
+        /// The volume ([`is_volume_name`]).
+        volume: String,
+    },
 }
 
 /// One ZFS volume, as [`Reply::Volumes`] lists it.
@@ -195,6 +214,9 @@ pub struct VolumeRow {
     pub mountpoint: String,
     /// Whether it is mounted.
     pub mounted: bool,
+    /// When its `@upgrade` snapshot was taken (Unix seconds), if it has
+    /// one (ROADMAP ZV3).
+    pub snapshot: Option<u64>,
 }
 
 /// What the helper answers or reports.
@@ -254,6 +276,8 @@ const T_SHARE: u8 = 4;
 const T_VOLUME_ENSURE: u8 = 5;
 const T_VOLUME_LIST: u8 = 6;
 const T_VOLUME_DESTROY: u8 = 7;
+const T_VOLUME_SNAPSHOT: u8 = 8;
+const T_VOLUME_ROLLBACK: u8 = 9;
 const T_SPAWNED: u8 = 0x81;
 const T_DONE: u8 = 0x82;
 const T_BOUND: u8 = 0x83;
@@ -292,6 +316,15 @@ impl Writer {
             Some(v) => {
                 self.u8(1);
                 self.i32(v);
+            }
+            None => self.u8(0),
+        }
+    }
+    fn opt_u64(&mut self, v: Option<u64>) {
+        match v {
+            Some(v) => {
+                self.u8(1);
+                self.u64(v);
             }
             None => self.u8(0),
         }
@@ -342,6 +375,13 @@ impl Reader<'_> {
     fn opt_i32(&mut self) -> Option<Option<i32>> {
         if self.bool()? {
             Some(Some(self.i32()?))
+        } else {
+            Some(None)
+        }
+    }
+    fn opt_u64(&mut self) -> Option<Option<u64>> {
+        if self.bool()? {
+            Some(Some(self.u64()?))
         } else {
             Some(None)
         }
@@ -409,6 +449,16 @@ impl Request {
             Self::Volume(VolumeRequest::List) => w.u8(T_VOLUME_LIST),
             Self::Volume(VolumeRequest::Destroy { app, volume }) => {
                 w.u8(T_VOLUME_DESTROY);
+                w.str(app);
+                w.str(volume);
+            }
+            Self::Volume(VolumeRequest::Snapshot { app, volume }) => {
+                w.u8(T_VOLUME_SNAPSHOT);
+                w.str(app);
+                w.str(volume);
+            }
+            Self::Volume(VolumeRequest::Rollback { app, volume }) => {
+                w.u8(T_VOLUME_ROLLBACK);
                 w.str(app);
                 w.str(volume);
             }
@@ -482,6 +532,14 @@ impl Request {
                 app: r.str()?,
                 volume: r.str()?,
             }),
+            T_VOLUME_SNAPSHOT => Self::Volume(VolumeRequest::Snapshot {
+                app: r.str()?,
+                volume: r.str()?,
+            }),
+            T_VOLUME_ROLLBACK => Self::Volume(VolumeRequest::Rollback {
+                app: r.str()?,
+                volume: r.str()?,
+            }),
             _ => return None,
         };
         r.end()?;
@@ -546,6 +604,7 @@ impl Reply {
                     w.u64(row.refquota);
                     w.str(&row.mountpoint);
                     w.u8(u8::from(row.mounted));
+                    w.opt_u64(row.snapshot);
                 }
             }
         }
@@ -591,6 +650,7 @@ impl Reply {
                             refquota: r.u64()?,
                             mountpoint: r.str()?,
                             mounted: r.bool()?,
+                            snapshot: r.opt_u64()?,
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;

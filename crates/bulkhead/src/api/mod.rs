@@ -26,6 +26,7 @@
 //! | `POST /v1/instances/{pid}/kill` | | [`Done`] |
 //! | `GET /v1/volumes` | | `Vec<VolumeInfo>` |
 //! | `DELETE /v1/volumes/{app}/{volume}` | | [`Done`] |
+//! | `POST /v1/volumes/{app}/{volume}/rollback` | | [`Done`] |
 //!
 //! A stream is a chunked response of JSON lines (`application/x-ndjson`),
 //! one value per line, with an empty line every 15 seconds when there is
@@ -338,6 +339,11 @@ pub struct VolumeInfo {
     /// Whether a ZFS volume's app is deployed (it can be destroyed only
     /// once it is not).
     pub deployed: Option<bool>,
+    /// When a ZFS volume's last upgrade snapshot was taken (Unix seconds),
+    /// which `POST /v1/volumes/{app}/{volume}/rollback` returns it to
+    /// (ROADMAP ZV3).
+    #[serde(default)]
+    pub snapshot: Option<u64>,
 }
 
 /// A DR node's copy of its pair's replicated log (`[dr]`).

@@ -462,6 +462,9 @@ async fn volumes(node: &Node, method: &Method, rest: &[&str]) -> Reply {
     match (method, rest) {
         (&Method::GET, []) => respond(node.volumes().await),
         (&Method::DELETE, [app, volume]) => respond(node.destroy_volume(app, volume).await),
+        (&Method::POST, [app, volume, "rollback"]) => {
+            respond(node.rollback_volume(app, volume).await)
+        }
         _ => error(&NodeError::NotFound(format!(
             "no route for {method} /v1/volumes/{}",
             rest.join("/")

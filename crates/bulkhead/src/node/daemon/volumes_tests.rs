@@ -94,6 +94,7 @@ fn metrics____two_volumes____three_families_labelled_by_app_and_volume() {
         refquota: 64,
         mountpoint: "/srv/v".into(),
         mounted: true,
+        snapshot: None,
     };
     let kept: Kept = Arc::new(Mutex::new(vec![row("orders", "data"), row("logs", "a")]));
 
