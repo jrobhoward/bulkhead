@@ -157,6 +157,7 @@ impl Names {
             schema: Some(RESOLVE_SCHEMA.into()),
             body: serde_json::to_vec(&serde_json::json!({ "host": host }))
                 .map_err(|e| ResolveError::Refused(e.to_string()))?,
+            trace: None,
         };
         let reply = loop {
             let Some(rt) = self.inner.rt.get().and_then(Weak::upgrade) else {

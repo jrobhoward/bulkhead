@@ -215,9 +215,12 @@ pub fn write_kv_answer(out: &mut Vec<u8>, id: u64, reply: &KvReply<'_>) {
     });
 }
 
-/// Whether `env` fits the hot layout's lengths.
+/// Whether `env` fits the hot layout's lengths, and carries no trace,
+/// which the layouts have no room for (ROADMAP O1: a traced message goes
+/// as CBOR).
 fn envelope_fits(env: &Envelope) -> bool {
-    u16::try_from(env.content_type.len()).is_ok()
+    env.trace.is_none()
+        && u16::try_from(env.content_type.len()).is_ok()
         && env
             .schema
             .as_ref()
@@ -594,6 +597,7 @@ impl<'a> Reader<'a> {
             content_type,
             schema,
             body,
+            trace: None,
         })
     }
 

@@ -35,6 +35,8 @@ struct Job {
 #[derive(Debug)]
 pub struct Egress {
     jobs: mpsc::UnboundedSender<Job>,
+    /// Whether a traced request carries `traceparent` (ROADMAP O1).
+    traceparent: bool,
 }
 
 /// The counters, registered before the sender became async.
@@ -72,6 +74,7 @@ struct Start {
 impl App for Egress {
     fn init(_ctx: &mut Ctx, args: &[u8]) -> Result<Self, String> {
         let config = Config::from_args(args)?;
+        let config_traceparent = config.traceparent;
         // Refused here rather than on the first request.
         config.roots()?;
         // The app's client certificate (ROADMAP DA4b), from the files the
@@ -93,7 +96,10 @@ impl App for Egress {
             .name("egress".into())
             .spawn(move || worker(start))
             .map_err(|e| format!("worker thread: {e}"))?;
-        Ok(Self { jobs })
+        Ok(Self {
+            jobs,
+            traceparent: config_traceparent,
+        })
     }
 
     fn handle_call(&mut self, _ctx: &mut Ctx, call: CallRef, msg: Envelope) -> Reply {
@@ -101,7 +107,12 @@ impl App for Egress {
             return Reply::Now(Envelope::text("bulkhead-egress"));
         }
         let answer = match msg.decode::<EgressRequest>() {
-            Ok(request) => {
+            Ok(mut request) => {
+                if self.traceparent
+                    && let Some(trace) = msg.trace.as_deref()
+                {
+                    add_traceparent(&mut request.request, trace);
+                }
                 if self
                     .jobs
                     .send(Job {
@@ -118,6 +129,25 @@ impl App for Egress {
         };
         Reply::Now(answer_envelope(&answer))
     }
+}
+
+/// Give `request` the W3C `traceparent` header of `trace` (ROADMAP O1),
+/// unless the app set one of its own.
+pub fn add_traceparent(
+    request: &mut bulkhead_native::protocol::HttpRequest,
+    trace: &bulkhead_native::protocol::Trace,
+) {
+    if request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("traceparent"))
+    {
+        return;
+    }
+    request.headers.push((
+        "traceparent".to_string(),
+        bulkhead_native::protocol::Bytes(trace.traceparent().into_bytes()),
+    ));
 }
 
 /// `answer` as the driver's answer to a call.

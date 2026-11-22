@@ -405,10 +405,12 @@ fn logs(node: &Node, app: &str, q: &[(String, String)]) -> Reply {
         Ok((n, f)) => (n.unwrap_or(100), f.unwrap_or(false)),
         Err(e) => return error(&e),
     };
+    // Records of one trace alone (ROADMAP O1).
+    let trace = q.iter().find(|(k, _)| k == "trace").map(|(_, v)| v.clone());
     if !follow {
-        return respond(node.logs(app, lines));
+        return respond(node.logs(app, lines, trace.as_deref()));
     }
-    let (backlog, feed) = match node.follow_logs(app, lines) {
+    let (backlog, feed) = match node.follow_logs(app, lines, trace.as_deref()) {
         Ok(f) => f,
         Err(e) => return error(&e),
     };
@@ -420,7 +422,13 @@ fn logs(node: &Node, app: &str, q: &[(String, String)]) -> Reply {
         backlog.iter().filter_map(to_json).collect(),
         feed,
         node.stopping(),
-        move |record| (record.0 == app).then(|| to_json(&record.1)).flatten(),
+        move |record| {
+            let wanted = record.0 == app
+                && trace
+                    .as_deref()
+                    .is_none_or(|t| super::logring::of_trace(&record.1, t));
+            wanted.then(|| to_json(&record.1)).flatten()
+        },
         |missed| {
             to_json(&LogLine {
                 time_ms: super::audit::now_ms(),
@@ -428,6 +436,7 @@ fn logs(node: &Node, app: &str, q: &[(String, String)]) -> Reply {
                 pid: String::new(),
                 source: "bulkhead".into(),
                 message: format!("{missed} records missed: this follower fell behind"),
+                trace: None,
             })
             .unwrap_or_default()
         },
@@ -584,24 +593,34 @@ async fn call<B: AdminBody>(
     q: &[(String, String)],
     req: Request<B>,
 ) -> Reply {
-    let timeout = match param::<u64>(q, "timeout_ms") {
-        Ok(t) => Duration::from_millis(t.unwrap_or(5_000)),
+    let params = param::<u64>(q, "timeout_ms").and_then(|t| Ok((t, param::<bool>(q, "trace")?)));
+    let (timeout, traced) = match params {
+        Ok((t, traced)) => (
+            Duration::from_millis(t.unwrap_or(5_000)),
+            traced.unwrap_or(false),
+        ),
         Err(e) => return error(&e),
     };
     let (content_type, bytes) = match body(req).await {
         Ok(b) => b,
         Err(e) => return error(&e),
     };
-    match node
-        .call_to(target, Envelope::new(content_type, bytes), timeout)
-        .await
-    {
+    let mut msg = Envelope::new(content_type, bytes);
+    // A new trace, for following this call through apps (ROADMAP O1).
+    let trace = traced.then(bulkhead_host::Trace::root);
+    msg.trace = trace.map(Box::new);
+    match node.call_to(target, msg, timeout).await {
         Ok(reply) => {
             let mut response = Response::new(full(reply.body));
             if let Ok(v) = hyper::header::HeaderValue::from_str(&reply.content_type) {
                 response
                     .headers_mut()
                     .insert(hyper::header::CONTENT_TYPE, v);
+            }
+            if let Some(trace) = trace
+                && let Ok(v) = hyper::header::HeaderValue::from_str(&trace.traceparent())
+            {
+                response.headers_mut().insert("traceparent", v);
             }
             response
         }

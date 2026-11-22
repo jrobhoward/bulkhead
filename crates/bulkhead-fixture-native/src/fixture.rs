@@ -11,6 +11,8 @@ use bulkhead_native::protocol::{
 
 #[derive(Default)]
 struct Fixture {
+    /// The `traceparent` of the call being handled, if traced (ROADMAP O1).
+    incoming_trace: Option<String>,
     infos: Vec<String>,
     /// The bodies of the CBOR casts received, as hex.
     cbor_casts: Vec<String>,
@@ -434,6 +436,8 @@ impl Fixture {
                 app::log(Level::Warn, rest);
                 "ok".into()
             }
+            // The traced call's `traceparent`, or `none` (ROADMAP O1).
+            "trace" => self.incoming_trace.clone().unwrap_or_else(|| "none".into()),
             "log-at" => {
                 app::log(level(first), tail);
                 "ok".into()
@@ -699,6 +703,7 @@ impl App for Fixture {
         }
         // `{"key": ..., "cmd": ...}` from `call-app`: a body a pool can
         // hash, carrying a command.
+        self.incoming_trace = msg.trace.as_deref().map(|t| t.traceparent());
         let command = if msg.content_type == "application/json" {
             serde_json::from_slice::<serde_json::Value>(&msg.body)
                 .ok()

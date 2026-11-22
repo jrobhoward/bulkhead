@@ -177,6 +177,7 @@ impl Shared {
                 "pool_max_idle_per_host": self.config.pool_max_idle_per_host,
                 "max_response_body": self.config.max_response_body,
                 "roots_pem": roots_pem,
+                "traceparent": self.config.traceparent,
             });
             // The files' paths in the driver's root, never their contents.
             if let Some(identity) = self.config.identities.get(app) {
@@ -417,14 +418,15 @@ impl Instance {
     pub(crate) async fn native(
         &self,
         request: bulkhead_native::protocol::HttpRequest,
+        trace: Option<crate::message::Trace>,
     ) -> Result<bulkhead_native::protocol::HttpResponse, bulkhead_native::protocol::HttpError> {
         #[cfg(feature = "egress")]
         {
-            self.hooks.native(request).await
+            self.hooks.native(request, trace).await
         }
         #[cfg(not(feature = "egress"))]
         {
-            let _ = request;
+            let _ = (request, trace);
             Err(bulkhead_native::protocol::HttpError::Other(
                 "this node was built without egress (cargo feature `egress`)".into(),
             ))
@@ -574,10 +576,13 @@ mod hooks {
         }
 
         /// An app's request: checked against the filter, then sent by the
-        /// app's egress driver while the app's permit is held.
+        /// app's egress driver while the app's permit is held; with
+        /// `trace`, the requesting callback's, as a child span of it
+        /// (ROADMAP O1), which the driver sends on as `traceparent`.
         pub(crate) async fn native(
             &self,
             request: p::HttpRequest,
+            trace: Option<crate::message::Trace>,
         ) -> Result<p::HttpResponse, p::HttpError> {
             if let Err(e) = self.refuse(&request) {
                 if e == p::HttpError::Denied {
@@ -617,6 +622,7 @@ mod hooks {
                         content_type: "application/cbor".into(),
                         schema: Some(EGRESS_SCHEMA.into()),
                         body: cbor,
+                        trace: trace.map(|t| Box::new(t.child())),
                     };
                     self.ask(msg, backstop).await
                 }

@@ -280,8 +280,16 @@ async fn lease_changed(lease: Option<&mut watch::Receiver<RunUntil>>) {
 }
 
 /// Log a record from the app.
+/// Record an app's log line, with the trace of the callback it came in,
+/// if traced (ROADMAP O1).
 fn log(state: &mut InstanceState, level: p::Level, message: &str) {
-    logging::record(&mut HostState::<Logging>::service(state), level, message);
+    let trace = state.trace.map(|t| t.trace_hex());
+    logging::record(
+        &mut HostState::<Logging>::service(state),
+        level,
+        message,
+        trace.as_deref(),
+    );
 }
 
 /// A cast's answer: `Unit` once queued, or why it was not.
@@ -298,9 +306,11 @@ fn cast_answer(sent: Result<(), CallError>) -> Answer {
 /// deadline, which caps how long a cast waits for room.
 async fn answer(
     state: &mut InstanceState,
-    request: Request,
+    mut request: Request,
     deadline: Duration,
 ) -> Result<Answer, String> {
+    // What a traced callback sends joins its trace (ROADMAP O1).
+    crate::trace::stamp_request(&mut request, state.trace);
     Ok(match request {
         Request::SelfPid => Answer::Pid(convert::pid(state.self_pid())),
         Request::Cast { to, msg } => {
@@ -469,12 +479,15 @@ async fn service_answer(state: &mut InstanceState, request: Request) -> Result<A
         Request::Sql(request) => {
             Answer::Sql(HostState::<Sql>::service(state).native(request).await)
         }
-        Request::Http(request) => Answer::Http(
-            HostState::<Egress>::service(state)
-                .state
-                .native(request)
-                .await,
-        ),
+        Request::Http(request) => {
+            let trace = state.trace;
+            Answer::Http(
+                HostState::<Egress>::service(state)
+                    .state
+                    .native(request, trace)
+                    .await,
+            )
+        }
         Request::Extension {
             package,
             function,
@@ -1239,6 +1252,11 @@ impl InstanceTask {
         let _ = self.me.take_woke();
         let started = Instant::now();
         let deadline = spec.callback_deadline;
+        // The message's trace, for what the callback sends (ROADMAP O1).
+        state.trace = match &message {
+            Message::Call { msg, .. } | Message::Cast(msg) => msg.trace.as_deref().copied(),
+            Message::Info(_) => None,
+        };
         let outcome = match message {
             Message::Call { msg, reply } => {
                 let call_ref = self.next_ref;
@@ -1300,6 +1318,7 @@ impl InstanceTask {
                 }
             }
         };
+        state.trace = None;
         let took = started.elapsed();
         self.stats.callback(kind, took);
         if probe::callback_done_enabled() {

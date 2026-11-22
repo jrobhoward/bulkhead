@@ -214,6 +214,7 @@ fn cast_body<T: Serialize>(schema: &str, value: &T) -> p::Envelope {
         content_type: "application/json".into(),
         schema: Some(schema.into()),
         body: serde_json::to_vec(value).unwrap_or_default(),
+        trace: None,
     }
 }
 

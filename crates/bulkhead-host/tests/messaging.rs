@@ -328,6 +328,7 @@ async fn envelope____content_type_and_schema____reach_the_guest_untouched() {
         content_type: "application/x-bulkhead-test".into(),
         schema: Some("orders.place.v1".into()),
         body: b"mirror".to_vec(),
+        trace: None,
     };
 
     let reply = a.call(sent.clone(), LONG).await.unwrap();

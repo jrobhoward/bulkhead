@@ -1213,3 +1213,20 @@ fn NodeConfig____bad_egress_settings____refused(#[case] text: &str, #[case] says
 
     assert!(err.to_string().contains(says), "{err}");
 }
+
+#[test]
+fn NodeConfig____tracing____defaults_and_a_rate_as_millionths() {
+    let plain = NodeConfig::from_toml_str("data_dir = \"/d\"\n").unwrap();
+    let set = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[tracing]\nsample_rate = 0.25\naccept_traceparent = false\n",
+    )
+    .unwrap();
+    let over =
+        NodeConfig::from_toml_str("data_dir = \"/d\"\n[tracing]\nsample_rate = 1.5\n").unwrap_err();
+
+    assert_eq!(plain.tracing.sample_ppm, 0);
+    assert!(plain.tracing.accept_traceparent);
+    assert_eq!(set.tracing.sample_ppm, 250_000);
+    assert!(!set.tracing.accept_traceparent);
+    assert!(over.to_string().contains("from 0 to 1"), "{over}");
+}

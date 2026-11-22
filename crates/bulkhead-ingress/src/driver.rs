@@ -148,7 +148,13 @@ impl App for Ingress {
                 tls,
             }));
         }
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            tracing: crate::serve::Tracing {
+                sample_ppm: config.trace_sample_ppm,
+                accept_traceparent: config.accept_traceparent,
+            },
+            ..Shared::default()
+        });
         let listening = Arc::new(listening);
         let mut workers = Vec::new();
         let mut inboxes = Vec::new();

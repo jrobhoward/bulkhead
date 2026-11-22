@@ -43,6 +43,38 @@ pub struct Shared {
     pub routed: tokio::sync::watch::Sender<bool>,
     /// What the driver has served.
     pub counters: Counters,
+    /// Where traces start (ROADMAP O1).
+    pub tracing: Tracing,
+}
+
+/// Where the driver starts traces (ROADMAP O1): from a client's sampled
+/// `traceparent` header, if accepted, and for a share of the rest.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Tracing {
+    /// Of every million requests without a sampled `traceparent`, how
+    /// many start a trace.
+    pub sample_ppm: u32,
+    /// Whether a client's sampled `traceparent` continues its trace.
+    pub accept_traceparent: bool,
+}
+
+/// The trace a request's call carries (ROADMAP O1): a new span of the
+/// client's trace, from a sampled `traceparent` header the driver accepts;
+/// else, when `roll` (a number below a million, drawn only with a share
+/// above 0) falls under the sample share, a new trace; else none.
+#[must_use]
+pub fn start_trace(
+    tracing: Tracing,
+    traceparent: Option<&str>,
+    roll: impl FnOnce() -> u32,
+) -> Option<bulkhead_native::protocol::Trace> {
+    use bulkhead_native::protocol::Trace;
+    if tracing.accept_traceparent
+        && let Some((client, true)) = traceparent.and_then(Trace::from_traceparent)
+    {
+        return Some(client.child());
+    }
+    (tracing.sample_ppm > 0 && roll() < tracing.sample_ppm).then(Trace::root)
 }
 
 /// What the driver has served, added to the app's metrics now and then.
@@ -180,7 +212,12 @@ async fn handle(
         client_cert: client.cloned(),
     };
     let timeout_ms = u32::try_from(route.timeout_ms).unwrap_or(u32::MAX);
-    let msg: Envelope = request.to_envelope().into();
+    let mut msg: Envelope = request.to_envelope().into();
+    let traceparent = parts
+        .headers
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok());
+    msg.trace = start_trace(shared.tracing, traceparent, roll).map(Box::new);
     // Kept for the partner only where a listener forwards.
     let again = matches!(listening.config.standby, Standby::Forward).then(|| msg.clone());
     let mut result = sender.call_app(route.app.as_str(), msg, timeout_ms).await;
@@ -205,6 +242,13 @@ async fn handle(
         }
     }
     from_call(result, listening.config.max_response)
+}
+
+/// A number below a million, for the sample share: from a trace id's
+/// randomness, so the driver needs no other source.
+fn roll() -> u32 {
+    let t = bulkhead_native::protocol::Trace::root();
+    u32::from_le_bytes([t.span_id[0], t.span_id[1], t.span_id[2], t.span_id[3]]) % 1_000_000
 }
 
 /// The body, whole, within `max_body` and the listener's body timeout; a

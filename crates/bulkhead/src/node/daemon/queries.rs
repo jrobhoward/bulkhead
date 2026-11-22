@@ -292,11 +292,16 @@ impl Node {
     /// # Errors
     ///
     /// [`NodeError::NotFound`].
-    pub fn logs(&self, name: &str, lines: usize) -> Result<Vec<LogLine>, NodeError> {
+    pub fn logs(
+        &self,
+        name: &str,
+        lines: usize,
+        trace: Option<&str>,
+    ) -> Result<Vec<LogLine>, NodeError> {
         if !self.st().desired.apps.contains_key(name) {
             return Err(NodeError::NotFound(format!("{name} is not deployed")));
         }
-        Ok(self.logs.recent(name, lines))
+        Ok(self.logs.recent(name, lines, trace))
     }
 
     /// `name`'s last `lines` log records, and a feed of every app's new
@@ -309,11 +314,12 @@ impl Node {
         &self,
         name: &str,
         lines: usize,
+        trace: Option<&str>,
     ) -> Result<(Vec<LogLine>, LogFeed), NodeError> {
         if !self.st().desired.apps.contains_key(name) {
             return Err(NodeError::NotFound(format!("{name} is not deployed")));
         }
-        Ok(self.logs.follow(name, lines))
+        Ok(self.logs.follow(name, lines, trace))
     }
 
     /// The node's events from now on, each a line of JSON.

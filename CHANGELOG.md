@@ -8,6 +8,20 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Trace context across calls and nodes (ROADMAP O1; OBSERVABILITY.md,
+  "Traces"): a message's envelope may carry a W3C trace id and span id.
+  The HTTP ingress starts a trace from a client's sampled `traceparent`
+  (unless `[tracing] accept_traceparent = false`) or for
+  `[tracing] sample_rate` of the other requests (0 by default), and
+  `bulkhead call --trace` starts one (`?trace=true`, printing its id).
+  What a traced callback sends joins its trace by itself; an app's own
+  threads and drivers set `Envelope::trace`. Log records written in a
+  traced callback carry its id (`LogLine::trace`), and `bulkhead logs
+  --trace ID` filters by it (`?trace=`). The egress driver sends
+  `traceparent` for a traced request unless `[egress] traceparent =
+  false`. A traced message travels as a CBOR frame; untraced ones encode
+  as before, so the native protocol stays at version 14 and a peer node
+  one release older ignores the trace.
 - A wedged node is restarted (ROADMAP B6): under the privileged helper the
   node tells the helper it is alive every 5 s, and the helper kills one
   silent past its `node_watchdog_s` (30 s by default, `0` never) and

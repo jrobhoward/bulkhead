@@ -63,6 +63,7 @@ Cluster members trust one another fully, as nodes of an Erlang cluster do: mutua
 
 ### Ingress clients
 
+- **Trace context** (ROADMAP O1). A client's `traceparent` header is read by the ingress driver as two hexadecimal ids and a flag; it decides only which trace id the request's records carry and whether the request is traced, never routing or access. A client that marks its requests sampled makes each travel to its app as a CBOR frame rather than a hot one (about 2.5 times a call's cost on the Raspberry Pi 5, BASELINE.md, 2026-11-22), and its records carry ids it chose: `[tracing] accept_traceparent = false` ignores clients' headers. A traced request an app sends out carries `traceparent` to the server unless `[egress] traceparent = false`.
 - **HTTP.** Parsed by the ingress driver, not the node (below). Routes by host and path prefix; body limit per route (1 MiB default); header timeout 10 s, body timeout 30 s; at most 1,024 connections per address; reply size limit; TLS with rustls on ring, certificates reloaded on change. No client certificates yet.
 - **Listeners.** `max_connections` and an idle timeout per listener. An app's connections are passed to its instances, many to each, so a client's bytes reach the app's code unparsed by the node; the node keeps a copy of each socket and shuts it down when the listener stops or the connection idles (`TCP_INFO`), whatever the app does with its copy.
 - **Gaps.** None found.

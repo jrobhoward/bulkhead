@@ -34,6 +34,19 @@ pub struct Config {
     pub threads: usize,
     /// The listening sockets to serve.
     pub listeners: Vec<Listener>,
+    /// Of every million requests without a client's sampled
+    /// `traceparent`, how many start a trace (ROADMAP O1; node config's
+    /// `[tracing] sample_rate`); 0 by default.
+    #[serde(default)]
+    pub trace_sample_ppm: u32,
+    /// Whether a client's sampled `traceparent` header continues its trace
+    /// (true by default; node config's `[tracing] accept_traceparent`).
+    #[serde(default = "yes")]
+    pub accept_traceparent: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn default_threads() -> usize {

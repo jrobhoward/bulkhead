@@ -23,7 +23,13 @@ pub struct Envelope {
     pub schema: Option<String>,
     /// The encoded message.
     pub body: Vec<u8>,
+    /// The trace it belongs to, if one was started (ROADMAP O1). A message
+    /// a traced callback sends joins its trace by itself; an app's own
+    /// thread, or a driver at the edge, sets it here.
+    pub trace: Option<Box<Trace>>,
 }
+
+pub use bulkhead_native::protocol::Trace;
 
 /// A message could not be encoded or decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +51,7 @@ impl Envelope {
             content_type: content_type.into(),
             schema: None,
             body: body.into(),
+            trace: None,
         }
     }
 
@@ -124,6 +131,7 @@ impl From<Envelope> for bulkhead_native::protocol::Envelope {
             content_type: e.content_type,
             schema: e.schema,
             body: e.body,
+            trace: e.trace,
         }
     }
 }
@@ -134,6 +142,7 @@ impl From<bulkhead_native::protocol::Envelope> for Envelope {
             content_type: e.content_type,
             schema: e.schema,
             body: e.body,
+            trace: e.trace,
         }
     }
 }

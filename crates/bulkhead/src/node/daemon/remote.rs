@@ -182,6 +182,7 @@ impl Node {
             content_type: "application/json".into(),
             schema: Some(RELOAD_SCHEMA.into()),
             body: b"{}".to_vec(),
+            trace: None,
         };
         let reply = driver
             .call(msg, RELOAD_TIMEOUT)

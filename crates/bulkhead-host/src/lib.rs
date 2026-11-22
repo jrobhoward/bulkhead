@@ -59,6 +59,7 @@ mod spec;
 mod state;
 mod supervisor;
 mod table;
+mod trace;
 pub mod transport;
 mod upgrade;
 
@@ -82,7 +83,7 @@ pub use instance::{InstanceEvent, InstanceHandle, SnapshotError};
 pub use lifecycle::LifecycleState;
 pub use links::LinkInfo;
 pub use listener::{Listener, ListenerSpec, ListenerStats};
-pub use message::{CallError, Envelope, ExitReason};
+pub use message::{CallError, Envelope, ExitReason, Trace};
 pub use names::{Names, RESOLVE_SCHEMA, ResolveError, Resolver};
 pub use native::NativeCode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

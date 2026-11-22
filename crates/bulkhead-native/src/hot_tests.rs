@@ -208,6 +208,7 @@ fn env(schema: Option<&str>, body: &[u8]) -> Envelope {
         content_type: "application/cbor".into(),
         schema: schema.map(str::to_string),
         body: body.to_vec(),
+        trace: None,
     }
 }
 
@@ -278,7 +279,8 @@ fn write_from_app____not_covered____none_and_nothing_written(#[case] frame: From
 #[case(ToApp::SaveSnapshot)]
 #[case(ToApp::Answer { id: 1, answer: Answer::Called(Err(crate::protocol::CallError::Timeout)) })]
 #[case(ToApp::Answer { id: 1, answer: Answer::Ref(3) })]
-#[case(ToApp::Cast { msg: Envelope { content_type: "t".into(), schema: Some("s".repeat(65_535)), body: vec![] } })]
+#[case(ToApp::Cast { msg: Envelope { content_type: "t".into(), schema: Some("s".repeat(65_535)), body: vec![], trace: None } })]
+#[case(ToApp::Cast { msg: Envelope { trace: Some(Box::new(crate::protocol::Trace::root_from([7; 24]))), ..Envelope::new("t", "b") } })]
 fn write_to_app____not_covered____none_and_nothing_written(#[case] frame: ToApp) {
     let mut out = vec![1];
 

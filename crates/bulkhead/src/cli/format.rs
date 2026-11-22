@@ -343,8 +343,14 @@ pub fn logs(lines: &[LogLine]) -> String {
 
 /// One log record, as `bulkhead logs` prints it.
 pub(crate) fn log_line(l: &LogLine) -> String {
+    // A traced record shows its trace's first 8 hex digits (ROADMAP O1).
+    let trace = l
+        .trace
+        .as_deref()
+        .map(|t| format!(" trace={}", t.get(..8).unwrap_or(t)))
+        .unwrap_or_default();
     format!(
-        "{} {:<5} {} [{}] {}",
+        "{} {:<5} {}{trace} [{}] {}",
         l.time_ms, l.level, l.pid, l.source, l.message
     )
 }

@@ -230,3 +230,67 @@ fn over_limit____encoded_frame____only_a_body_past_max_frame() {
     assert!(!over_limit(&at));
     assert!(over_limit(&past));
 }
+
+#[test]
+fn trace____traceparent____formats_and_parses_back_sampled() {
+    let trace = Trace::root_from(std::array::from_fn(|i| u8::try_from(i).unwrap() + 1));
+
+    let header = trace.traceparent();
+    let back = Trace::from_traceparent(&header);
+
+    assert_eq!(
+        header,
+        "00-0102030405060708090a0b0c0d0e0f10-1112131415161718-01"
+    );
+    assert_eq!(back, Some((trace, true)));
+    assert_eq!(trace.trace_hex(), "0102030405060708090a0b0c0d0e0f10");
+}
+
+#[rstest]
+#[case("00-0102030405060708090a0b0c0d0e0f10-1112131415161718-00", Some(false))]
+#[case(
+    "01-0102030405060708090a0b0c0d0e0f10-1112131415161718-01-later",
+    Some(true)
+)]
+#[case("00-0102030405060708090a0b0c0d0e0f10-1112131415161718-01-extra", None)]
+#[case("ff-0102030405060708090a0b0c0d0e0f10-1112131415161718-01", None)]
+#[case("00-00000000000000000000000000000000-1112131415161718-01", None)]
+#[case("00-0102030405060708090a0b0c0d0e0f10-0000000000000000-01", None)]
+#[case("00-0102030405060708090A0B0C0D0E0F10-1112131415161718-01", None)]
+#[case("00-0102-1112131415161718-01", None)]
+#[case("", None)]
+fn trace____from_traceparent____valid_ones_only(
+    #[case] header: &str,
+    #[case] sampled: Option<bool>,
+) {
+    assert_eq!(Trace::from_traceparent(header).map(|(_, s)| s), sampled);
+}
+
+#[test]
+fn trace____child____the_same_trace_a_new_span() {
+    let root = Trace::root();
+
+    let child = root.child();
+
+    assert_eq!(child.trace_id, root.trace_id);
+    assert_ne!(child.span_id, root.span_id);
+    assert_ne!(Trace::root().trace_id, root.trace_id);
+}
+
+#[test]
+fn envelope____traced____round_trips_untraced_encodes_as_before() {
+    let traced = Envelope {
+        trace: Some(Box::new(Trace::root_from([9; 24]))),
+        ..Envelope::new("text/plain", "x")
+    };
+    let plain = Envelope::new("text/plain", "x");
+
+    let back: Envelope = decode(&encode(&traced)[4..]).unwrap();
+    let plain_bytes = encode(&plain);
+
+    assert_eq!(back, traced);
+    assert!(
+        !plain_bytes.windows(5).any(|w| w == b"trace"),
+        "no trace key when untraced"
+    );
+}

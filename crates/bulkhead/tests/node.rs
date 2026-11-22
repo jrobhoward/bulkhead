@@ -1590,3 +1590,67 @@ async fn blobs____max_bytes_over_the_node_ceiling____refused() {
     assert!(inside.is_ok(), "{inside:?}");
     n.shutdown().await;
 }
+
+/// A call started with a trace (ROADMAP O1): its id comes back, the app's
+/// log record written in that call carries it, and `logs --trace` finds it
+/// by the whole id or its first 8 digits, and nothing else. Its app has a
+/// name of its own: the log ring is the test process's, by app name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trace____a_traced_call_that_logs____its_record_found_by_the_trace() {
+    let scratch = tempfile::tempdir().unwrap();
+    let policy_dir = tempfile::tempdir().unwrap();
+    let policy = policy_dir.path().join("policy.toml");
+    std::fs::write(&policy, "[apps.tracelog]\ngrant = [\"bulkhead:logging\", \"bulkhead:config\", \"bulkhead:keyvalue\", \"bulkhead:files\"]\n").unwrap();
+    let mut n = TestNode::start_native(&format!(
+        "policy = {:?}\n[volumes]\nscratch = {:?}\n",
+        policy,
+        scratch.path()
+    ))
+    .await;
+    n.client
+        .deploy(app_bundle(
+            &n.key,
+            "tracelog",
+            "1.0.0",
+            &native_app(),
+            services_manifest(),
+        ))
+        .await
+        .unwrap();
+    let target = bulkhead::api::Target::App("tracelog".into());
+
+    call(&n, "tracelog", "log-at warn not traced").await;
+    let (_, _, trace) = n
+        .client
+        .call_traced(&target, "text/plain", b"log-at warn traced".to_vec(), 5_000)
+        .await
+        .unwrap();
+    let trace = trace.expect("the call's trace");
+    let mut found = Vec::new();
+    for _ in 0..100 {
+        found = n
+            .client
+            .logs_of("tracelog", 10, Some(&trace))
+            .await
+            .unwrap();
+        if !found.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let by_prefix = n
+        .client
+        .logs_of("tracelog", 10, Some(&trace[..8]))
+        .await
+        .unwrap();
+    let all = n.client.logs("tracelog", 10).await.unwrap();
+
+    assert_eq!(trace.len(), 32);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].message, "traced");
+    assert_eq!(found[0].trace.as_deref(), Some(trace.as_str()));
+    assert_eq!(by_prefix, found);
+    let untraced = all.iter().find(|l| l.message == "not traced").unwrap();
+    assert_eq!(untraced.trace, None);
+    n.shutdown().await;
+}

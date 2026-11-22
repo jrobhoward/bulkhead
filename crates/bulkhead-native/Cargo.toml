@@ -13,7 +13,7 @@ publish = false
 default = []
 # `bulkhead_native::channel`: the shared-memory rings between a node and
 # an app (Linux and FreeBSD).
-channel = ["dep:libc", "dep:rustix", "rustix/fs", "rustix/mm", "rustix/thread", "rustix/pipe", "rustix/net", "rustix/time"]
+channel = ["dep:libc", "dep:rustix", "rustix/fs", "rustix/mm", "rustix/thread", "rustix/pipe", "rustix/net", "rustix/time", "rustix/rand"]
 # `bulkhead_native::app`: a native app as an executable (Unix; it serves
 # a node on Linux and FreeBSD).
 app = ["channel", "dep:rustix", "rustix/stdio", "dep:libc"]
@@ -31,7 +31,8 @@ tokio = { workspace = true, optional = true, features = ["rt", "net", "sync"] }
 libc = { version = "0.2", optional = true }
 
 # FreeBSD: `_umtx_op` for the channel's one wait on shared memory, which
-# rustix does not wrap; the app's signals.
+# rustix does not wrap; the app's signals; `getrandom` for trace ids
+# (ROADMAP O1), which rustix binds on Linux only.
 [target.'cfg(target_os = "freebsd")'.dependencies]
 libc = { version = "0.2", optional = true }
 

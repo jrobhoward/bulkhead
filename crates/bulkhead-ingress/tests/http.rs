@@ -520,3 +520,28 @@ impl rustls::client::danger::ServerCertVerifier for AnyCert {
             .supported_schemes()
     }
 }
+
+/// A client's sampled `traceparent` (ROADMAP O1): the app's call carries a
+/// new span of its trace; an unsampled one, or none, starts no trace (the
+/// sample share is 0 by default).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn traceparent____sampled_from_the_client____the_apps_call_continues_it() {
+    let client = "00-0102030405060708090a0b0c0d0e0f10-1112131415161718-01";
+    let unsampled = "00-0102030405060708090a0b0c0d0e0f10-1112131415161718-00";
+
+    let sampled = get("/api/trace", &[("traceparent", client)]).await;
+    let not = get("/api/trace", &[("traceparent", unsampled)]).await;
+    let none = get("/api/trace", &[]).await;
+
+    assert_eq!(sampled.status, 200);
+    assert!(
+        sampled
+            .body
+            .starts_with("00-0102030405060708090a0b0c0d0e0f10-"),
+        "{}",
+        sampled.body
+    );
+    assert_ne!(sampled.body, client, "a span of the driver's own");
+    assert_eq!(not.body, "-");
+    assert_eq!(none.body, "-");
+}

@@ -222,3 +222,32 @@ fn since____every_kind____at_most_this_build_s_version() {
     assert_eq!(versions, [1, 6, 7, 1, 9, 10]);
     assert!(versions.iter().all(|&v| v <= VERSION));
 }
+
+/// A traced message between nodes (ROADMAP O1): its trace round-trips; an
+/// untraced one has no `trace` key at all, so it encodes as before and a
+/// peer one release older reads either.
+#[test]
+fn encode____a_traced_cast____round_trips_and_untraced_has_no_trace_key() {
+    let cast = |trace: Option<crate::message::Trace>| {
+        packet(Frame::Cast {
+            from: None,
+            sender: None,
+            to: pid(1),
+            msg: Envelope {
+                trace: trace.map(Box::new),
+                ..Envelope::new("text/plain", "x")
+            },
+        })
+    };
+    let traced = cast(Some(crate::message::Trace::root()));
+    let plain = cast(None);
+
+    let back = decode(VERSION, &encode(VERSION, &traced).unwrap()).unwrap();
+    let plain_bytes = encode(VERSION, &plain).unwrap();
+
+    assert_eq!(back, traced);
+    assert!(
+        !plain_bytes.windows(5).any(|w| w == b"trace"),
+        "no trace key when untraced"
+    );
+}

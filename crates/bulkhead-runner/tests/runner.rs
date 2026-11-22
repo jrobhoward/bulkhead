@@ -252,6 +252,7 @@ fn json(schema: &str, body: &str) -> Envelope {
         content_type: "application/json".into(),
         schema: Some(schema.into()),
         body: body.as_bytes().to_vec(),
+        trace: None,
     }
 }
 

@@ -24,7 +24,7 @@ async fn reads____change_in_progress____answer_without_waiting() {
 
     let list = node.list();
     let status = node.status("absent");
-    let logs = node.logs("absent", 10);
+    let logs = node.logs("absent", 10, None);
 
     drop(change);
     assert!(list.is_empty());

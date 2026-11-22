@@ -58,6 +58,9 @@ pub struct InstanceState {
     current: Option<(u64, oneshot::Sender<Envelope>)>,
     /// Callers waiting on a reply after a `noreply`, by call reference.
     pub(crate) pending: HashMap<u64, oneshot::Sender<Envelope>>,
+    /// The trace of the message the current callback handles, if traced
+    /// (ROADMAP O1): what the callback sends joins it (`crate::trace`).
+    pub(crate) trace: Option<crate::message::Trace>,
     pub(crate) timers: Timers,
     /// Most host objects this instance may hold.
     pub(crate) host_objects: HostObjects,
@@ -110,6 +113,7 @@ impl InstanceState {
             ctx,
             registered_names: spec.registered_names.clone(),
             current: None,
+            trace: None,
             pending: HashMap::new(),
             timers: Timers::default(),
             host_objects,

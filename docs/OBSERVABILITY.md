@@ -39,6 +39,16 @@ Connection handlers do not appear in `ps` (an instance per connection, with no m
 
 `bulkhead logs <app> --follow` prints the app's last records (`-n`, 100 by default) and then each new one (`GET /v1/apps/{app}/logs?lines=N&follow=true`). Both streams are chunked responses of JSON lines with an empty line every 15 seconds; they end when the node shuts down.
 
+## Traces
+
+One request can be followed through apps and across nodes by its trace (ROADMAP O1), in W3C trace-context form: a trace id (16 bytes) the same for every message of the request, and a span id (8 bytes) for each message.
+
+- **Where a trace starts.** At the HTTP ingress driver: a request with a client's `traceparent` header whose flags say sampled continues that trace with a span of the driver's own, unless node config sets `[tracing] accept_traceparent = false`; of the other requests, `[tracing] sample_rate` (0 to 1, 0 by default) start a new one. And `bulkhead call --trace APP BODY`, which prints `trace <id>` to stderr (`POST /v1/apps/{app}/call?trace=true`, the reply's `traceparent` header). Nothing else starts one, so untraced messages carry nothing new.
+- **How it travels.** In the message's envelope. While a callback handles a traced message, every call, cast and group publish it sends joins the trace with a span of its own, by the node; a reply goes back to its caller, whose trace stands. An app's own threads (sender channels) and drivers set an envelope's `trace` themselves (`bulkhead_sdk::Envelope::trace`); an app reads the trace of the message it handles there too. Between nodes it rides in the same frames; a node one release older ignores it.
+- **Out of the node.** A traced request an app sends through its egress driver carries the W3C `traceparent` header to the server, unless the app set one itself or node config sets `[egress] traceparent = false`.
+- **In the logs.** A record an app writes while a traced callback runs carries the trace's id: `trace=<32 hex digits>` in the node's own log, `trace` in `bulkhead logs --json`, and its first 8 digits in `bulkhead logs`. `bulkhead logs APP --trace ID` (the whole id, or those 8 digits) shows that trace's records alone (`GET /v1/apps/{app}/logs?trace=ID`), with `--follow` too. Each node keeps its own records: a trace that crossed nodes is read with `--trace` on each, until traces are exported (ROADMAP E4b). An app's stdout and stderr lines carry no trace.
+- **Cost.** A traced message travels to and from an app as a CBOR frame, not in the fixed layouts of the hottest frames (calls, casts, replies), which have no room for it; untraced messages keep them. On the Raspberry Pi 5 a traced call from the node took about 2.5 times as long as an untraced one (45 against 18 µs, BASELINE.md, 2026-11-22), so a sample rate well under 1 keeps the cost to that share of requests.
+
 ## Calling one instance
 
 `bulkhead call` and `bulkhead cast` address an app (through its pool's routing), one instance by pid, or the instance holding a registered name:

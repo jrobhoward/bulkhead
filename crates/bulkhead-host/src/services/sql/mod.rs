@@ -249,6 +249,7 @@ mod run {
             content_type: "application/cbor".into(),
             schema: Some(SQL_SCHEMA.into()),
             body,
+            trace: None,
         })
     }
 

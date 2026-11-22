@@ -50,31 +50,48 @@ impl LogRing {
         lines.push_back((app, line));
     }
 
-    /// `app`'s last `n` records, oldest first.
+    /// `app`'s last `n` records, oldest first; with `trace`, those of that
+    /// trace alone (ROADMAP O1).
     #[must_use]
-    pub fn recent(&self, app: &str, n: usize) -> Vec<LogLine> {
+    pub fn recent(&self, app: &str, n: usize, trace: Option<&str>) -> Vec<LogLine> {
         let lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
-        Self::last(&lines, app, n)
+        Self::last(&lines, app, n, trace)
     }
 
     /// `app`'s last `n` records, and every record of any app from then on
     /// (filter by the app name in each).
-    pub(crate) fn follow(&self, app: &str, n: usize) -> (Vec<LogLine>, LogFeed) {
+    pub(crate) fn follow(
+        &self,
+        app: &str,
+        n: usize,
+        trace: Option<&str>,
+    ) -> (Vec<LogLine>, LogFeed) {
         let lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
-        (Self::last(&lines, app, n), self.feed.subscribe())
+        (Self::last(&lines, app, n, trace), self.feed.subscribe())
     }
 
-    fn last(lines: &VecDeque<(String, LogLine)>, app: &str, n: usize) -> Vec<LogLine> {
+    fn last(
+        lines: &VecDeque<(String, LogLine)>,
+        app: &str,
+        n: usize,
+        trace: Option<&str>,
+    ) -> Vec<LogLine> {
         let mut found: Vec<LogLine> = lines
             .iter()
             .rev()
-            .filter(|(a, _)| a == app)
+            .filter(|(a, l)| a == app && trace.is_none_or(|t| of_trace(l, t)))
             .take(n)
             .map(|(_, l)| l.clone())
             .collect();
         found.reverse();
         found
     }
+}
+
+/// Whether `line` belongs to the trace `prefix` starts (the whole 32 hex
+/// digits, or the first 8 the text output shows).
+pub(crate) fn of_trace(line: &LogLine, prefix: &str) -> bool {
+    !prefix.is_empty() && line.trace.as_deref().is_some_and(|t| t.starts_with(prefix))
 }
 
 /// A `tracing` layer that copies guest records (target `bulkhead::guest`)
@@ -102,6 +119,7 @@ struct Fields {
     pid: String,
     source: String,
     message: String,
+    trace: Option<String>,
 }
 
 impl Visit for Fields {
@@ -121,6 +139,7 @@ impl Fields {
             "pid" => self.pid = value,
             "stream" | "context" => self.source = value,
             "message" => self.message = value,
+            "trace" => self.trace = Some(value),
             _ => {}
         }
     }
@@ -139,6 +158,7 @@ impl<S: tracing::Subscriber> Layer<S> for RingLayer {
             pid: fields.pid,
             source: fields.source,
             message: fields.message,
+            trace: fields.trace,
         };
         self.ring.push(fields.app, line);
     }

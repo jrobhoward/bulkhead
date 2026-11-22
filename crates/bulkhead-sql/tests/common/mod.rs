@@ -188,6 +188,7 @@ fn request(request: &SqlRequest) -> Envelope {
         content_type: "application/cbor".into(),
         schema: Some(SCHEMA.into()),
         body,
+        trace: None,
     }
 }
 

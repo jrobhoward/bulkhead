@@ -60,6 +60,7 @@ fn text(s: &str) -> Envelope {
         content_type: "text/plain".into(),
         schema: None,
         body: s.as_bytes().to_vec(),
+        trace: None,
     }
 }
 

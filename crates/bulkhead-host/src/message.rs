@@ -16,16 +16,24 @@ pub struct Envelope {
     /// The encoded message.
     #[serde(with = "crate::transport::wire::bytes")]
     pub body: Vec<u8>,
+    /// The trace it belongs to, if one was started (ROADMAP O1). Absent
+    /// from a frame between nodes when `None`, so an untraced message
+    /// encodes as before, and a peer one release older ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Box<Trace>>,
 }
 
+pub use bulkhead_native::protocol::Trace;
+
 impl Envelope {
-    /// An envelope with no schema id.
+    /// An envelope with no schema id and no trace.
     #[must_use]
     pub fn new(content_type: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
         Self {
             content_type: content_type.into(),
             schema: None,
             body: body.into(),
+            trace: None,
         }
     }
 }

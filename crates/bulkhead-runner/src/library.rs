@@ -55,6 +55,7 @@ pub fn error(why: &str) -> Envelope {
         content_type: JSON.to_string(),
         schema: Some(ERROR_SCHEMA.to_string()),
         body: serde_json::json!({ "error": why }).to_string().into_bytes(),
+        trace: None,
     }
 }
 
@@ -75,6 +76,7 @@ impl Library {
                 content_type: JSON.to_string(),
                 schema: Some(tag),
                 body: response.into_bytes(),
+                trace: None,
             },
             Err(e) => error(&e.to_string()),
         }

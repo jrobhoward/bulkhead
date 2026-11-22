@@ -434,6 +434,11 @@ enum Command {
         /// the node shuts down).
         #[arg(short, long)]
         follow: bool,
+        /// Only the records of this trace: its id (32 hex digits, as
+        /// `bulkhead call --trace` prints), or the first 8 that a record
+        /// shows (ROADMAP O1).
+        #[arg(long)]
+        trace: Option<String>,
     },
     /// Print the node's events as they happen, until stopped: audit records
     /// (deploys, upgrades, kills, ...), instance exits and restarts, cluster
@@ -457,6 +462,10 @@ enum Command {
         /// How long to wait for the reply.
         #[arg(long, default_value_t = 5_000)]
         timeout_ms: u64,
+        /// Start a trace with this call (ROADMAP O1): its id goes to
+        /// stderr as `trace <id>`, for `bulkhead logs APP --trace <id>`.
+        #[arg(long)]
+        trace: bool,
     },
 }
 
@@ -898,22 +907,51 @@ async fn run_apps(client: &Client, json: bool, command: Command) -> anyhow::Resu
             app,
             lines,
             follow: true,
+            trace,
         } => {
             follow(
                 json,
-                client.follow_logs(&app, lines).await?,
+                client.follow_logs_of(&app, lines, trace.as_deref()).await?,
                 format::log_line,
             )
             .await
         }
-        Command::Logs { app, lines, .. } => {
-            print(json, &client.logs(&app, lines).await?, |l| format::logs(l))
-        }
+        Command::Logs {
+            app, lines, trace, ..
+        } => print(
+            json,
+            &client.logs_of(&app, lines, trace.as_deref()).await?,
+            |l| format::logs(l),
+        ),
         _ => anyhow::bail!("not an app command"),
     }
 }
 
 /// The commands on instances, messages and the node.
+/// `bulkhead call`, starting a trace with `--trace` (ROADMAP O1).
+async fn run_call(
+    client: &Client,
+    message: Message,
+    timeout_ms: u64,
+    trace: bool,
+) -> anyhow::Result<()> {
+    let (target, content_type, body) = message.into_parts()?;
+    let (reply_type, reply) = if trace {
+        let (reply_type, reply, id) = client
+            .call_traced(&target, &content_type, body, timeout_ms)
+            .await?;
+        if let Some(id) = id {
+            eprintln!("trace {id}");
+        }
+        (reply_type, reply)
+    } else {
+        client
+            .call_to(&target, &content_type, body, timeout_ms)
+            .await?
+    };
+    outln(&format::reply(&reply_type, &reply))
+}
+
 /// `bulkhead dr ...` (ROADMAP DR4).
 async fn run_dr(client: &Client, json: bool, action: Option<DrCommand>) -> anyhow::Result<()> {
     match action {
@@ -982,13 +1020,8 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
         Command::Call {
             message,
             timeout_ms,
-        } => {
-            let (target, content_type, body) = message.into_parts()?;
-            let (reply_type, reply) = client
-                .call_to(&target, &content_type, body, timeout_ms)
-                .await?;
-            outln(&format::reply(&reply_type, &reply))
-        }
+            trace,
+        } => run_call(client, message, timeout_ms, trace).await,
         _ => anyhow::bail!("not a runtime command"),
     }
 }

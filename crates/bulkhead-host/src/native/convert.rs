@@ -27,6 +27,7 @@ pub(crate) fn envelope(env: Envelope) -> p::Envelope {
         content_type: env.content_type,
         schema: env.schema,
         body: env.body,
+        trace: env.trace,
     }
 }
 
@@ -35,6 +36,7 @@ pub(crate) fn host_envelope(env: p::Envelope) -> Envelope {
         content_type: env.content_type,
         schema: env.schema,
         body: env.body,
+        trace: env.trace,
     }
 }
 

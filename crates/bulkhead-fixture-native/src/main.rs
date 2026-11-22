@@ -13,6 +13,7 @@
 //! | `after MS TEXT` | the timer's reference |
 //! | `link PID`, `monitor PID`, `trap` | `ok`, or the monitor's reference |
 //! | `cbor-casts` | the body of each `application/cbor` cast received so far, as hex, one per line |
+//! | `trace` | the `traceparent` of the call being handled, or `none` (ROADMAP O1) |
 //! | `infos` | each info received so far, one per line (a watch notice as `kv WATCH BUCKET KEY VALUE@REV` or `... deleted`; a cast other than `reply` as `cast BODY`; the host events `io-ready` and `routes` with their bodies) |
 //! | `register NAME`, `whereis NAME` | `ok` or `err:...`, the pid or `none` |
 //! | `exit PID REASON` | `ok` (`normal`, `kill` or any text as `crashed`) |

@@ -103,17 +103,191 @@ pub struct Envelope {
     /// The encoded message.
     #[serde(with = "bytes")]
     pub body: Vec<u8>,
+    /// The trace it belongs to, if one was started (ROADMAP O1): set by
+    /// the node on what a traced callback sends, or by a driver at the
+    /// edge. Absent from the frame when `None`, so an untraced envelope
+    /// encodes as before; a frame carrying one is never a hot frame. Boxed,
+    /// so an untraced envelope is a pointer larger, not the trace's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Box<Trace>>,
 }
 
 impl Envelope {
-    /// An envelope with no schema id.
+    /// An envelope with no schema id and no trace.
     #[must_use]
     pub fn new(content_type: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
         Self {
             content_type: content_type.into(),
             schema: None,
             body: body.into(),
+            trace: None,
         }
+    }
+}
+
+/// A W3C trace context (ROADMAP O1): the trace a message belongs to and
+/// its own span, as `traceparent` carries them. In a frame, one CBOR
+/// byte string of 24 bytes: the trace id, then the span id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Trace {
+    /// The trace, the same for every message of one request.
+    pub trace_id: [u8; 16],
+    /// This message's span.
+    pub span_id: [u8; 8],
+}
+
+impl Trace {
+    /// A new trace from 24 random bytes (trace id, then span id).
+    #[must_use]
+    pub fn root_from(random: [u8; 24]) -> Self {
+        let mut trace_id = [0u8; 16];
+        let mut span_id = [0u8; 8];
+        trace_id.copy_from_slice(&random[..16]);
+        span_id.copy_from_slice(&random[16..]);
+        Self { trace_id, span_id }
+    }
+
+    /// A span of the same trace, with `span_id`.
+    #[must_use]
+    pub fn child_from(&self, span_id: [u8; 8]) -> Self {
+        Self {
+            trace_id: self.trace_id,
+            span_id,
+        }
+    }
+
+    /// The trace id as 32 lowercase hex digits.
+    #[must_use]
+    pub fn trace_hex(&self) -> String {
+        hex(&self.trace_id)
+    }
+
+    /// As a sampled W3C `traceparent` header: `00-<trace>-<span>-01`.
+    #[must_use]
+    pub fn traceparent(&self) -> String {
+        format!("00-{}-{}-01", hex(&self.trace_id), hex(&self.span_id))
+    }
+
+    /// A `traceparent` header's trace context, and whether its flags say
+    /// sampled; `None` for anything but a valid version-00 header (or a
+    /// later version's first four fields), or an all-zero id.
+    #[must_use]
+    pub fn from_traceparent(header: &str) -> Option<(Self, bool)> {
+        let mut parts = header.trim().split('-');
+        let version = unhex::<1>(parts.next()?)?;
+        let trace_id = unhex::<16>(parts.next()?)?;
+        let span_id = unhex::<8>(parts.next()?)?;
+        let flags = unhex::<1>(parts.next()?)?;
+        if version[0] == 0xff
+            || (version[0] == 0 && parts.next().is_some())
+            || trace_id == [0; 16]
+            || span_id == [0; 8]
+        {
+            return None;
+        }
+        Some((Self { trace_id, span_id }, flags[0] & 1 == 1))
+    }
+}
+
+/// New traces from the system's random source (Linux and FreeBSD).
+#[cfg(feature = "channel")]
+impl Trace {
+    /// A new trace and span.
+    #[must_use]
+    pub fn root() -> Self {
+        let mut random = [0u8; 24];
+        fill_random(&mut random);
+        Self::root_from(random)
+    }
+
+    /// A new span of this trace.
+    #[must_use]
+    pub fn child(&self) -> Self {
+        let mut span = [0u8; 8];
+        fill_random(&mut span);
+        self.child_from(span)
+    }
+}
+
+/// Fill `buf` from `getrandom` (allowed by the runner's seccomp list and
+/// in Capsicum's capability mode); ids need to be unique, not secret, so a
+/// failed call (none expected) falls back to the time and a counter.
+#[cfg(feature = "channel")]
+fn fill_random(buf: &mut [u8]) {
+    if getrandom(buf) {
+        return;
+    }
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let seed = (t ^ u128::from(n).rotate_left(64)).to_le_bytes();
+    for (i, b) in buf.iter_mut().enumerate() {
+        *b = seed[i % seed.len()] ^ u8::try_from(i).unwrap_or(0);
+    }
+}
+
+/// Whether `getrandom` filled `buf` whole.
+#[cfg(all(feature = "channel", target_os = "linux"))]
+fn getrandom(buf: &mut [u8]) -> bool {
+    rustix::rand::getrandom(&mut *buf, rustix::rand::GetRandomFlags::empty())
+        .is_ok_and(|n| n == buf.len())
+}
+
+/// Whether `getrandom` filled `buf` whole (rustix binds it on Linux only).
+#[cfg(all(feature = "channel", target_os = "freebsd"))]
+fn getrandom(buf: &mut [u8]) -> bool {
+    // SAFETY: `buf` is a valid, writable buffer of `buf.len()` bytes for
+    // the call's duration; getrandom(2) writes at most that many.
+    let n = unsafe { libc::getrandom(buf.as_mut_ptr().cast(), buf.len(), 0) };
+    usize::try_from(n).is_ok_and(|n| n == buf.len())
+}
+
+/// Elsewhere (the protocol builds without the channel's systems too).
+#[cfg(all(
+    feature = "channel",
+    not(any(target_os = "linux", target_os = "freebsd"))
+))]
+fn getrandom(_buf: &mut [u8]) -> bool {
+    false
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    if s.len() != 2 * N
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+impl Serialize for Trace {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut b = [0u8; 24];
+        b[..16].copy_from_slice(&self.trace_id);
+        b[16..].copy_from_slice(&self.span_id);
+        s.serialize_bytes(&b)
+    }
+}
+
+impl<'de> Deserialize<'de> for Trace {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let b: Vec<u8> = bytes::deserialize(d)?;
+        let random: [u8; 24] = b
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("a trace is 24 bytes"))?;
+        Ok(Self::root_from(random))
     }
 }
 

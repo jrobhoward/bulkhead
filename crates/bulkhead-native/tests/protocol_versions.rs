@@ -166,6 +166,8 @@ fn answer_name(a: &Answer) -> &'static str {
 
 /// Every name the name functions give, by frame type.
 const NAMES: &[(&str, &[&str])] = &[
+    // An envelope's optional fields (ROADMAP O1's trace).
+    ("Envelope", &["Traced"]),
     (
         "ToApp",
         &[
@@ -531,6 +533,19 @@ fn samples() -> Vec<(String, String, Vec<u8>)> {
             protocol::encode(&ToApp::Answer { id: 2, answer }),
         ));
     }
+    // A traced message (ROADMAP O1): the envelope's optional `trace`, a
+    // 24-byte string; never a hot frame.
+    let traced = Envelope {
+        trace: Some(Box::new(protocol::Trace::root_from(std::array::from_fn(
+            |i| u8::try_from(i).unwrap() + 1,
+        )))),
+        ..env()
+    };
+    out.push((
+        "Envelope".into(),
+        "Traced".into(),
+        protocol::encode(&ToApp::Cast { msg: traced }),
+    ));
     out.extend(hot_samples());
     out
 }

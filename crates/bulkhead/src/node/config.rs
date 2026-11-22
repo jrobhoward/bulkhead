@@ -290,6 +290,9 @@ pub struct NodeConfig {
     /// app may hold, the largest blob, how long they live.
     #[serde(default)]
     pub blobs: BlobsBinding,
+    /// Where traces start (ROADMAP O1).
+    #[serde(default)]
+    pub tracing: TracingBinding,
     /// TCP and UDP from apps (`bulkhead:sockets`): the most any app may reach,
     /// bind and listen on. Unset: no ceiling.
     #[serde(default)]
@@ -1038,6 +1041,10 @@ pub struct EgressBinding {
     /// server asks for one (ROADMAP DA4b), by app name.
     #[serde(default)]
     pub identities: BTreeMap<String, EgressIdentityBinding>,
+    /// Whether a traced request carries a W3C `traceparent` header to the
+    /// server (ROADMAP O1); true by default, false to keep trace ids in.
+    #[serde(default = "yes")]
+    pub traceparent: bool,
     /// The largest response body an app's request reads (ROADMAP DA4); a
     /// larger one fails the request. At most 16 MiB, a frame's body.
     #[serde(default = "default_egress_max_body")]
@@ -1061,6 +1068,7 @@ impl Default for EgressBinding {
             deny: default_egress_deny(),
             proxy: None,
             identities: BTreeMap::new(),
+            traceparent: true,
         }
     }
 }
@@ -1133,6 +1141,7 @@ impl EgressBinding {
         e.max_response_body = self.max_response_body.bytes();
         e.deny.clone_from(&self.deny);
         e.proxy.clone_from(&self.proxy);
+        e.traceparent = self.traceparent;
         e.identities = self
             .identities
             .iter()
@@ -1148,6 +1157,44 @@ impl EgressBinding {
             .collect();
         e
     }
+}
+
+/// `[tracing]`: where the HTTP ingress starts traces (ROADMAP O1). A
+/// request with a client's sampled `traceparent` continues that trace (if
+/// `accept_traceparent`); of the rest, `sample_rate` start one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TracingBinding {
+    /// The share of requests without a sampled `traceparent` that start a
+    /// trace, 0 to 1 (0 by default), kept in millionths.
+    #[serde(default, rename = "sample_rate", deserialize_with = "sample_ppm")]
+    pub sample_ppm: u32,
+    /// Whether a client's sampled `traceparent` continues its trace (true
+    /// by default; false for sites that do not let clients start traces).
+    #[serde(default = "yes")]
+    pub accept_traceparent: bool,
+}
+
+impl Default for TracingBinding {
+    fn default() -> Self {
+        Self {
+            sample_ppm: 0,
+            accept_traceparent: true,
+        }
+    }
+}
+
+/// `sample_rate`, a number from 0 to 1, as millionths.
+fn sample_ppm<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let rate = f64::deserialize(d)?;
+    if !(0.0..=1.0).contains(&rate) {
+        return Err(serde::de::Error::custom(
+            "tracing.sample_rate must be from 0 to 1",
+        ));
+    }
+    // A share of a million fits a u32, and its rounding is the share's.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok((rate * 1_000_000.0).round() as u32)
 }
 
 /// `[blobs]`: blobs between apps (`bulkhead:blobs`, ROADMAP BL1).

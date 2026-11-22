@@ -3260,8 +3260,23 @@ Between two node processes on the Pi (`cluster-pair`'s two-node rows): a native 
 - **The node's own cgroups now cost nothing measurable:** 17.5 to 17.8 µs a call, against 20.8 to 21.0 µs with the controller.
 - **A start under the helper** is still about 0.9 ms slower than directly (5.8 against 4.9 to 5.0 ms): namespaces and the minimal root, as PS1c found.
 
+## 2026-11-22: trace context (O1)
+
+`native_cost` on the Raspberry Pi 5, idle before the run (load 0.00; the averages printed during it are the benchmark's own), 4 workers, 100 instances; two rounds alternating three builds: before O1 (commit c99cd02), O1 with untraced messages, and O1 with `NATIVE_COST_TRACED=1` (every message from the host traced, so the instances' calls to each other are too).
+
+| | start, to the first reply (p50, ms) | call from the host (p50, µs) | call between instances (p50, µs) | casts to one instance (per second) | 16 calls in flight (per second, CPU per call) | 64 calls in flight (per second, CPU per call) |
+| --- | --- | --- | --- | --- | --- | --- |
+| before O1 | 6.0, 6.0 | 17.8, 18.0 | 44.4, 44.1 | 428,273, 426,210 | 116,020, 117,132 (29.4, 29.5 µs) | 117,064, 117,870 (31.3, 31.3 µs) |
+| O1, untraced | 6.1, 6.1 | 18.1, 18.3 | 45.4, 45.1 | 425,840, 420,056 | 114,278, 114,967 (30.1, 30.2 µs) | 117,422, 115,706 (31.4, 32.0 µs) |
+| O1, traced | 6.1, 6.0 | 44.9, 44.8 | 104.8, 103.9 | 233,074, 236,338 | 80,599, 81,682 (44.6, 44.6 µs) | 84,762, 84,749 (44.5, 44.2 µs) |
+
+- **Untraced messages cost about the same as before:** a call 0.3 µs more (18.1 to 18.3 against 17.8 to 18.0 µs), casts and calls in flight within 0 to 2%, CPU per call 0.1 to 0.7 µs more. Within run-to-run spread, though every untraced number moved the same way.
+- **A traced message costs much more:** a call from the host 2.5 times as long (44.8 µs), one between instances 2.4 times (104 µs), casts 45% fewer a second, calls in flight 29 to 30% fewer, with about 50% more CPU per call. Traced messages travel as CBOR frames, not hot ones.
+- **The two gaps do not match:** a traced cast costs about 1.9 µs more to handle (from the rates), but a traced call one at a time about 27 µs more to answer, more than encoding and decoding a frame explain. Not found yet (ROADMAP O1b).
+
 ## Not measured yet
 
+- Why a traced call one at a time takes about 27 µs longer on the Pi, where a traced cast costs about 1.9 µs more (O1, 2026-11-22; ROADMAP O1b). Traced messages on the 16-core machine.
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 

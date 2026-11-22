@@ -386,6 +386,11 @@ pool_idle_timeout_ms = 90000           # idle pooled connections are closed afte
 pool_max_idle_per_host = 32
 max_concurrent = 64                    # requests in flight per app, unless its manifest says
 max_response_body = "16MiB"            # larger response bodies fail the request; at most 16 MiB
+traceparent = true                     # a traced request carries the W3C traceparent header (ROADMAP O1); false keeps trace ids in
+
+[tracing]                              # where traces start (ROADMAP O1; OBSERVABILITY.md, "Traces"); every key optional
+sample_rate = 0.0                      # the share of HTTP requests without a client's sampled traceparent that start a trace, 0 to 1
+accept_traceparent = true              # a client's sampled traceparent header continues its trace; false: clients cannot start traces
 
 [blobs]                                # data passed between apps as sealed memory (bulkhead:blobs); every key optional
 max_bytes = "1GiB"                     # the most an app's max_bytes may be

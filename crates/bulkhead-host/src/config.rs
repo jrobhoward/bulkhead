@@ -680,6 +680,9 @@ pub struct Egress {
     /// driver presents when a server asks for one (ROADMAP DA4b); bound
     /// read-only into the driver's root at `/driver/<file name>`.
     pub identities: std::collections::BTreeMap<String, EgressIdentity>,
+    /// Whether a traced request carries a W3C `traceparent` header to the
+    /// server (ROADMAP O1); true by default.
+    pub traceparent: bool,
 }
 
 /// An app's client certificate for its egress driver ([`Egress::identities`]).
@@ -719,6 +722,7 @@ impl Default for Egress {
             deny: DEFAULT_EGRESS_DENY.map(String::from).to_vec(),
             proxy: None,
             identities: std::collections::BTreeMap::new(),
+            traceparent: true,
         }
     }
 }

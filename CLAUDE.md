@@ -127,7 +127,9 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   module each on the `Service` pattern (DESIGN.md, "Host service pattern");
   a new service goes there, not into `state.rs` or `runtime.rs`.
   `src/probe.rs`: USDT probes (anyprobe, `probes` feature); host code calls
-  its functions, never anyprobe directly.
+  its functions, never anyprobe directly. `src/trace.rs`: trace context
+  (ROADMAP O1), what a traced callback sends stamped with a child span;
+  the `Trace` type is `bulkhead_native::protocol`'s.
 - `crates/bulkhead-sdk`, `crates/bulkhead-sdk-macros`: the Rust SDK and
   its `Snapshot` derive. The SDK's modules call the node over
   `bulkhead-native`'s protocol; `app!` adds `bulkhead_main()` for the app's

@@ -46,6 +46,14 @@ pub struct Config {
     /// The client key's path (PEM), with `client_cert`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_key: Option<String>,
+    /// Whether a traced request carries a `traceparent` header (ROADMAP O1;
+    /// node config's `[egress] traceparent`, true by default).
+    #[serde(default = "yes")]
+    pub traceparent: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A client certificate chain and its key.

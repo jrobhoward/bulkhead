@@ -180,6 +180,7 @@ pub(crate) fn record(
     ctx: &mut ServiceCtx<'_, Instance>,
     level: bulkhead_native::protocol::Level,
     message: &str,
+    trace: Option<&str>,
 ) {
     use bulkhead_native::protocol::Level;
     let level = match level {
@@ -217,22 +218,22 @@ pub(crate) fn record(
     let (app, version) = (t.app.as_str(), t.version.as_str());
     match level {
         LogLevel::Trace => {
-            tracing::trace!(target: "bulkhead::guest", app, version, pid, context, "{message}")
+            tracing::trace!(target: "bulkhead::guest", app, version, pid, context, trace, "{message}")
         }
         LogLevel::Debug => {
-            tracing::debug!(target: "bulkhead::guest", app, version, pid, context, "{message}")
+            tracing::debug!(target: "bulkhead::guest", app, version, pid, context, trace, "{message}")
         }
         LogLevel::Info => {
-            tracing::info!(target: "bulkhead::guest", app, version, pid, context, "{message}")
+            tracing::info!(target: "bulkhead::guest", app, version, pid, context, trace, "{message}")
         }
         LogLevel::Warn => {
-            tracing::warn!(target: "bulkhead::guest", app, version, pid, context, "{message}")
+            tracing::warn!(target: "bulkhead::guest", app, version, pid, context, trace, "{message}")
         }
         LogLevel::Error => {
-            tracing::error!(target: "bulkhead::guest", app, version, pid, context, "{message}")
+            tracing::error!(target: "bulkhead::guest", app, version, pid, context, trace, "{message}")
         }
         LogLevel::Critical => {
-            tracing::error!(target: "bulkhead::guest", app, version, pid, context, critical = true, "{message}")
+            tracing::error!(target: "bulkhead::guest", app, version, pid, context, trace, critical = true, "{message}")
         }
     }
 }

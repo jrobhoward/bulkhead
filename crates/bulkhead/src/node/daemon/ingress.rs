@@ -209,7 +209,12 @@ pub(super) fn bind(
         delivers: false,
         seccomp_profile: Some("ingress".into()),
     };
-    let args = serde_json::json!({ "threads": threads.clamp(1, 64), "listeners": args });
+    let args = serde_json::json!({
+        "threads": threads.clamp(1, 64),
+        "listeners": args,
+        "trace_sample_ppm": config.tracing.sample_ppm,
+        "accept_traceparent": config.tracing.accept_traceparent,
+    });
     Ok(Some((profile, args)))
 }
 
@@ -561,6 +566,7 @@ async fn reload_driver(apps: &Apps) -> (usize, Vec<String>) {
         content_type: "application/json".into(),
         schema: Some(RELOAD_SCHEMA.into()),
         body: b"{}".to_vec(),
+        trace: None,
     };
     match driver.call(msg, RELOAD_TIMEOUT).await {
         Ok(reply) => match serde_json::from_slice::<Reloaded>(&reply.body) {

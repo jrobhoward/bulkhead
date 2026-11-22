@@ -60,6 +60,14 @@ async fn answer(req: Request<Incoming>) -> Result<Reply, Infallible> {
     let full = |s: String| Full::new(Bytes::from(s)).boxed();
     Ok(match path.as_str() {
         "/hello" => Response::new(full("hi".into())),
+        // The request's `traceparent` header, or `-` (ROADMAP O1).
+        "/traceparent" => Response::new(full(
+            req.headers()
+                .get("traceparent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-")
+                .to_string(),
+        )),
         "/echo" => {
             let body = req.into_body().collect().await.unwrap().to_bytes();
             Response::new(full(format!("{method} {}", String::from_utf8_lossy(&body))))
@@ -727,4 +735,35 @@ async fn reload_egress_roots____ca_file_replaced____changed_and_a_new_driver_tru
     assert!(!again, "nothing changed the second time");
     assert_eq!(after, "200 hi");
     h.kill();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch____from_a_traced_callback____traceparent_sent_unless_turned_off() {
+    let (address, _) = server(None).await;
+    let mut quiet = Egress::default();
+    quiet.traceparent = false;
+    let sends = runtime(Egress::default()).await;
+    let keeps = runtime(quiet).await;
+    let allow = [format!("http://{address}")];
+    let a = up(&sends, spec("egress-traced", &allow, true)).await;
+    let b = up(&keeps, spec("egress-trace-kept", &allow, true)).await;
+    let root = bulkhead_host::Trace::root();
+    let traced = || {
+        let mut msg = common::text(&format!("fetch GET http://{address}/traceparent"));
+        msg.trace = Some(Box::new(root));
+        msg
+    };
+
+    let sent = common::body(&a.call(traced(), common::LONG).await.unwrap());
+    let untraced = ask(&a, &format!("fetch GET http://{address}/traceparent")).await;
+    let kept = common::body(&b.call(traced(), common::LONG).await.unwrap());
+
+    let header = sent.strip_prefix("200 ").unwrap();
+    let (got, sampled) = bulkhead_host::Trace::from_traceparent(header).unwrap();
+    assert_eq!(got.trace_id, root.trace_id, "{sent}");
+    assert!(sampled);
+    assert_eq!(untraced, "200 -");
+    assert_eq!(kept, "200 -", "[egress] traceparent = false");
+    a.kill();
+    b.kill();
 }

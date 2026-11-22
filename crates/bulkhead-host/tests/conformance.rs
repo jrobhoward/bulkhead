@@ -302,6 +302,7 @@ async fn call____envelope____content_type_schema_and_bytes_kept() {
         content_type: "application/x-conformance".into(),
         schema: Some("conformance.mirror.v1".into()),
         body: b"mirror".to_vec(),
+        trace: None,
     };
 
     let back = h.call(sent.clone(), LONG).await.unwrap();

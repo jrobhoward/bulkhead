@@ -54,7 +54,8 @@
 //! - HTTP requests (`bulkhead_sdk::http`), by the end of the path: `/plain`
 //!   replies a plain text envelope; `/status/<n>` replies status n;
 //!   `/crash` panics; `/never` never replies; `/big/<n>` replies n bytes;
-//!   `/client` replies the client certificate's SHA-256, or `-`; anything else replies 200 with
+//!   `/client` replies the client certificate's SHA-256, or `-`; `/trace`
+//!   the call's `traceparent` (ROADMAP O1), or `-`; anything else replies 200 with
 //!   `<method> <path>?<query> key=<key> body=<body> scheme=<scheme> pid=<pid>`.
 //! - `file-fill <guest dir>` (`bulkhead_sdk::files`): 1 MiB pieces into
 //!   files under the preopened directory until a write is refused (a ZFS
@@ -481,6 +482,12 @@ impl App for Fixture {
 
     fn handle_call(&mut self, ctx: &mut Ctx, _call: CallRef, msg: Envelope) -> Reply {
         if let Some(req) = Request::from_envelope(&msg) {
+            // The call's `traceparent`, as the ingress set it (ROADMAP O1).
+            if req.path.ends_with("/trace") {
+                let trace = msg.trace.as_deref().map(|t| t.traceparent());
+                let body = trace.unwrap_or_else(|| "-".into());
+                return Reply::Now(Response::text(200, body).into());
+            }
             return http(ctx, &req);
         }
         let command = msg.as_text().unwrap_or("");

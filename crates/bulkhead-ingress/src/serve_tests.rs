@@ -96,3 +96,42 @@ fn from_call____overloaded____503_with_retry_after() {
     assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(r.headers()[RETRY_AFTER], "1");
 }
+
+const CLIENT: &str = "00-0102030405060708090a0b0c0d0e0f10-1112131415161718-01";
+
+fn tracing(ppm: u32, accept: bool) -> Tracing {
+    Tracing {
+        sample_ppm: ppm,
+        accept_traceparent: accept,
+    }
+}
+
+#[test]
+fn start_trace____a_clients_sampled_traceparent____its_trace_a_new_span() {
+    let t = start_trace(tracing(0, true), Some(CLIENT), || unreachable!()).unwrap();
+
+    assert_eq!(t.trace_hex(), "0102030405060708090a0b0c0d0e0f10");
+    assert_ne!(t.span_id, [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]);
+}
+
+#[test]
+fn start_trace____not_accepted_unsampled_or_none____only_the_sample_share() {
+    let unsampled = CLIENT.replace("-01", "-00");
+
+    let refused = start_trace(tracing(0, false), Some(CLIENT), || 0);
+    let not_sampled = start_trace(tracing(0, true), Some(&unsampled), || 0);
+    let under = start_trace(tracing(10, true), None, || 9);
+    let over = start_trace(tracing(10, true), None, || 10);
+
+    assert!(refused.is_none());
+    assert!(not_sampled.is_none());
+    assert!(under.is_some(), "a new trace for a roll under the share");
+    assert!(over.is_none());
+}
+
+#[test]
+fn start_trace____no_share____no_roll_drawn() {
+    let none = start_trace(tracing(0, true), None, || panic!("drawn with no share"));
+
+    assert!(none.is_none());
+}

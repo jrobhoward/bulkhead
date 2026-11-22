@@ -589,9 +589,25 @@ impl Client {
     ///
     /// Any [`ClientError`].
     pub async fn logs(&self, app: &str, lines: usize) -> Result<Vec<LogLine>, ClientError> {
+        self.logs_of(app, lines, None).await
+    }
+
+    /// An app's last `lines` log records; with `trace` (32 hex digits),
+    /// those of that trace alone (ROADMAP O1).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn logs_of(
+        &self,
+        app: &str,
+        lines: usize,
+        trace: Option<&str>,
+    ) -> Result<Vec<LogLine>, ClientError> {
+        let trace = trace.map(|t| format!("&trace={t}")).unwrap_or_default();
         self.json(
             Method::GET,
-            &format!("/v1/apps/{app}/logs?lines={lines}"),
+            &format!("/v1/apps/{app}/logs?lines={lines}{trace}"),
             None,
         )
         .await
@@ -608,8 +624,25 @@ impl Client {
         app: &str,
         lines: usize,
     ) -> Result<Follow<LogLine>, ClientError> {
-        self.follow(&format!("/v1/apps/{app}/logs?lines={lines}&follow=true"))
-            .await
+        self.follow_logs_of(app, lines, None).await
+    }
+
+    /// [`Client::follow_logs`], of one trace alone (ROADMAP O1).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn follow_logs_of(
+        &self,
+        app: &str,
+        lines: usize,
+        trace: Option<&str>,
+    ) -> Result<Follow<LogLine>, ClientError> {
+        let trace = trace.map(|t| format!("&trace={t}")).unwrap_or_default();
+        self.follow(&format!(
+            "/v1/apps/{app}/logs?lines={lines}&follow=true{trace}"
+        ))
+        .await
     }
 
     /// The node's events from now on ([`Event`]).
@@ -676,6 +709,38 @@ impl Client {
             return Err(error_from(&body));
         }
         Ok((content_type, body))
+    }
+
+    /// [`Client::call_to`], starting a trace (ROADMAP O1): the reply's
+    /// content type and body, and the trace's id (32 hex digits) to find
+    /// its log records with.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn call_traced(
+        &self,
+        target: &Target,
+        content_type: &str,
+        body: Vec<u8>,
+        timeout_ms: u64,
+    ) -> Result<(String, Vec<u8>, Option<String>), ClientError> {
+        let path = format!("{}?timeout_ms={timeout_ms}&trace=true", target.path("call"));
+        let response = self
+            .open(Method::POST, &path, Some((content_type, body)))
+            .await?;
+        let trace = response
+            .headers()
+            .get("traceparent")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split('-').nth(1))
+            .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_string);
+        let (status, content_type, body) = collect(response).await?;
+        if !status.is_success() {
+            return Err(error_from(&body));
+        }
+        Ok((content_type, body, trace))
     }
 
     async fn json<T: DeserializeOwned>(

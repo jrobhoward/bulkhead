@@ -352,7 +352,10 @@ Run 2026-11-20 and 21 (TLC 2026.02.28, OpenJDK 21, the 16-core machine, several 
 | Config | Distinct states | Result |
 | --- | --- | --- |
 | `DrF_Apart_Site1` | stopped at 6,621,621,728 (depth 176, 57 million still queued), 18 h on 12 workers | no violation found; split into the configs below (ROADMAP DR4c) |
-| `DrF_Apart_Site1_None`, `_Link`, `_DCrash`, `_WCrash` | (running) | each kind of fault on the DR node's side alone, its frames no longer aging (ROADMAP DR4c) |
+| `DrF_Apart_Site1_None` | 1,110,599,568 (depth 392), 2 h 38 min on 12 workers, 2026-11-21 | no violation; no fault on the DR node's side, its frames no longer aging (ROADMAP DR4c) |
+| `DrF_Apart_Site1_Link` | 5,786,226,695 (depth 392), 16 h 2 min on 12 workers, 2026-11-22 | no violation; the DR node's link to the witness lost |
+| `DrF_Apart_Site1_DCrash` | stopped at 1,678,992,318 (35 million still queued), 4 h on 12 workers, 2026-11-22 | no violation found so far; the DR node crashes; to resume from its checkpoint (ROADMAP DR4c) |
+| `DrF_Apart_Site1_WCrash` | not run yet | the witness crashes (ROADMAP DR4c) |
 | `DrF_Vac_ApartRun` | 3,084,092 (stopped at the violation) | violated, as it must be: `D` runs the singleton |
 | `DrF_Vac_ApartHandBack` | 70,922 generated, by simulation | violated, as it must be: after a failback a pair node runs it again (a 138-step trace) |
 | `DrF_Apart_TrustDisk` | 357,778,875 (stopped at the violation) | violated, as it must be: a `D` restarted after the witness handed back leads from its own record while the pair node runs (71 steps, 1 h 27 min on 4 workers) |

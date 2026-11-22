@@ -501,6 +501,15 @@ Linking happens once per engine, so a host call is a direct call on the service'
 - Keyvalue counters (`increment`) are decimal strings. Each batch call is one transaction and passes or fails its quota check as a whole. `keys` pages 256 keys at a time.
 - Disk buckets share one redb file under the node's data directory. Writes run on tokio's blocking pool (they fsync); reads run on the calling worker, usually from redb's page cache, because the hop to the blocking pool costs about 20 µs (S14). Either way the time counts as host time, not against the callback deadline.
 
+### Trace context
+
+Decided with the user on 2026-11-22 (ROADMAP O1). A trace id and a span id ride in a message's envelope, optional, in W3C trace-context form, so one request can be followed from the HTTP ingress through apps and across nodes in their log records.
+
+- **The node passes it on.** The node holds the trace of the message an instance's callback handles, and stamps a child span on what the callback sends: an app propagates traces without code of its own, and a native app in any language gets them. An app's own threads and drivers, which have no callback, set it explicitly.
+- **Started at the edge, sampled.** The ingress (a client's sampled `traceparent`, or `[tracing] sample_rate`) and `bulkhead call --trace` start traces; nothing else does, so the untraced path costs nothing new: an untraced envelope encodes as before, and the protocol needed no new version.
+- **CBOR, not the hot layouts.** The fixed layouts of the hottest frames have no room for a trace, so a traced message goes as CBOR. On the Raspberry Pi 5 that made a traced call about 2.5 times an untraced one, with untraced messages costing about what they did (BASELINE.md, 2026-11-22); why, and whether traced messages need layouts of their own, is ROADMAP O1b. The trace is boxed in the envelope, so an untraced one grows by a pointer, not by the trace's 24 bytes.
+- **Logs first, export later.** A traced callback's records carry the trace id, and `bulkhead logs --trace` filters by it; exporting spans (OpenTelemetry, E4b) is later.
+
 ### Shared buckets and watches
 
 A shared bucket is the bulletin board between apps: the role of a public ETS table on one node, and of a Mnesia table read from a local copy in a cluster. Reading it is a request to the node (2 to 3.5 µs from a native app on the 16-core development machine, 2026-11-04), not a message to another instance, and a write is seen by every reader at once. Which read path suits which data (a bucket read, a batch or scan, a published bucket, a mirror kept by a watch, an owner) is WRITING_APPS.md's "Reading shared data", with the numbers.

@@ -548,6 +548,10 @@ pub struct LogLine {
     pub source: String,
     /// The text.
     pub message: String,
+    /// The trace of the callback that wrote it, 32 hex digits, if traced
+    /// (ROADMAP O1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<String>,
 }
 
 /// One record of the node's event stream (`GET /v1/events`).
@@ -591,3 +595,7 @@ pub struct ApiError {
     /// What went wrong, for people.
     pub error: String,
 }
+
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod api_tests;

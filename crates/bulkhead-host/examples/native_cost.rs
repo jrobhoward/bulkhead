@@ -14,6 +14,10 @@
 //! `NATIVE_COST_SENDERS=N` has every instance hold `N` idle sender
 //! channels (ROADMAP AP1) through the run.
 //!
+//! `NATIVE_COST_TRACED=1` sends every call and cast from the host with a
+//! trace (ROADMAP O1), so what a callback sends is traced too: traced
+//! messages travel as CBOR frames, not hot ones.
+//!
 //! Under the privileged helper (ROADMAP PS1): start it as the helper's
 //! node (its configuration's `node` this example, `node_args` the worker
 //! count, `binds` a directory holding copies of `bulkhead-runner` and
@@ -58,11 +62,19 @@ fn main() {
         .unwrap();
 }
 
+/// `body` as a message from the host, traced with `NATIVE_COST_TRACED=1`.
+fn message(body: &str) -> Envelope {
+    static TRACED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let traced = *TRACED.get_or_init(|| std::env::var_os("NATIVE_COST_TRACED").is_some());
+    let mut msg = Envelope::new("text/plain", body);
+    if traced {
+        msg.trace = Some(Box::new(bulkhead_host::Trace::root()));
+    }
+    msg
+}
+
 async fn ask(h: &InstanceHandle, body: &str) -> String {
-    let reply = h
-        .call(Envelope::new("text/plain", body), LONG)
-        .await
-        .unwrap();
+    let reply = h.call(message(body), LONG).await.unwrap();
     String::from_utf8(reply.body).unwrap()
 }
 
@@ -319,7 +331,7 @@ async fn run(workers: usize) {
     let casts = 50_000;
     let t = Instant::now();
     for _ in 0..casts {
-        pool[1].cast(Envelope::new("text/plain", "x")).unwrap();
+        pool[1].cast(message("x")).unwrap();
     }
     ask(&pool[1], "echo done").await;
     println!(
