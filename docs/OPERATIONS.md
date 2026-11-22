@@ -46,7 +46,7 @@ The privileged helper keeps its own state, apart from the node's, in its configu
 | `XDG_CONFIG_HOME` | `bulkhead shell` | Where the contacts file and the shell's history (`bulkhead/history`) are |
 | `BULKHEAD_KEY_PASSWORD` | `bulkhead bundle`, `bulkhead keygen` | The signing key's password, instead of a prompt |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | `bulkhead node` | Where the node reads the system's root certificates for HTTP egress, instead of the OS defaults (`[egress] system_roots`) |
-| `RUST_LOG` | `bulkhead node` | Log filter (default `info`), for example `info,bulkhead::lease=debug` |
+| `RUST_LOG` | `bulkhead node` | Filter for what the node logs to stderr (default `info`), for example `info,bulkhead::lease=debug`. Apps' records in `bulkhead logs` follow each app's own level (`bulkhead log-level`), not this filter |
 | `BULKHEAD_PRIV_SECCOMP_LOG` | `bulkhead-priv` (Linux) | Set: calls off the helper's seccomp list are logged by the kernel and allowed, not refused. For a test machine, never production ("The privileged helper") |
 | `BULKHEAD_PRIV_FD` | `bulkhead node`, set by `bulkhead-priv` | The descriptor of the privileged helper's socket. Node config's `[priv]` and this variable go together: the node refuses to start with one and not the other |
 | `BULKHEAD_PRIV_TESTS`, `BULKHEAD_CONFORMANCE_HELPER` | `bulkhead-host`'s tests, as root on a test machine | `1` runs the helper's own tests (`tests/priv.rs`), and the conformance suite's native mode under the helper |

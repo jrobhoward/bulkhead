@@ -1,0 +1,18 @@
+# Chapter 4 of examples/app-tutorial: the room's program under another
+# name. `history` accepts only `room` (its messaging_acl), so the lurker's
+# call is refused and its published posts and casts are dropped.
+[app]
+name = "lurker"
+version = "0.3.0"
+description = "The room's program, not let in (app tutorial, chapter 4)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:metrics"]
+prefix = "lurker"
+
+[appserver.capabilities."bulkhead:groups"]
+publish = ["chat"]

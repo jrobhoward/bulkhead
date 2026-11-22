@@ -14,6 +14,8 @@ Like an Erlang `gen_server`:
 
 ## A minimal app
 
+[`examples/app-tutorial`](../examples/app-tutorial/README.md) builds a chat room from here, a chapter at a time, as scripts that run each step.
+
 `Cargo.toml`:
 
 ```toml
@@ -21,9 +23,6 @@ Like an Erlang `gen_server`:
 name = "greeter"
 version = "0.1.0"
 edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
 
 [dependencies]
 bulkhead-sdk = { path = "../bulkhead/crates/bulkhead-sdk" }
@@ -52,6 +51,14 @@ impl App for Greeter {
 }
 
 bulkhead_sdk::app!(Greeter);
+```
+
+`src/main.rs`: the program the node runs, through `bulkhead-runner`.
+
+```rust
+fn main() -> std::process::ExitCode {
+    greeter::bulkhead_main()
+}
 ```
 
 `bulkhead.toml`:
@@ -422,7 +429,7 @@ Limits: `callback_deadline_ms` bounds each callback's wall time (less time spent
 Three levels, from fastest to most complete:
 
 - **The logic.** Keep message handling in plain functions over plain types, and the `App` impl a thin shell that decodes the envelope, calls them and encodes the reply. `cargo test` runs them on the host target. The `Ctx` methods and the service wrappers go to the node, which only a running instance has, so test code does not call them.
-- **The app on a node.** For services, manifests and policy, start a `bulkhead::node::Node` in a temporary directory with a node config written by the test, bundle the app with the CLI and drive it through `bulkhead::api::Client`, as `board.rs` (HTTP, a shared bucket, a node restart) and [`scada.rs`](../crates/bulkhead/tests/scada.rs) (an HA pair and a witness in one process) do.
+- **The app on a node.** The app tutorial's chapter 6 walks through one (`crates/bulkhead/tests/app_tutorial.rs`). For services, manifests and policy, start a `bulkhead::node::Node` in a temporary directory with a node config written by the test, bundle the app with the CLI and drive it through `bulkhead::api::Client`, as `board.rs` (HTTP, a shared bucket, a node restart) and [`scada.rs`](../crates/bulkhead/tests/scada.rs) (an HA pair and a witness in one process) do.
 
 While debugging, `bulkhead state <pid>` shows an SDK app's state through its `save_snapshot`; an instance whose `save_snapshot` fails is restarted. `bulkhead logs <app> -f` follows its records, and `bulkhead events` shows exits and restarts as they happen.
 

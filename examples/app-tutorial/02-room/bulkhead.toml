@@ -1,0 +1,10 @@
+# Chapter 2 of examples/app-tutorial: the room's manifest. `[app]` names
+# it; `[appserver]` is what the node needs to run it, every section
+# optional. This app asks for no host services.
+[app]
+name = "room"
+version = "0.1.0"
+description = "A chat room (app tutorial, chapter 2)"
+
+[appserver.limits]
+memory_max = "32MiB"

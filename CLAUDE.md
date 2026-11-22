@@ -141,7 +141,11 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   bucket over HTTP; `bulkhead.toml`, `watch.toml` and `hot-standby.toml`, one
   program), run by `crates/bulkhead/tests/board.rs`.
   `examples/tutorial/` is its chapter scripts (`common.sh` shared), not a
-  crate. `examples/tally` keeps a
+  crate. `examples/app-tutorial/` is the app developers' tutorial (ROADMAP
+  DOC1): chapter scripts and a crate per chapter (`tut-room-N`,
+  `tut-history-N`), each script checking its own output;
+  `crates/bulkhead/tests/app_tutorial.rs` runs them (built into
+  `target/fixtures/app-tutorial`). `examples/tally` keeps a
   counter in Postgres (`bulkhead:sql`, tutorial chapter 4), run by
   `crates/bulkhead/tests/tally.rs` against a scratch Postgres
   (`crates/bulkhead-host/tests/common/pg.rs`, shared by path).

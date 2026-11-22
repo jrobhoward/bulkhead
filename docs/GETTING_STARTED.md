@@ -131,8 +131,9 @@ The API is JSON over HTTP on the socket, so `curl --unix-socket ~/bulkhead-demo/
 
 ## Next
 
+- [The app tutorial](../examples/app-tutorial/README.md): an app of one's own, from an empty crate: calls, logs and metrics, two apps talking, a bucket and a watch, and tests, as scripts.
 - [The tutorial](../examples/tutorial/README.md): the same node, then a pair and a witness with failover, a hot standby and a database, as scripts.
-- [WRITING_APPS.md](WRITING_APPS.md): write your own app with `bulkhead-sdk`.
+- [WRITING_APPS.md](WRITING_APPS.md): the SDK in full.
 - [MANIFEST.md](MANIFEST.md): every manifest field, capabilities, node configuration and operator policy.
 - [OPERATIONS.md](OPERATIONS.md): running nodes and pairs.
 - [`examples/`](../examples/): `ping-pong` (calls, links and monitors between apps), `chaos` (fails on purpose), and the apps the README lists.

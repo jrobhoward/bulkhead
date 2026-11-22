@@ -1,0 +1,19 @@
+[package]
+name = "tut-room-5"
+version.workspace = true
+description = "Bulkhead app tutorial: chapter 5, the room watching the posts bucket"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bulkhead-sdk = { workspace = true, features = ["groups", "keyvalue", "metrics", "watch"] }
+
+[dev-dependencies]
+rstest = { workspace = true }
+
+[lints]
+workspace = true

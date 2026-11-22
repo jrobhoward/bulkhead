@@ -85,6 +85,10 @@ pub struct RingLayer {
 }
 
 impl RingLayer {
+    /// The target of the host's records of apps' logs, the only ones the
+    /// ring keeps.
+    pub const TARGET: &'static str = "bulkhead::guest";
+
     /// A layer feeding `ring`.
     #[must_use]
     pub fn new(ring: Arc<LogRing>) -> Self {
@@ -124,7 +128,7 @@ impl Fields {
 
 impl<S: tracing::Subscriber> Layer<S> for RingLayer {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != "bulkhead::guest" {
+        if event.metadata().target() != Self::TARGET {
             return;
         }
         let mut fields = Fields::default();

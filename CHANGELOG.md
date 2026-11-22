@@ -203,6 +203,12 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- `bulkhead log-level <app> debug` (or `trace`) showed nothing more in
+  `bulkhead logs`: `RUST_LOG`'s filter (default `info`) applied to the
+  node's log ring as well as to stderr, so an app's records below `info`
+  were dropped before the ring. It now filters stderr only; the ring
+  keeps apps' records at each app's own level, which the host already
+  applies. Found by the app tutorial's chapter 3.
 - The privileged helper's root tests on FreeBSD no longer fail now and
   then (ROADMAP "Test timing", found in DA4, 2026-11-15). Two causes,
   both in the tests: each test's helper redefined the same devfs ruleset
@@ -744,6 +750,16 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- A tutorial for app developers (ROADMAP DOC1): `examples/app-tutorial`,
+  a chat room built from an empty crate in six chapters (a node started
+  and stopped; a first app built, bundled and deployed; logs and a
+  metric; two apps talking by publish, call and cast under messaging
+  ACLs; posts in a shared bucket, watched and resumed after a restart;
+  tests), each a script that runs and checks its steps, with a crate per
+  chapter (`tut-room-N`, `tut-history-N`). `crates/bulkhead/tests/app_tutorial.rs`
+  runs every script and the chapter 5 apps on a node. GETTING_STARTED
+  points to it, and WRITING_APPS's minimal app is an executable again
+  (`src/main.rs` calling `bulkhead_main()`), not a `cdylib`.
 - Unconfined apps, an escape hatch (ROADMAP AP4): a manifest's
   `unconfined = { reason = "..." }` runs the app without the runner's
   fences (`bulkhead-runner --unconfined`: no seccomp list or Landlock on

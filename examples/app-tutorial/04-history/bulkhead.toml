@@ -1,0 +1,19 @@
+# Chapter 4 of examples/app-tutorial: history joins the group `chat` and
+# accepts messages from the room alone.
+[app]
+name = "history"
+version = "0.1.0"
+description = "Keeps the room's last posts (app tutorial, chapter 4)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:groups"]
+join = ["chat"]
+
+# Who may send to its instances: calls from others fail with
+# access-denied, their casts are dropped.
+[appserver.messaging_acl]
+accept_from = ["room"]

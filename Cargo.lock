@@ -3612,6 +3612,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tut-history-4"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+]
+
+[[package]]
+name = "tut-history-5"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+ "rstest",
+]
+
+[[package]]
+name = "tut-room-2"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+]
+
+[[package]]
+name = "tut-room-3"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+]
+
+[[package]]
+name = "tut-room-4"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+]
+
+[[package]]
+name = "tut-room-5"
+version = "0.3.0"
+dependencies = [
+ "bulkhead-sdk",
+ "rstest",
+]
+
+[[package]]
 name = "typed-path"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

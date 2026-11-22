@@ -1,0 +1,21 @@
+# Chapter 5 of examples/app-tutorial: history keeps the posts in the
+# shared bucket `posts`, which node config defines ([buckets.posts], on
+# disk) and policy grants.
+[app]
+name = "history"
+version = "0.2.0"
+description = "Keeps the room's posts in a bucket (app tutorial, chapter 5)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:groups"]
+join = ["chat"]
+
+[appserver.capabilities."bulkhead:keyvalue".shared]
+posts = "rw"
+
+[appserver.messaging_acl]
+accept_from = ["room"]

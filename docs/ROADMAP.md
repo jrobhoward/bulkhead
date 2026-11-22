@@ -82,8 +82,8 @@ flowchart LR
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
 - **Next:** the open Phase 7 threads by the order above; Phase 8 waits on ZFS volumes (DR6) and DR4c's TLC runs.
-- **While TLC runs** (DR4c holds 12 of the 16-core machine's cores for hours at a time), take items whose result is not a benchmark: DA5b, DOC1, H12, and the Ubuntu VM's root e2e run (`scripts/priv-e2e-systemd.sh`), not run for CR1 and DA2b. Items measured by a benchmark (DA3b, DA4b, AP1b, PF1, PF2, FO1) wait for an idle machine (their numbers would be contended).
-- AP4 (unconfined apps, consent on four sides), AP3 (flat supervision: `supervision.children` removed) and DR4b (a DR node apart from the witness) landed on 2026-11-21; DR3b (what DR5's drill left) and DR5 (the drill and its soak) on 2026-11-20; DR4 (activation and failback, operator fencing) on 2026-11-19, with DR2 and DR3 the same day; Phase 6's exit was met that day too, and PS6b removed the CPU limits by decision.
+- **While TLC runs** (DR4c holds 12 of the 16-core machine's cores for hours at a time), take items whose result is not a benchmark: DA5b and H12. Items measured by a benchmark (DA3b, DA4b, AP1b, PF1, PF2, FO1) wait for an idle machine (their numbers would be contended).
+- DOC1 (the app tutorial, `examples/app-tutorial`), AP4 (unconfined apps, consent on four sides), AP3 (flat supervision: `supervision.children` removed) and DR4b (a DR node apart from the witness) landed on 2026-11-21; DR3b (what DR5's drill left) and DR5 (the drill and its soak) on 2026-11-20; DR4 (activation and failback, operator fencing) on 2026-11-19, with DR2 and DR3 the same day; Phase 6's exit was met that day too, and PS6b removed the CPU limits by decision.
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
 - **Disaster recovery in parallel** with Phases 6 and 7: it touches replication, failover and the transport, which they do not. Its model (S38) came first, under V1 (done 2026-11-18). Shipping volumes (DR6) waits for ZFS volumes.
@@ -289,7 +289,6 @@ Alongside the phases, measuring every new boundary first (S36, S37, S39, S40); o
 
 ## Doc debt
 
-- [ ] **DOC1 A tutorial for app developers** (M; added 2026-11-15). GETTING_STARTED and `examples/tutorial` teach running nodes (deploying the counter, recovery, failover, upgrades), and WRITING_APPS is a reference; nothing walks a developer from `cargo new` to an app of their own. Chapters, each a script the tests run as they run the operator tutorial (`crates/bulkhead/tests/examples.rs`): a node started and stopped (foreground, `Ctrl-C` or SIGTERM, what `data_dir` keeps); an app made, its manifest, bundled and deployed; logging (`info!`, `bulkhead logs -f`, levels), metrics (a counter, `bulkhead metrics`) and tracing (`examples/tracing`; O1's trace id later); messages between two apps (call, cast, a group's publish, the messaging ACLs); a bucket and a watch on it (`watch::watch`, the notice in `handle_info`, resuming after a restart); a test of the app. GETTING_STARTED's "Next" points to it. Areas: docs, examples, `tests/examples.rs`.
 
 Narrative docs a change left out of date, to fix in a later docs pass:
 

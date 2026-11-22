@@ -1,0 +1,28 @@
+# Chapter 5 of examples/app-tutorial: the room also reads the shared
+# bucket `posts` (to watch it) and keeps its place in a bucket of its own.
+# Node config defines `posts` ([buckets.posts]); policy grants it.
+[app]
+name = "room"
+version = "0.4.0"
+description = "A chat room that watches its posts (app tutorial, chapter 5)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+[appserver.capabilities."bulkhead:logging"]
+
+[appserver.capabilities."bulkhead:metrics"]
+prefix = "room"
+
+[appserver.capabilities."bulkhead:groups"]
+publish = ["chat"]
+
+# `cursor`: the room's own bucket, on disk. `posts`: shared, read-only.
+[appserver.capabilities."bulkhead:keyvalue".buckets]
+cursor = { durability = "disk" }
+
+[appserver.capabilities."bulkhead:keyvalue".shared]
+posts = "ro"
+
+[appserver.messaging_acl]
+may_call = ["history"]

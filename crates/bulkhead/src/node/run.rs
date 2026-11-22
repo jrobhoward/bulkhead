@@ -5,6 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::{EnvFilter, filter_fn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -40,13 +42,18 @@ pub fn run(config: &Path) -> anyhow::Result<()> {
             ),
         ),
     };
+    // `RUST_LOG` filters what goes to stderr. The ring (`bulkhead logs`)
+    // takes apps' records alone, which the host has already filtered by
+    // each app's level, `bulkhead log-level` included: under `RUST_LOG`'s
+    // filter an app's debug records never reached it.
+    let stderr_filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     tracing_subscriber::registry()
+        .with(text.with_filter(stderr_filter()))
+        .with(json.with_filter(stderr_filter()))
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            RingLayer::new(ring.clone())
+                .with_filter(filter_fn(|meta| meta.target() == RingLayer::TARGET)),
         )
-        .with(text)
-        .with(json)
-        .with(RingLayer::new(ring.clone()))
         .init();
     if let Err(error) = bulkhead_host::probe_registration() {
         tracing::warn!(%error, "probes not registered: tracers will not see this node's until it restarts");

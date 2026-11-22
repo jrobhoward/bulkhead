@@ -1,0 +1,20 @@
+# Chapter 3 of examples/app-tutorial: the room asks for two host services,
+# logging and metrics. Each needs the operator's grant too (policy.toml).
+[app]
+name = "room"
+version = "0.2.0"
+description = "A chat room that logs and counts (app tutorial, chapter 3)"
+
+[appserver.limits]
+memory_max = "32MiB"
+
+# Records at `info` and above; `bulkhead log-level room debug` lowers it
+# while the node runs.
+[appserver.observability]
+log_level = "info"
+
+[appserver.capabilities."bulkhead:logging"]
+
+# Every metric is exported as room_<name>, with an `app` label.
+[appserver.capabilities."bulkhead:metrics"]
+prefix = "room"

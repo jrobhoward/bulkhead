@@ -1,0 +1,16 @@
+[package]
+name = "tut-room-3"
+version.workspace = true
+description = "Bulkhead app tutorial: chapter 3, the room with logs and a metric"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bulkhead-sdk = { workspace = true, features = ["metrics"] }
+
+[lints]
+workspace = true
