@@ -242,6 +242,132 @@ pub fn decode(tag: &Tag, scan: &Scan) -> Option<TagValue> {
     })
 }
 
+/// The registers laid out in `order` for `be`, a value's big-endian bytes:
+/// the inverse of [`bytes`].
+fn registers(be: &[u8], order: WordOrder) -> Vec<u16> {
+    let swap_bytes = matches!(order, WordOrder::Badc | WordOrder::Dcba);
+    let mut words: Vec<u16> = be
+        .chunks(2)
+        .map(|c| {
+            if swap_bytes {
+                u16::from_be_bytes([c[1], c[0]])
+            } else {
+                u16::from_be_bytes([c[0], c[1]])
+            }
+        })
+        .collect();
+    if matches!(order, WordOrder::Cdab | WordOrder::Dcba) {
+        words.reverse();
+    }
+    words
+}
+
+/// What writing a tag asks of the device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Write {
+    /// Holding registers from an address (function 16).
+    Words(u16, Vec<u16>),
+    /// One coil (function 15).
+    Coil(u16, bool),
+    /// One bit of a holding register, the others kept: Mask Write
+    /// Register (function 22) with this address, AND mask and OR mask.
+    Mask(u16, u16, u16),
+}
+
+/// What writing `value` to `tag` asks of the device: the inverse of
+/// [`decode`], with `value` in the tag's units (`raw = (value - offset) /
+/// scale`).
+///
+/// # Errors
+///
+/// The tag's table is read only, or `value` does not fit the tag's type.
+pub fn encode(tag: &Tag, value: TagValue) -> Result<Write, String> {
+    let kind = tag.kind();
+    match tag.table {
+        Table::Input | Table::Discrete => {
+            return Err(format!("a {:?} tag is read only", tag.table).to_lowercase());
+        }
+        Table::Coil | Table::Holding => {}
+    }
+    if kind == TagType::Bool {
+        let TagValue::Bool(on) = value else {
+            return Err("a bool tag takes true or false".into());
+        };
+        return Ok(match tag.bit {
+            Some(bit) => {
+                let mask = 1u16 << bit;
+                Write::Mask(tag.address, !mask, if on { mask } else { 0 })
+            }
+            None => Write::Coil(tag.address, on),
+        });
+    }
+    if matches!(value, TagValue::Bool(_)) {
+        return Err(format!("a {kind:?} tag takes a number").to_lowercase());
+    }
+    #[allow(clippy::float_cmp)]
+    let plain = tag.scale == 1.0 && tag.offset == 0.0;
+    let raw = |v: TagValue| -> Result<f64, String> {
+        let x = (v.as_f64() - tag.offset) / tag.scale;
+        if x.is_finite() {
+            Ok(x)
+        } else {
+            Err("not a finite number".into())
+        }
+    };
+    // An integer type: the exact integer when it came as one and there is
+    // nothing to scale, else the scaled value rounded to the nearest.
+    let integer = |min: i128, max: i128| -> Result<i128, String> {
+        let n = match value {
+            TagValue::Unsigned(n) if plain => i128::from(n),
+            TagValue::Signed(n) if plain => i128::from(n),
+            _ => {
+                #[allow(clippy::cast_possible_truncation)]
+                let n = raw(value)?.round() as i128;
+                n
+            }
+        };
+        if (min..=max).contains(&n) {
+            Ok(n)
+        } else {
+            Err(format!("{n} is outside {kind:?}'s {min} to {max}").to_lowercase())
+        }
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let be: Vec<u8> = match kind {
+        TagType::U16 => (integer(0, i128::from(u16::MAX))? as u16)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::I16 => (integer(i128::from(i16::MIN), i128::from(i16::MAX))? as i16)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::U32 => (integer(0, i128::from(u32::MAX))? as u32)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::I32 => (integer(i128::from(i32::MIN), i128::from(i32::MAX))? as i32)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::U64 => (integer(0, i128::from(u64::MAX))? as u64)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::I64 => (integer(i128::from(i64::MIN), i128::from(i64::MAX))? as i64)
+            .to_be_bytes()
+            .to_vec(),
+        TagType::F32 => {
+            let x = raw(value)?;
+            if x.abs() > f64::from(f32::MAX) {
+                return Err(format!("{x} is outside f32's range"));
+            }
+            (x as f32).to_be_bytes().to_vec()
+        }
+        TagType::F64 => raw(value)?.to_be_bytes().to_vec(),
+        TagType::Bool => return Err("a bool tag takes true or false".into()),
+    };
+    Ok(Write::Words(
+        tag.address,
+        registers(&be, tag.order.unwrap_or_default()),
+    ))
+}
+
 /// The tags whose value in `now` moved by at least their deadband from the
 /// value last sent (every tag when `full`), recording them in `last_sent`.
 pub fn tag_changes(

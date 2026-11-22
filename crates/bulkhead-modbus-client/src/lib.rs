@@ -6,6 +6,7 @@
 //! use bulkhead_modbus_client::client;
 //!
 //! client::write_holding("pump-1", 10, &[42])?;
+//! client::write_tag("pump-1", "setpoint", 21.5)?;   // a tag, in its units
 //! ```
 //!
 //! The app declares `capabilities.extensions."bulkhead-modbus:modbus"`
@@ -105,6 +106,90 @@ pub mod client {
     /// As [`Error`] lists.
     pub fn write_coils(device: &str, address: u16, values: &[bool]) -> Result<(), Error> {
         call("client#write-coils", &(device, address, values), failed)
+    }
+
+    /// A value for [`write_tag`]: a bool, an integer or a float, as the
+    /// updates' `tags` carry them.
+    #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(untagged)]
+    pub enum TagValue {
+        /// For a bool tag.
+        Bool(bool),
+        /// A non-negative integer.
+        Unsigned(u64),
+        /// An integer.
+        Signed(i64),
+        /// A float.
+        Float(f64),
+    }
+
+    impl From<bool> for TagValue {
+        fn from(b: bool) -> Self {
+            Self::Bool(b)
+        }
+    }
+
+    impl From<f64> for TagValue {
+        fn from(x: f64) -> Self {
+            Self::Float(x)
+        }
+    }
+
+    impl From<f32> for TagValue {
+        fn from(x: f32) -> Self {
+            Self::Float(f64::from(x))
+        }
+    }
+
+    impl From<u64> for TagValue {
+        fn from(n: u64) -> Self {
+            Self::Unsigned(n)
+        }
+    }
+
+    impl From<i64> for TagValue {
+        fn from(n: i64) -> Self {
+            Self::Signed(n)
+        }
+    }
+
+    impl From<u32> for TagValue {
+        fn from(n: u32) -> Self {
+            Self::Unsigned(u64::from(n))
+        }
+    }
+
+    impl From<i32> for TagValue {
+        fn from(n: i32) -> Self {
+            Self::Signed(i64::from(n))
+        }
+    }
+
+    impl From<u16> for TagValue {
+        fn from(n: u16) -> Self {
+            Self::Unsigned(u64::from(n))
+        }
+    }
+
+    impl From<i16> for TagValue {
+        fn from(n: i16) -> Self {
+            Self::Signed(i64::from(n))
+        }
+    }
+
+    /// Write a tag the device's configuration declares (ROADMAP DA5c), in
+    /// its units: the driver applies the inverse of its scale and offset,
+    /// its type's range and its word order. A bit of a holding register is
+    /// written with Mask Write Register (function 22), so the register's
+    /// other bits stay; a device without that function answers
+    /// `Exception(1)`. Input registers and discrete inputs are read only.
+    ///
+    /// # Errors
+    ///
+    /// As [`Error`] lists; `Invalid` for a tag the device does not declare,
+    /// a read-only table, or a value its type cannot hold.
+    pub fn write_tag(device: &str, tag: &str, value: impl Into<TagValue>) -> Result<(), Error> {
+        call("client#write-tag", &(device, tag, value.into()), failed)
     }
 }
 

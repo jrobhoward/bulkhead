@@ -41,6 +41,7 @@ fn refused(r: Route) -> String {
 #[case::read_listed("client#read-holding", "pump-1", json!({ "read": ["pump-1"] }), MODBUS_DEVICES_APP)]
 #[case::write_also_reads("client#read-coils", "pump-1", json!({ "write": ["pump-1"] }), MODBUS_DEVICES_APP)]
 #[case::write_listed("client#write-holding", "pump-1", json!({ "write": ["pump-1"] }), MODBUS_DEVICES_APP)]
+#[case::write_tag_listed("client#write-tag", "pump-1", json!({ "write": ["pump-1"] }), MODBUS_DEVICES_APP)]
 #[case::primary_device("client#read-input", "valve-1", json!({ "read": ["valve-1"] }), MODBUS_PRIMARY_APP)]
 #[case::server("server#set-holding", "", json!({ "serve": true }), MODBUS_SERVER_APP)]
 fn route____allowed____to_its_driver(
@@ -63,6 +64,7 @@ fn route____allowed____to_its_driver(
 
 #[rstest]
 #[case::read_only_writes("client#write-coils", json!({ "read": ["pump-1"] }), true, "AccessDenied")]
+#[case::read_only_writes_a_tag("client#write-tag", json!({ "read": ["pump-1"] }), true, "AccessDenied")]
 #[case::unlisted("client#read-holding", json!({ "read": ["other"] }), true, "AccessDenied")]
 #[case::ungranted("client#read-holding", json!({ "read": ["pump-1"] }), false, "AccessDenied")]
 #[case::no_scope("client#read-holding", serde_json::Value::Null, true, "AccessDenied")]

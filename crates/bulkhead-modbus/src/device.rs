@@ -37,6 +37,9 @@ pub(crate) enum Request {
     ReadBits(Table, u16, u16),
     WriteWords(u16, Vec<u16>),
     WriteBits(u16, Vec<bool>),
+    /// Mask Write Register (function 22): the register becomes
+    /// `(value & and_mask) | (or_mask & !and_mask)`, on the device, at once.
+    MaskWord(u16, u16, u16),
 }
 
 /// A request's answer.
@@ -62,6 +65,8 @@ type Job = (Request, oneshot::Sender<Result<Reply, DeviceError>>);
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceHandle {
     jobs: mpsc::Sender<Job>,
+    /// The device's tags, for writes by tag (ROADMAP DA5c).
+    pub(crate) tags: std::sync::Arc<BTreeMap<String, crate::config::Tag>>,
 }
 
 impl DeviceHandle {
@@ -91,13 +96,17 @@ pub(crate) fn answering(
             let _ = reply.send(result);
         }
     });
-    DeviceHandle { jobs }
+    DeviceHandle {
+        jobs,
+        tags: std::sync::Arc::default(),
+    }
 }
 
 /// Start the task for device `name` on the current `LocalSet`, asking the
 /// node through `sender`.
 pub(crate) fn spawn(name: String, config: DeviceConfig, sender: AsyncSender) -> DeviceHandle {
     let (jobs, queue) = mpsc::channel(64);
+    let tags = std::sync::Arc::new(config.tags.clone());
     let device = Device {
         name,
         sender,
@@ -111,7 +120,7 @@ pub(crate) fn spawn(name: String, config: DeviceConfig, sender: AsyncSender) -> 
         last_full: Instant::now(),
     };
     tokio::task::spawn_local(device.run(queue));
-    DeviceHandle { jobs }
+    DeviceHandle { jobs, tags }
 }
 
 struct Device {
@@ -211,6 +220,10 @@ impl Device {
             ),
             Request::WriteBits(address, bits) => answer(
                 timeout(limit, ctx.write_multiple_coils(address, &bits)).await,
+                |()| Reply::Done,
+            ),
+            Request::MaskWord(address, and_mask, or_mask) => answer(
+                timeout(limit, ctx.masked_write_register(address, and_mask, or_mask)).await,
                 |()| Reply::Done,
             ),
         };

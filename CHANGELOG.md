@@ -767,7 +767,14 @@ All notable changes are recorded here. The format follows
   update's new `tags` (`{name, value}`) when it moves by its `deadband`
   from the value last sent. A register a tag covers is no longer sent as
   a raw point; a device without tags sends the same updates as before.
-  Tags are read only (writes by tag: ROADMAP DA5c). The cost per scan of
+  Apps write a tag in its units (ROADMAP DA5c):
+  `bulkhead_modbus_client::client::write_tag(device, tag, value)`
+  (`client#write-tag`), checked by the node as a write to the device;
+  the driver inverts the scale and offset, rounds for an integer type,
+  refuses a value outside the type, writes the registers in the tag's
+  order, and sets or clears a bit of a holding register with Mask Write
+  Register (function 22), so its other bits stay; input registers and
+  discrete inputs are read only. The cost per scan of
   a device with tags was not measured. `examples/scada`'s `points` stores
   tags under `<device>/tag/<name>`.
 - A tutorial for app developers (ROADMAP DOC1): `examples/app-tutorial`,

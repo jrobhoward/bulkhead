@@ -91,6 +91,11 @@ async fn fake_device(registers: Vec<u16>) -> SocketAddr {
                     }
                     Ok(Response::WriteMultipleRegisters(a, values.len() as u16))
                 }
+                Request::MaskWriteRegister(a, and, or) => {
+                    let r = &mut regs[usize::from(a)];
+                    *r = (*r & and) | (or & !and);
+                    Ok(Response::MaskWriteRegister(a, and, or))
+                }
                 _ => Err(ExceptionCode::IllegalFunction),
             })
         }
@@ -433,5 +438,54 @@ async fn devices____tags____typed_scaled_and_deadbanded_in_place_of_their_regist
         "a change inside the deadband sent an update"
     );
     assert_eq!(level, Some(TagValue::Float(20.0)));
+    n.apps.stop().await;
+}
+
+/// Writes by tag (ROADMAP DA5c): an f32 in `cdab`, a scaled u16 and a bit
+/// of a register, read back raw; the register's other bits stay. The node
+/// refuses a device the manifest lists only to read, and the driver a tag
+/// the device does not declare.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client____write_tag____registers_and_bit_written_in_the_tags_units() {
+    let device = fake_device(vec![0, 0b1000_0001, 0, 0]).await;
+    let n = node_with(
+        device,
+        json!({
+            "holding": [{ "start": 0, "count": 4 }],
+            "tags": {
+                "level": { "table": "holding", "address": 0, "scale": 0.5 },
+                "alarm": { "table": "holding", "address": 1, "type": "bool", "bit": 4 },
+                "setpoint": { "table": "holding", "address": 2, "type": "f32", "order": "cdab" },
+            },
+        }),
+    )
+    .await;
+
+    let level = n
+        .call("client#write-tag", r#"["pump-1", "level", 7.0]"#)
+        .await;
+    let setpoint = n
+        .call("client#write-tag", r#"["pump-1", "setpoint", 21.5]"#)
+        .await;
+    let set = n
+        .call("client#write-tag", r#"["pump-1", "alarm", true]"#)
+        .await;
+    let after_set = n.call("client#read-holding", r#"["pump-1", 0, 4]"#).await;
+    let clear = n
+        .call("client#write-tag", r#"["pump-1", "alarm", false]"#)
+        .await;
+    let after_clear = n.call("client#read-holding", r#"["pump-1", 1, 1]"#).await;
+    let ghost = n.call("client#write-tag", r#"["ghost", "level", 1]"#).await;
+    let no_tag = n.call("client#write-tag", r#"["pump-1", "flow", 1]"#).await;
+
+    let ok = r#"{"Ok":null}"#;
+    assert_eq!((level.as_str(), setpoint.as_str()), (ok, ok));
+    assert_eq!((set.as_str(), clear.as_str()), (ok, ok));
+    // 7.0 / 0.5 = 14; bit 4 set beside bits 0 and 7; 21.5 is 0x41AC0000,
+    // low word first.
+    assert_eq!(after_set, r#"{"Ok":[14,145,0,16812]}"#);
+    assert_eq!(after_clear, r#"{"Ok":[129]}"#);
+    assert_eq!(ghost, r#"{"Err":"AccessDenied"}"#);
+    assert!(no_tag.contains("no tag flow on pump-1"), "{no_tag}");
     n.apps.stop().await;
 }

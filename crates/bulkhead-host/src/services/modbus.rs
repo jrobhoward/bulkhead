@@ -68,7 +68,12 @@ const CLIENT_READS: [&str; 4] = [
     "client#read-coils",
     "client#read-discrete",
 ];
-const CLIENT_WRITES: [&str; 2] = ["client#write-holding", "client#write-coils"];
+const CLIENT_WRITES: [&str; 3] = [
+    "client#write-holding",
+    "client#write-coils",
+    // A tag's registers or bit, in its units (ROADMAP DA5c).
+    "client#write-tag",
+];
 const SERVER: [&str; 6] = [
     "server#set-holding",
     "server#set-input",

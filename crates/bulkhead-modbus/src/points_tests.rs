@@ -379,3 +379,111 @@ fn Update____tags_example____documented_bytes() {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+/// `words` from `encode` placed at holding 0, read back with `decode`.
+fn written_back(t: &Tag, value: TagValue) -> Option<TagValue> {
+    match encode(t, value).unwrap() {
+        Write::Words(address, words) => {
+            let scan: Scan = (address..)
+                .zip(words)
+                .map(|(a, w)| ((Table::Holding, a), w))
+                .collect();
+            decode(t, &scan)
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn encode____any_value_in_any_type_and_order____decodes_the_same(
+        u in proptest::prelude::any::<u32>(), i in proptest::prelude::any::<i64>(),
+        x in proptest::num::f32::NORMAL, y in proptest::num::f64::NORMAL, o in 0usize..4
+    ) {
+        let name = ["abcd", "cdab", "badc", "dcba"][o];
+        let of = |kind: &str| tag(serde_json::json!({ "table": "holding", "address": 0,
+                                                        "type": kind, "order": name }));
+
+        let found = (
+            written_back(&of("u32"), TagValue::Unsigned(u64::from(u))),
+            written_back(&of("i64"), TagValue::Signed(i)),
+            written_back(&of("f32"), TagValue::Float(f64::from(x))),
+            written_back(&of("f64"), TagValue::Float(y)),
+        );
+
+        proptest::prop_assert_eq!(found, (
+            Some(TagValue::Unsigned(u64::from(u))),
+            Some(TagValue::Signed(i)),
+            Some(TagValue::Float(f64::from(x))),
+            Some(TagValue::Float(y)),
+        ));
+    }
+}
+
+#[test]
+fn encode____scaled_and_offset____raw_rounded_to_the_nearest() {
+    let t = tag(
+        serde_json::json!({ "table": "holding", "address": 7, "type": "i16",
+                                     "scale": 0.1, "offset": -40.0 }),
+    );
+
+    let found = encode(&t, TagValue::Float(21.57));
+
+    // (21.57 + 40) / 0.1 = 615.7, so 616.
+    assert_eq!(found, Ok(Write::Words(7, vec![616])));
+}
+
+#[rstest::rstest]
+#[case("u16", TagValue::Signed(-1), "outside")]
+#[case("u16", TagValue::Unsigned(65_536), "outside")]
+#[case("i16", TagValue::Signed(40_000), "outside")]
+#[case("u32", TagValue::Float(-0.6), "outside")]
+#[case("f32", TagValue::Float(1e39), "outside f32")]
+#[case("u16", TagValue::Bool(true), "takes a number")]
+#[case("f64", TagValue::Float(f64::NAN), "finite")]
+fn encode____value_the_type_cannot_hold____refused(
+    #[case] kind: &str,
+    #[case] value: TagValue,
+    #[case] says: &str,
+) {
+    let t = tag(serde_json::json!({ "table": "holding", "address": 0, "type": kind }));
+
+    let err = encode(&t, value).unwrap_err();
+
+    assert!(err.contains(says), "{err}");
+}
+
+#[test]
+fn encode____bits____a_mask_for_a_register_bit_and_one_coil() {
+    let bit4 =
+        tag(serde_json::json!({ "table": "holding", "address": 2, "type": "bool", "bit": 4 }));
+    let coil = tag(serde_json::json!({ "table": "coil", "address": 9 }));
+
+    let found = (
+        encode(&bit4, TagValue::Bool(true)),
+        encode(&bit4, TagValue::Bool(false)),
+        encode(&coil, TagValue::Bool(true)),
+        encode(&coil, TagValue::Unsigned(1)).is_err(),
+    );
+
+    assert_eq!(
+        found,
+        (
+            Ok(Write::Mask(2, !0x0010, 0x0010)),
+            Ok(Write::Mask(2, !0x0010, 0)),
+            Ok(Write::Coil(9, true)),
+            true
+        )
+    );
+}
+
+#[rstest::rstest]
+#[case(serde_json::json!({ "table": "input", "address": 0 }))]
+#[case(serde_json::json!({ "table": "discrete", "address": 0 }))]
+fn encode____read_only_table____refused(#[case] fields: serde_json::Value) {
+    let t = tag(fields);
+
+    let err = encode(&t, TagValue::Unsigned(1)).unwrap_err();
+
+    assert!(err.contains("read only"), "{err}");
+}

@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 
 use crate::config::{MAX_READ_BITS, MAX_READ_REGISTERS, MAX_WRITE_BITS, MAX_WRITE_REGISTERS};
 use crate::device::{DeviceError, DeviceHandle, Reply, Request};
-use crate::points::Table;
+use crate::points::{Table, TagValue, Write, encode};
 use crate::server::{self, Served, Tables};
 
 /// The `client` functions' errors the driver gives (the node gives
@@ -104,6 +104,13 @@ pub(crate) async fn client(
             };
             cbor(&result)
         }
+        "client#write-tag" => {
+            let result = match args::<(String, String, TagValue)>(function, raw) {
+                Ok((device, tag, value)) => write_tag(devices, &device, &tag, value).await,
+                Err(e) => Err(e),
+            };
+            cbor(&result)
+        }
         other => cbor(&Err::<(), _>(ClientError::Invalid(format!(
             "no function {other}"
         )))),
@@ -170,6 +177,28 @@ async fn run(
         DeviceError::Offline(why) => ClientError::Offline(why),
         DeviceError::Exception(code) => ClientError::Exception(code),
     })
+}
+
+/// Write `value` to `device`'s tag `tag` (ROADMAP DA5c).
+async fn write_tag(
+    devices: &BTreeMap<String, DeviceHandle>,
+    device: &str,
+    tag: &str,
+    value: TagValue,
+) -> Result<(), ClientError> {
+    let handle = devices.get(device).ok_or(ClientError::NoSuchDevice)?;
+    let config = handle
+        .tags
+        .get(tag)
+        .ok_or_else(|| ClientError::Invalid(format!("no tag {tag} on {device}")))?;
+    let request = match encode(config, value)
+        .map_err(|e| ClientError::Invalid(format!("{tag}: {e}")))?
+    {
+        Write::Words(address, words) => Request::WriteWords(address, words),
+        Write::Coil(address, on) => Request::WriteBits(address, vec![on]),
+        Write::Mask(address, and_mask, or_mask) => Request::MaskWord(address, and_mask, or_mask),
+    };
+    run(devices, device, request).await.map(|_| ())
 }
 
 async fn read_words(
