@@ -7,7 +7,10 @@
 # helper binds for the node (ROADMAP PS3b). Two datasources (ROADMAP DA3) start a driver each,
 # jailed under a user of its own, one with a password file shared with it;
 # no statement runs without an app (tests/priv.rs logs one in), and no
-# egress driver starts without one (tests/priv.rs runs one). It
+# egress driver starts without one (tests/priv.rs runs one). With
+# ZFS_PARENT set (a dataset that does not exist yet) the node starts with
+# ZFS volumes (ROADMAP ZV1), its parent checked against the helper's, and
+# lists them (tests/priv.rs fills one from an app). It
 # installs a `bulkhead` user, binaries under
 # /usr/local and the rc script, and removes them all at the end unless
 # KEEP=1.
@@ -16,6 +19,7 @@
 #   cargo build -p bulkhead-runner
 #   cargo build -p bulkhead-resolve -p bulkhead-admin -p bulkhead-metrics -p bulkhead-sql
 #   sh scripts/priv-e2e-rcd.sh "$PWD"                           # as root
+#   ZFS_PARENT=zroot/bulkhead-e2e sh scripts/priv-e2e-rcd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
 T=$SRC/target/debug
@@ -44,6 +48,19 @@ printf '[operators]\ne2e = ["%s"]\n' "$(/usr/local/bin/bulkhead cluster pubkey $
 chown bulkhead:bulkhead $K/admin.key $K/operators.toml; chmod 0600 $K/admin.key $K/operators.toml
 printf 'e2e-secret\n' > $K/pg.password
 chown bulkhead:bulkhead $K/pg.password; chmod 0600 $K/pg.password
+ZFS_PARENT=${ZFS_PARENT:-}
+ZV=/var/db/bulkhead-volumes
+ZFS_NODE=""; ZFS_PRIV=""; ZFS_BINDS=""
+if [ -n "$ZFS_PARENT" ]; then
+    zfs create -o canmount=off -o mountpoint=$ZV "$ZFS_PARENT"
+    ZFS_NODE="[volumes.zfs]
+parent = \"$ZFS_PARENT\"
+max_quota = \"1GiB\"
+"
+    ZFS_PRIV="zfs_parent = $ZFS_PARENT
+zfs_max_quota = 1GiB"
+    ZFS_BINDS=", $ZV"
+fi
 cat > /usr/local/etc/bulkhead/node.toml <<TOML
 node = 1
 data_dir = "/var/db/bulkhead"
@@ -74,6 +91,7 @@ dbname = "shop"
 user = "shop"
 password_secret = "pg"
 
+$ZFS_NODE
 # The node's resolver (bulkhead-resolve) beside the helper's runner, in
 # every instance's jail.
 [native]
@@ -89,10 +107,11 @@ node_gid = $NGID
 runner = /usr/local/libexec/bulkhead/bulkhead-runner
 uids = 60000-60999
 state = /var/db/bulkhead-priv
-binds = /var/db/bulkhead, $K
+binds = /var/db/bulkhead, $K$ZFS_BINDS
 memory_max = 2GiB
 pids_max = 1024
 ports = 80
+$ZFS_PRIV
 CONF
 chmod 0600 /usr/local/etc/bulkhead/priv.conf
 install -m 0555 $SRC/examples/freebsd/bulkhead /usr/local/etc/rc.d/bulkhead
@@ -126,6 +145,13 @@ fetch -qo /dev/null http://127.0.0.1:80/metrics || { echo "FAILED: nothing serve
 echo "the node's user: $(ps -o uid= -p "$(pgrep -x bulkhead | head -1)" | tr -d ' ') (not 0)"
 echo "== remote admin (bulkhead-admin, signed requests)"
 /usr/local/bin/bulkhead --remote 127.0.0.1:7443 --node-key "$ADMIN_KEY" --key $W/operator.key list
+if [ -n "$ZFS_PARENT" ]; then
+    echo "== ZFS volumes (ROADMAP ZV1)"
+    su -m bulkhead -c "/usr/local/bin/bulkhead --socket /var/db/bulkhead/admin.sock volume list"
+    if su -m bulkhead -c "/usr/local/bin/bulkhead --socket /var/db/bulkhead/admin.sock volume destroy nobody data" 2>&1; then
+        echo "FAILED: destroyed a volume that does not exist"; exit 1
+    fi
+fi
 echo "== reload"; service bulkhead reload; sleep 1
 echo "== stop"; service bulkhead stop; sleep 1
 echo "left: $(pgrep -x bulkhead | wc -l | tr -d ' ') nodes, $(pgrep -x bulkhead-priv | wc -l | tr -d ' ') helpers"
@@ -134,6 +160,7 @@ sysrc -x bulkhead_enable
 if [ "${KEEP:-0}" != 1 ]; then
     rm -f /usr/local/etc/rc.d/bulkhead /usr/local/sbin/bulkhead-priv /usr/local/bin/bulkhead /var/log/bulkhead.log
     rm -rf /usr/local/libexec/bulkhead /usr/local/etc/bulkhead /var/db/bulkhead /var/db/bulkhead-priv $K $W
+    [ -n "$ZFS_PARENT" ] && zfs destroy -r "$ZFS_PARENT" && rm -rf $ZV
     pw userdel bulkhead
     echo "== removed"
 fi

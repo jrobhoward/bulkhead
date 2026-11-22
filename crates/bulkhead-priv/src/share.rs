@@ -102,6 +102,38 @@ pub fn share(path: &Path, node_uid: u32, app: u32, writable: bool) -> Result<(),
     walk(fd, node_uid, gid, 0, &mut left).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Give a new ZFS volume's root (ROADMAP ZV1), which `zfs create` made
+/// root's with mode 0755, to the app whose user and group are `app`, as
+/// [`share`] gives a read-write volume: its user and group, `0770`. Only
+/// a directory of root's is changed, through a descriptor opened without
+/// following links; one the app owns already is left as it is.
+///
+/// # Errors
+///
+/// `path` is not a directory, or is neither root's nor the app's, or a
+/// change failed.
+pub fn give_volume_root(path: &Path, app: u32) -> Result<(), String> {
+    let fd = open(path, OPEN | OFlags::DIRECTORY, Mode::empty())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let st = fstat(&fd).map_err(|e| format!("{}: {e}", path.display()))?;
+    if st.st_uid == app && st.st_gid == app {
+        return Ok(());
+    }
+    if st.st_uid != 0 {
+        return Err(format!(
+            "{} is neither root's nor the app's",
+            path.display()
+        ));
+    }
+    fchown(
+        &fd,
+        Some(rustix::fs::Uid::from_raw(app)),
+        Some(Gid::from_raw(app)),
+    )
+    .map_err(|e| format!("{}: {e}", path.display()))?;
+    fchmod(&fd, Mode::RWXU | Mode::RWXG).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Share the directory `dir` (already checked to be the node's) and what
 /// is under it.
 fn walk(

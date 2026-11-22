@@ -27,6 +27,7 @@ use crate::transport::liveness::{HeartbeatPath, Liveness, NodeEvent, PeerStatus}
 use crate::transport::membership::{Member, Membership};
 use crate::transport::{self, IncomingCalls, Packet, PendingCalls, Transport};
 use bulkhead_bundle::manifest::LogLevel;
+use bulkhead_priv_wire::{Reply as PrivReply, VolumeRequest, VolumeRow};
 
 /// Hosts instances on one node.
 ///
@@ -790,6 +791,70 @@ impl Runtime {
         }
         let _ = (app, path, writable);
         Ok(())
+    }
+
+    /// Make sure `app`'s ZFS volume `volume` exists with a quota of
+    /// `refquota` bytes, mounted and its root the app's user's (ROADMAP
+    /// ZV1), through the privileged helper; its mountpoint.
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper refused (a quota over its ceiling or below
+    /// what the volume holds, a `zfs` failure) or has gone.
+    pub async fn ensure_volume(
+        &self,
+        app: &str,
+        volume: &str,
+        refquota: u64,
+    ) -> Result<std::path::PathBuf, String> {
+        let request = VolumeRequest::Ensure {
+            app: app.to_string(),
+            volume: volume.to_string(),
+            refquota,
+        };
+        match self.volume_request(request).await? {
+            PrivReply::Volume { mountpoint } => Ok(mountpoint.into()),
+            other => Err(format!("the privileged helper answered {other:?}")),
+        }
+    }
+
+    /// The ZFS volumes the privileged helper keeps (ROADMAP ZV1): its
+    /// parent dataset and each app's volumes.
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper refused or has gone.
+    pub async fn volumes(&self) -> Result<(String, Vec<VolumeRow>), String> {
+        match self.volume_request(VolumeRequest::List).await? {
+            PrivReply::Volumes { parent, rows } => Ok((parent, rows)),
+            other => Err(format!("the privileged helper answered {other:?}")),
+        }
+    }
+
+    /// Remove `app`'s ZFS volume `volume` and its snapshots (ROADMAP ZV1).
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper refused (an instance of the app runs, no
+    /// such volume, a `zfs` failure) or has gone.
+    pub async fn destroy_volume(&self, app: &str, volume: &str) -> Result<(), String> {
+        let request = VolumeRequest::Destroy {
+            app: app.to_string(),
+            volume: volume.to_string(),
+        };
+        match self.volume_request(request).await? {
+            PrivReply::Done => Ok(()),
+            other => Err(format!("the privileged helper answered {other:?}")),
+        }
+    }
+
+    async fn volume_request(&self, request: VolumeRequest) -> Result<PrivReply, String> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(helper) = &self.inner.config.native.helper {
+            return helper.volume(request).await;
+        }
+        let _ = request;
+        Err("ZFS volumes need the privileged helper ([priv])".into())
     }
 
     /// Keep the HTTP route table (JSON, `GUEST_FORMATS.md`'s "Routes") and

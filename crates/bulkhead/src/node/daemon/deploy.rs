@@ -358,12 +358,30 @@ impl Node {
             spec.services.config.values.extend(overrides.clone());
         }
         let priv_dir = self.store.priv_dir(&name, &version);
-        spec.resolve_preopens(
-            &manifest,
-            |v| self.config.volumes.get(v).cloned(),
-            Some(&priv_dir),
-        )
-        .map_err(NodeError::Invalid)?;
+        // Each volume's directory; an app's own ZFS volume is made (or its
+        // quota changed) here, through the helper (ROADMAP ZV1), once the
+        // app may open files at all: without the grant its preopens go
+        // unused, and none is made for it.
+        let files = spec.granted.contains(&Capability::Filesystem);
+        let mut hosts = std::collections::BTreeMap::new();
+        for (volume, source) in
+            super::volumes::sources(&self.config.volumes, &manifest).map_err(NodeError::Invalid)?
+        {
+            let host = match source {
+                super::volumes::Source::Dir(dir) => dir,
+                super::volumes::Source::Zfs { refquota } if files => self
+                    .rt
+                    .ensure_volume(&name, &volume, refquota)
+                    .await
+                    .map_err(|e| NodeError::Invalid(format!("volume '{volume}': {e}")))?,
+                super::volumes::Source::Zfs { .. } => std::path::PathBuf::new(),
+            };
+            hosts.insert(volume, host);
+        }
+        spec.resolve_preopens(&manifest, |v| hosts.get(v).cloned(), Some(&priv_dir))
+            .map_err(NodeError::Invalid)?;
+        // The ungranted app's ZFS volumes, never made.
+        spec.preopens.retain(|p| !p.host.as_os_str().is_empty());
         if let Some(p) = spec
             .preopens
             .iter()

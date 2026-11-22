@@ -10,18 +10,21 @@
 
 use std::collections::BTreeMap;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bulkhead_priv_wire::{Reply, Request, SOCKET_ENV, Spawn};
+use bulkhead_priv_wire::{
+    MAX_VOLUMES, Reply, Request, SOCKET_ENV, Spawn, VolumeRequest, VolumeRow, is_app_name,
+    is_volume_name,
+};
 use rustix::event::{PollFd, PollFlags};
 
 use crate::bindings::Bindings;
-use crate::config::Config;
+use crate::config::{Config, ZfsConfig};
 use crate::platform::{self, Instance, Node, State};
 use crate::socket::{self, Received};
 use crate::sys::Exec;
-use crate::{check, share};
+use crate::{check, share, zfs};
 
 /// How long the helper waits for instances to end once the node has gone.
 const DRAIN: Duration = Duration::from_secs(5);
@@ -49,6 +52,9 @@ struct Helper {
     bindings: Bindings,
     sock: OwnedFd,
     insts: BTreeMap<u64, Instance>,
+    /// Each running instance's app, by id: a volume is not destroyed while
+    /// its app runs (ROADMAP ZV1).
+    apps: BTreeMap<u64, String>,
     /// A stop signal came, and there is no node to pass it to.
     stopping: bool,
 }
@@ -64,6 +70,9 @@ pub fn run(config: Config, mode: Mode) -> Result<i32, String> {
     }
     state_dir(&config)?;
     let bindings = Bindings::load(&config.state)?;
+    if let Some(zfs) = &config.zfs {
+        check_zfs_parent(zfs, &config.binds)?;
+    }
     let st = platform::init(&config)?;
     let signals = crate::sys::signal_pipe(&crate::child::HANDLED)
         .map_err(|e| format!("signal handlers: {e}"))?;
@@ -94,9 +103,36 @@ pub fn run(config: Config, mode: Mode) -> Result<i32, String> {
         bindings,
         sock,
         insts: BTreeMap::new(),
+        apps: BTreeMap::new(),
         stopping: false,
     };
     Ok(helper.serve(node.as_ref(), &signals))
+}
+
+/// ZFS volumes' parent (ROADMAP ZV1): it must exist and mount under the
+/// binds, or the volumes made below it could not be bound into an
+/// instance's root.
+fn check_zfs_parent(zfs: &ZfsConfig, binds: &[PathBuf]) -> Result<(), String> {
+    let rows = zfs::list(&zfs.program, &zfs.parent)
+        .map_err(|e| format!("zfs_parent {}: {e}", zfs.parent))?;
+    let mountpoint = rows
+        .iter()
+        .find(|r| r.name == zfs.parent)
+        .and_then(|r| r.mountpoint.as_deref())
+        .ok_or_else(|| {
+            format!(
+                "zfs_parent {} has no mountpoint: give it one under binds \
+                 (zfs set mountpoint=... {})",
+                zfs.parent, zfs.parent
+            )
+        })?;
+    if !check::under(Path::new(mountpoint), binds) {
+        return Err(format!(
+            "zfs_parent {} mounts at {mountpoint}, which is not under binds",
+            zfs.parent
+        ));
+    }
+    Ok(())
 }
 
 /// `state`: made 0700 if missing; it must be root's and closed to others.
@@ -224,6 +260,7 @@ impl Helper {
             memory_limit,
         };
         let _ = socket::send(self.sock.as_fd(), &reply.encode(), &[]);
+        self.apps.remove(&id);
         if let Some(inst) = self.insts.remove(&id) {
             platform::finish(&self.st, inst);
         }
@@ -265,6 +302,10 @@ impl Helper {
                 }
             }
             Request::Share { app, bind } => match self.share(&app, &bind) {
+                Ok(reply) => (reply, None),
+                Err(reason) => (Reply::Refused { reason }, None),
+            },
+            Request::Volume(v) => match self.volume(v) {
                 Ok(reply) => (reply, None),
                 Err(reason) => (Reply::Refused { reason }, None),
             },
@@ -364,7 +405,147 @@ impl Helper {
             uid,
         };
         self.insts.insert(s.id, inst);
+        self.apps.insert(s.id, s.app.clone());
         Ok(reply)
+    }
+
+    /// A ZFS volume request (ROADMAP ZV1).
+    fn volume(&mut self, req: VolumeRequest) -> Result<Reply, String> {
+        let zfs = self
+            .config
+            .zfs
+            .clone()
+            .ok_or("the helper's configuration has no zfs_parent")?;
+        let names = |app: &str, volume: &str| -> Result<(), String> {
+            if !is_app_name(app) {
+                return Err(format!("{app:?} is not an app name"));
+            }
+            if !is_volume_name(volume) {
+                return Err(format!("{volume:?} is not a volume name"));
+            }
+            Ok(())
+        };
+        let list = || zfs::list(&zfs.program, &zfs.parent);
+        match req {
+            VolumeRequest::Ensure {
+                app,
+                volume,
+                refquota,
+            } => {
+                names(&app, &volume)?;
+                if refquota == 0 || refquota > zfs.max_quota {
+                    return Err(format!(
+                        "a quota of {refquota} bytes: 1 to the helper's {}",
+                        zfs.max_quota
+                    ));
+                }
+                let uid = self.app_user(&app)?;
+                self.ensure_volume(&zfs, &app, &volume, refquota, uid)
+            }
+            VolumeRequest::List => {
+                let rows = list()?;
+                let mut out: Vec<VolumeRow> = zfs::volumes(&zfs.parent, &rows)
+                    .into_iter()
+                    .map(|(app, volume, r)| VolumeRow {
+                        app: app.to_string(),
+                        volume: volume.to_string(),
+                        used: r.used,
+                        refquota: r.refquota,
+                        mountpoint: r.mountpoint.clone().unwrap_or_default(),
+                        mounted: r.mounted,
+                    })
+                    .collect();
+                if out.len() > MAX_VOLUMES {
+                    eprintln!("bulkhead-priv: {} volumes, {MAX_VOLUMES} listed", out.len());
+                    out.truncate(MAX_VOLUMES);
+                }
+                Ok(Reply::Volumes {
+                    parent: zfs.parent.clone(),
+                    rows: out,
+                })
+            }
+            VolumeRequest::Destroy { app, volume } => {
+                names(&app, &volume)?;
+                if self.apps.values().any(|a| *a == app) {
+                    return Err(format!(
+                        "{app} has instances running; its volumes stay until they end"
+                    ));
+                }
+                let rows = list()?;
+                let app_ds = format!("{}/{app}", zfs.parent);
+                let vol_ds = format!("{app_ds}/{volume}");
+                if !rows.iter().any(|r| r.name == vol_ds) {
+                    return Err(format!("{app} has no volume {volume}"));
+                }
+                if let Err(e) = zfs::run(&zfs.program, &zfs::destroy_args(&vol_ds)) {
+                    // On Linux a destroy that finds the dataset busy has
+                    // unmounted it already (S35): mount it back.
+                    let _ = zfs::run(
+                        &zfs.program,
+                        &zfs::step_args(zfs::Step::Mount, &zfs.parent, &app, &volume, 0),
+                    );
+                    return Err(e);
+                }
+                eprintln!("bulkhead-priv: volume {vol_ds} destroyed");
+                let others = rows
+                    .iter()
+                    .any(|r| r.name != vol_ds && r.name.starts_with(&format!("{app_ds}/")));
+                if !others
+                    && let Err(e) = zfs::run(&zfs.program, &["destroy".to_string(), app_ds.clone()])
+                {
+                    eprintln!("bulkhead-priv: {app_ds} kept: {e}");
+                }
+                Ok(Reply::Done)
+            }
+        }
+    }
+
+    /// Make `app`'s `volume` exist at `refquota`, mounted, its root the
+    /// app's user's (`uid`), and answer its mountpoint.
+    fn ensure_volume(
+        &self,
+        zfs: &ZfsConfig,
+        app: &str,
+        volume: &str,
+        refquota: u64,
+        uid: u32,
+    ) -> Result<Reply, String> {
+        let list = || zfs::list(&zfs.program, &zfs.parent);
+        let rows = list()?;
+        let app_ds = format!("{}/{app}", zfs.parent);
+        let vol_ds = format!("{app_ds}/{volume}");
+        let row = rows.iter().find(|r| r.name == vol_ds);
+        let steps = zfs::ensure_steps(rows.iter().any(|r| r.name == app_ds), row, refquota);
+        for step in &steps {
+            zfs::run(
+                &zfs.program,
+                &zfs::step_args(*step, &zfs.parent, app, volume, refquota),
+            )?;
+        }
+        let rows = if steps.is_empty() { rows } else { list()? };
+        let row = rows
+            .iter()
+            .find(|r| r.name == vol_ds)
+            .ok_or_else(|| format!("{vol_ds} is missing after it was made"))?;
+        let mountpoint = match (&row.mountpoint, row.mounted) {
+            (Some(m), true) => PathBuf::from(m),
+            _ => return Err(format!("{vol_ds} is not mounted")),
+        };
+        let resolved = std::fs::canonicalize(&mountpoint)
+            .map_err(|e| format!("{}: {e}", mountpoint.display()))?;
+        if !check::under(&resolved, &self.config.binds) {
+            return Err(format!(
+                "{vol_ds} mounts at {}, which is not under the helper's binds",
+                resolved.display()
+            ));
+        }
+        share::give_volume_root(&resolved, uid)?;
+        if steps.contains(&zfs::Step::Create) {
+            eprintln!("bulkhead-priv: volume {vol_ds} made for user {uid}");
+        }
+        Ok(Reply::Volume {
+            mountpoint: resolved.display().to_string(),
+        })
     }
 
     /// Kill every instance and wait, up to [`DRAIN`], for them to end.

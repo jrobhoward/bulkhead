@@ -24,6 +24,8 @@
 //! | `GET /v1/instances` | | `Vec<InstanceInfo>` |
 //! | `GET /v1/instances/{pid}/state` | | [`StateResponse`] |
 //! | `POST /v1/instances/{pid}/kill` | | [`Done`] |
+//! | `GET /v1/volumes` | | `Vec<VolumeInfo>` |
+//! | `DELETE /v1/volumes/{app}/{volume}` | | [`Done`] |
 //!
 //! A stream is a chunked response of JSON lines (`application/x-ndjson`),
 //! one value per line, with an empty line every 15 seconds when there is
@@ -310,6 +312,29 @@ pub struct ReplicationInfo {
     /// answered: ready for `bulkhead dr failback` there.
     #[serde(default)]
     pub reseeded: bool,
+}
+
+/// A volume, as `GET /v1/volumes` lists it (ROADMAP ZV1): a directory of
+/// node config's `[volumes]`, or an app's own ZFS volume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeInfo {
+    /// The volume's name.
+    pub name: String,
+    /// `directory` or `zfs`.
+    pub kind: String,
+    /// A ZFS volume's app; none for a directory, which any app may name.
+    pub app: Option<String>,
+    /// The directory, or where the ZFS volume mounts.
+    pub path: String,
+    /// A ZFS volume's bytes used, its snapshots included.
+    pub used: Option<u64>,
+    /// A ZFS volume's quota in bytes.
+    pub quota: Option<u64>,
+    /// Whether a ZFS volume is mounted; a directory is always there.
+    pub mounted: bool,
+    /// Whether a ZFS volume's app is deployed (it can be destroyed only
+    /// once it is not).
+    pub deployed: Option<bool>,
 }
 
 /// A DR node's copy of its pair's replicated log (`[dr]`).

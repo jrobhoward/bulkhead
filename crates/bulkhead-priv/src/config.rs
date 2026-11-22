@@ -2,7 +2,7 @@
 //! node's. Every check the helper makes comes from here.
 //!
 //! One `key = value` per line, `#` to the end of a line a comment, lists
-//! comma-separated, sizes in bytes or with `KiB`, `MiB` or `GiB`:
+//! comma-separated, sizes in bytes or with `KiB`, `MiB`, `GiB` or `TiB`:
 //!
 //! ```text
 //! node = /usr/local/bin/bulkhead                    # the node's executable
@@ -19,6 +19,9 @@
 //! cgroup = /sys/fs/cgroup/system.slice/bulkhead.service  # Linux: a cgroup delegated to the helper
 //! tmp_size = 16MiB                                  # each instance's private /tmp
 //! devfs_ruleset = 4290                              # FreeBSD: the devfs ruleset the helper defines for jails
+//! zfs_parent = tank/bulkhead/volumes                # ZFS volumes (ROADMAP ZV1): their parent dataset
+//! zfs_max_quota = 50GiB                             # the largest quota a volume may have
+//! zfs = /usr/sbin/zfs                               # the zfs command (default /usr/sbin/zfs, /sbin/zfs on FreeBSD)
 //! ```
 
 use std::ops::RangeInclusive;
@@ -63,6 +66,43 @@ pub struct Config {
     /// host's network and `/etc`, the runner's fences left off. Root's
     /// consent beside the node's; empty by default.
     pub unconfined: Vec<String>,
+    /// ZFS volumes (ROADMAP ZV1), with `zfs_parent`; none without it.
+    pub zfs: Option<ZfsConfig>,
+}
+
+/// Where the helper makes apps' ZFS volumes, and their ceiling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZfsConfig {
+    /// The parent dataset: each app's volumes are at `PARENT/APP/VOLUME`,
+    /// and nothing outside it is touched.
+    pub parent: String,
+    /// The largest quota (`refquota`) a volume may have, in bytes.
+    pub max_quota: u64,
+    /// The `zfs` command, by absolute path.
+    pub program: PathBuf,
+}
+
+/// The `zfs` command's usual place on this system.
+pub const ZFS_PROGRAM: &str = if cfg!(target_os = "freebsd") {
+    "/sbin/zfs"
+} else {
+    "/usr/sbin/zfs"
+};
+
+/// Whether `name` is a dataset name the helper accepts as its parent: a
+/// pool and children separated by `/`, each of letters, digits, `_`, `-`,
+/// `.` and `:` and starting with a letter or digit; so no snapshot (`@`),
+/// bookmark (`#`), space or option.
+#[must_use]
+pub fn is_dataset_name(name: &str) -> bool {
+    name.len() <= 200
+        && name.split('/').all(|part| {
+            let b = part.as_bytes();
+            !b.is_empty()
+                && b[0].is_ascii_alphanumeric()
+                && b.iter()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-.:".contains(c))
+        })
 }
 
 impl Config {
@@ -146,6 +186,29 @@ impl Config {
                 .collect::<Result<Vec<_>, _>>()?,
             None => Vec::new(),
         };
+        let zfs = match kv.get("zfs_parent") {
+            Some(parent) => {
+                if !is_dataset_name(parent) {
+                    return Err(format!("zfs_parent: {parent} is not a dataset name"));
+                }
+                let max_quota = size(get("zfs_max_quota")?)
+                    .filter(|q| *q > 0)
+                    .ok_or("zfs_max_quota is not a size above 0")?;
+                let program = match kv.get("zfs") {
+                    Some(v) => absolute("zfs", v)?,
+                    None => PathBuf::from(ZFS_PROGRAM),
+                };
+                Some(ZfsConfig {
+                    parent: parent.clone(),
+                    max_quota,
+                    program,
+                })
+            }
+            None if kv.contains_key("zfs_max_quota") || kv.contains_key("zfs") => {
+                return Err("zfs_max_quota and zfs need zfs_parent".into());
+            }
+            None => None,
+        };
         let pids_max = num("pids_max")?;
         let memory_max = size(get("memory_max")?).ok_or("memory_max is not a size")?;
         if pids_max == 0 || memory_max == 0 {
@@ -181,6 +244,7 @@ impl Config {
                 None => 4290,
             },
             unconfined,
+            zfs,
         })
     }
 
@@ -206,7 +270,7 @@ impl Config {
     }
 }
 
-const KEYS: [&str; 15] = [
+const KEYS: [&str; 18] = [
     "node",
     "node_args",
     "node_uid",
@@ -222,6 +286,9 @@ const KEYS: [&str; 15] = [
     "tmp_size",
     "devfs_ruleset",
     "unconfined",
+    "zfs_parent",
+    "zfs_max_quota",
+    "zfs",
 ];
 
 fn list(v: &str) -> impl Iterator<Item = &str> {
@@ -234,11 +301,11 @@ fn absolute(key: &str, v: &str) -> Result<PathBuf, String> {
     })
 }
 
-/// Bytes in `v`: a number, or one with `KiB`, `MiB` or `GiB`.
+/// Bytes in `v`: a number, or one with `KiB`, `MiB`, `GiB` or `TiB`.
 #[must_use]
 pub fn size(v: &str) -> Option<u64> {
     let v = v.trim();
-    let (digits, shift) = [("GiB", 30), ("MiB", 20), ("KiB", 10)]
+    let (digits, shift) = [("TiB", 40), ("GiB", 30), ("MiB", 20), ("KiB", 10)]
         .iter()
         .find_map(|(unit, shift)| v.strip_suffix(unit).map(|d| (d.trim(), *shift)))
         .unwrap_or((v, 0));

@@ -18,6 +18,7 @@ mod remote;
 mod resolve;
 mod sql;
 mod upgrade;
+mod volumes;
 
 pub use blue_green::Traffic;
 
@@ -271,6 +272,7 @@ impl Node {
         rt.check_formats()
             .await
             .map_err(|e| NodeError::Invalid(format!("{}: {e}", config.data_dir.display())))?;
+        volumes::check_parent(&config, &rt).await?;
         let apps = rt.start_apps(Vec::new()).await.map_err(internal)?;
         let stop = tokio::sync::watch::channel(false).0;
         // Under the helper a driver is a user of its own: its files are

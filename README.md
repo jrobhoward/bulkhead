@@ -78,7 +78,8 @@ ingress, SQL, HTTP egress, Modbus and name lookups run in driver apps;
 met 2026-11-15), Phase 6 hardened the core (each app under a user of its
 own, seccomp allow-lists, FreeBSD with a jail per instance; met
 2026-11-19), and disaster recovery has a second site with activation and
-failback (Phase 8, ZFS volumes still to come).
+failback (Phase 8), and since 2026-11-22 an app's volume can be a ZFS
+dataset of its own with a quota.
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md): run a node and
   deploy, upgrade and roll back an app.

@@ -125,6 +125,22 @@ enum FailoverCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum VolumeCommand {
+    /// List the node's volumes: `[volumes]`'s directories, and each app's
+    /// ZFS volume with its use, quota and whether its app is deployed.
+    List,
+    /// Remove an app's ZFS volume and everything in it (ROADMAP ZV1).
+    /// Refused while the app is deployed (undeploying keeps its volumes)
+    /// or any of its instances runs. Cannot be undone.
+    Destroy {
+        /// The app.
+        app: String,
+        /// The volume, as the app's manifest names it.
+        volume: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum DrCommand {
     /// Activate this DR node when site 1 is lost (ROADMAP DR4): the
     /// witness, which this node must be, stops renewing and granting, waits
@@ -360,6 +376,11 @@ enum Command {
         watch: bool,
         #[command(subcommand)]
         action: Option<FailoverCommand>,
+    },
+    /// The node's volumes: list them, or destroy an app's ZFS volume.
+    Volume {
+        #[command(subcommand)]
+        action: VolumeCommand,
     },
     /// Show this node's disaster-recovery copy of its pair's replicated log
     /// (`[dr]`): where it stands and how far it trails.
@@ -883,6 +904,33 @@ async fn run_apps(client: &Client, json: bool, command: Command) -> anyhow::Resu
 }
 
 /// The commands on instances, messages and the node.
+/// `bulkhead dr ...` (ROADMAP DR4).
+async fn run_dr(client: &Client, json: bool, action: Option<DrCommand>) -> anyhow::Result<()> {
+    match action {
+        None => print(json, &client.dr().await?, format::dr),
+        Some(DrCommand::Activate {
+            site_1_down,
+            allow_missing_apps,
+        }) => done(
+            json,
+            client.dr_activate(site_1_down, allow_missing_apps).await,
+        ),
+        Some(DrCommand::Failback { to, wait_s }) => {
+            done(json, client.dr_failback(to, wait_s).await)
+        }
+    }
+}
+
+/// `bulkhead volume ...` (ROADMAP ZV1).
+async fn run_volume(client: &Client, json: bool, action: VolumeCommand) -> anyhow::Result<()> {
+    match action {
+        VolumeCommand::List => print(json, &client.volumes().await?, |v| format::volumes(v)),
+        VolumeCommand::Destroy { app, volume } => {
+            done(json, client.destroy_volume(&app, &volume).await)
+        }
+    }
+}
+
 async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::Result<()> {
     match command {
         Command::Kill { pid } => done(json, client.kill(&pid).await),
@@ -906,20 +954,8 @@ async fn run_runtime(client: &Client, json: bool, command: Command) -> anyhow::R
             action: Some(FailoverCommand::Switchover),
             ..
         } => done(json, client.switchover().await),
-        Command::Dr { action: None } => print(json, &client.dr().await?, format::dr),
-        Command::Dr {
-            action:
-                Some(DrCommand::Activate {
-                    site_1_down,
-                    allow_missing_apps,
-                }),
-        } => done(
-            json,
-            client.dr_activate(site_1_down, allow_missing_apps).await,
-        ),
-        Command::Dr {
-            action: Some(DrCommand::Failback { to, wait_s }),
-        } => done(json, client.dr_failback(to, wait_s).await),
+        Command::Volume { action } => run_volume(client, json, action).await,
+        Command::Dr { action } => run_dr(client, json, action).await,
         Command::Release { action: None } => print(json, &client.release().await?, format::release),
         Command::Release {
             action: Some(ReleaseCommand::Finalize),

@@ -377,12 +377,7 @@ pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply 
                 verb @ ("call" | "cast"),
             ],
         ) => send(node, kind, id, verb, &q, req).await,
-        (&Method::POST, ["v1", "apps", app, "log-level"]) => {
-            match q.iter().find(|(k, _)| k == "level") {
-                Some((_, level)) => respond(node.set_log_level(app, level)),
-                None => error(&NodeError::Invalid("level is required".into())),
-            }
-        }
+        (&Method::POST, ["v1", "apps", app, "log-level"]) => log_level(node, app, &q),
         (&Method::GET, ["v1", "instances", pid, "state"]) => respond(node.state(pid).await),
         (&Method::GET, ["v1", "apps", app, "logs"]) => logs(node, app, &q),
         (&Method::GET, ["v1", "events"]) => events(node),
@@ -395,6 +390,7 @@ pub(crate) async fn handle<B: AdminBody>(node: &Node, req: Request<B>) -> Reply 
         (&Method::GET, ["v1", "release"]) => respond(node.release().await),
         (&Method::POST, ["v1", "release", "finalize"]) => respond(node.finalize_release().await),
         (&Method::POST, ["v1", "instances", pid, "kill"]) => respond(node.kill(pid).await),
+        (_, ["v1", "volumes", rest @ ..]) => volumes(node, &method, rest).await,
         _ => error(&NodeError::NotFound(format!(
             "no route for {method} {path}"
         ))),
@@ -453,6 +449,26 @@ fn events(node: &Node) -> Reply {
 /// `GET /v1/dr`, the DR copy (ROADMAP DR2),
 /// `POST /v1/dr/activate?site_1_down=true[&allow_missing_apps=true]` and
 /// `POST /v1/dr/failback?to=N&wait_s=S` (DR4).
+/// `POST /v1/apps/{app}/log-level?level=...`.
+fn log_level(node: &Node, app: &str, q: &[(String, String)]) -> Reply {
+    match q.iter().find(|(k, _)| k == "level") {
+        Some((_, level)) => respond(node.set_log_level(app, level)),
+        None => error(&NodeError::Invalid("level is required".into())),
+    }
+}
+
+/// `/v1/volumes` (ROADMAP ZV1): list, and destroy an app's ZFS volume.
+async fn volumes(node: &Node, method: &Method, rest: &[&str]) -> Reply {
+    match (method, rest) {
+        (&Method::GET, []) => respond(node.volumes().await),
+        (&Method::DELETE, [app, volume]) => respond(node.destroy_volume(app, volume).await),
+        _ => error(&NodeError::NotFound(format!(
+            "no route for {method} /v1/volumes/{}",
+            rest.join("/")
+        ))),
+    }
+}
+
 async fn dr(node: &Node, method: &Method, rest: &[&str], q: &[(String, String)]) -> Reply {
     match (method, rest) {
         (&Method::GET, []) => respond(node.dr()),

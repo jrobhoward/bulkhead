@@ -46,6 +46,18 @@ pub const RUNNER_ENV: [&str; 5] = [
 /// and 3 to this. The helper gives the instance `/dev/null` as stdin.
 pub const MAX_FD_TARGET: u8 = 15;
 
+/// The most rows a [`Reply::Volumes`] carries.
+pub const MAX_VOLUMES: usize = 256;
+
+/// Whether `name` is a volume name as manifests allow it (the same rule as
+/// [`is_app_name`]): the helper names a ZFS dataset after it (ROADMAP ZV1),
+/// so no name can be read as an option, a path component, a snapshot
+/// (`@`) or a bookmark (`#`).
+#[must_use]
+pub fn is_volume_name(name: &str) -> bool {
+    is_app_name(name)
+}
+
 /// Whether `name` is an app name as manifests allow it: 1 to
 /// [`MAX_APP_NAME`] bytes of lowercase ASCII letters, digits, `-` and `_`,
 /// starting with a letter or digit. The helper names users' bindings,
@@ -130,6 +142,57 @@ pub enum Request {
         /// The directory, under one of the helper's bind roots.
         bind: Bind,
     },
+    /// A ZFS volume (ROADMAP ZV1), under the parent dataset the helper's
+    /// own configuration names.
+    Volume(VolumeRequest),
+}
+
+/// What the node asks of an app's ZFS volume (ROADMAP ZV1). The node
+/// names an app and a volume, never a dataset: the helper puts it at
+/// `PARENT/APP/VOLUME` under its own configuration's parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VolumeRequest {
+    /// Make the volume if it is missing, with this quota (`refquota`, in
+    /// bytes), its root the app's user's; set the quota if it differs;
+    /// mount it if it is not. Answered [`Reply::Volume`] with its
+    /// mountpoint, or [`Reply::Refused`] (a quota over the helper's
+    /// ceiling, or below what the volume holds).
+    Ensure {
+        /// The app ([`is_app_name`]).
+        app: String,
+        /// The volume ([`is_volume_name`]).
+        volume: String,
+        /// The quota in bytes, more than 0.
+        refquota: u64,
+    },
+    /// Every app's volumes; answered [`Reply::Volumes`].
+    List,
+    /// Remove the volume and its snapshots, and the app's dataset once it
+    /// holds no volume. Refused while an instance of the app runs; answered
+    /// [`Reply::Done`] or [`Reply::Refused`].
+    Destroy {
+        /// The app ([`is_app_name`]).
+        app: String,
+        /// The volume ([`is_volume_name`]).
+        volume: String,
+    },
+}
+
+/// One ZFS volume, as [`Reply::Volumes`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeRow {
+    /// Its app.
+    pub app: String,
+    /// The volume's name.
+    pub volume: String,
+    /// Bytes used, its snapshots included.
+    pub used: u64,
+    /// Its quota (`refquota`) in bytes; 0 for none.
+    pub refquota: u64,
+    /// Where it is mounted, or would be.
+    pub mountpoint: String,
+    /// Whether it is mounted.
+    pub mounted: bool,
 }
 
 /// What the helper answers or reports.
@@ -156,6 +219,18 @@ pub enum Reply {
         /// What was wrong.
         reason: String,
     },
+    /// A ZFS volume is ready, mounted here ([`VolumeRequest::Ensure`]).
+    Volume {
+        /// Its mountpoint, an absolute path under the helper's bind roots.
+        mountpoint: String,
+    },
+    /// The ZFS volumes ([`VolumeRequest::List`]).
+    Volumes {
+        /// The parent dataset, from the helper's configuration.
+        parent: String,
+        /// Each app's volumes, at most [`MAX_VOLUMES`].
+        rows: Vec<VolumeRow>,
+    },
     /// Sent unasked: an instance's process ended. Before the helper
     /// removes what it made for it.
     Exited {
@@ -174,11 +249,16 @@ const T_SPAWN: u8 = 1;
 const T_SIGNAL: u8 = 2;
 const T_BIND: u8 = 3;
 const T_SHARE: u8 = 4;
+const T_VOLUME_ENSURE: u8 = 5;
+const T_VOLUME_LIST: u8 = 6;
+const T_VOLUME_DESTROY: u8 = 7;
 const T_SPAWNED: u8 = 0x81;
 const T_DONE: u8 = 0x82;
 const T_BOUND: u8 = 0x83;
 const T_REFUSED: u8 = 0x84;
 const T_EXITED: u8 = 0x85;
+const T_VOLUME: u8 = 0x86;
+const T_VOLUMES: u8 = 0x87;
 
 /// A message being written.
 struct Writer(Vec<u8>);
@@ -314,6 +394,22 @@ impl Request {
                 w.str(&bind.path);
                 w.u8(u8::from(bind.writable));
             }
+            Self::Volume(VolumeRequest::Ensure {
+                app,
+                volume,
+                refquota,
+            }) => {
+                w.u8(T_VOLUME_ENSURE);
+                w.str(app);
+                w.str(volume);
+                w.u64(*refquota);
+            }
+            Self::Volume(VolumeRequest::List) => w.u8(T_VOLUME_LIST),
+            Self::Volume(VolumeRequest::Destroy { app, volume }) => {
+                w.u8(T_VOLUME_DESTROY);
+                w.str(app);
+                w.str(volume);
+            }
         }
         w.0
     }
@@ -374,6 +470,16 @@ impl Request {
                     writable: r.bool()?,
                 },
             },
+            T_VOLUME_ENSURE => Self::Volume(VolumeRequest::Ensure {
+                app: r.str()?,
+                volume: r.str()?,
+                refquota: r.u64()?,
+            }),
+            T_VOLUME_LIST => Self::Volume(VolumeRequest::List),
+            T_VOLUME_DESTROY => Self::Volume(VolumeRequest::Destroy {
+                app: r.str()?,
+                volume: r.str()?,
+            }),
             _ => return None,
         };
         r.end()?;
@@ -422,6 +528,23 @@ impl Reply {
                 w.opt_i32(*signal);
                 w.u8(u8::from(*memory_limit));
             }
+            Self::Volume { mountpoint } => {
+                w.u8(T_VOLUME);
+                w.str(mountpoint);
+            }
+            Self::Volumes { parent, rows } => {
+                w.u8(T_VOLUMES);
+                w.str(parent);
+                w.len(rows.len());
+                for row in rows {
+                    w.str(&row.app);
+                    w.str(&row.volume);
+                    w.u64(row.used);
+                    w.u64(row.refquota);
+                    w.str(&row.mountpoint);
+                    w.u8(u8::from(row.mounted));
+                }
+            }
         }
         w.0
     }
@@ -449,6 +572,26 @@ impl Reply {
                 signal: r.opt_i32()?,
                 memory_limit: r.bool()?,
             },
+            T_VOLUME => Self::Volume {
+                mountpoint: r.str()?,
+            },
+            T_VOLUMES => {
+                let parent = r.str()?;
+                let n = r.count(MAX_VOLUMES)?;
+                let rows = (0..n)
+                    .map(|_| {
+                        Some(VolumeRow {
+                            app: r.str()?,
+                            volume: r.str()?,
+                            used: r.u64()?,
+                            refquota: r.u64()?,
+                            mountpoint: r.str()?,
+                            mounted: r.bool()?,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Self::Volumes { parent, rows }
+            }
             _ => return None,
         };
         r.end()?;

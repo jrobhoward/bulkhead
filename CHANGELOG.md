@@ -8,6 +8,23 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- ZFS volumes (ROADMAP ZV1, spike S35): with `[priv]` and node config's
+  `[volumes.zfs]` (`parent`, `max_quota`), a manifest volume that
+  `[volumes]` does not name is the app's own dataset,
+  `PARENT/APP/VOLUME`, made by the privileged helper on deploy through
+  the `zfs` command, with the manifest's `quota` as its `refquota`
+  (required; a write past it fails with `EDQUOT`) and `exec`, `setuid`
+  and `devices` off; an upgrade changes the quota (not below what the
+  volume holds). The helper's configuration names the same parent
+  (`zfs_parent`, `zfs_max_quota`, `zfs`), and the node refuses to start
+  when the two differ. An undeploy keeps a volume; `bulkhead volume list`
+  shows them and `bulkhead volume destroy APP VOLUME` removes one once
+  its app is undeployed and none of its instances runs (`GET
+  /v1/volumes`, `DELETE /v1/volumes/{app}/{volume}`, audit
+  `volume_destroyed`). A `quota` on a directory volume is now refused at
+  deploy rather than by manifest validation. Under the systemd unit a
+  volume made while the helper runs is mounted in the helper's mount
+  namespace only, until the host mounts it too (OPERATIONS.md).
 - A certificate or key replaced by rename (certbot's renewals, with
   `cert` and `key` pointing into `live/`) is now served (ROADMAP DA2b):
   the node keeps each file's identity and, on SIGHUP, `bulkhead

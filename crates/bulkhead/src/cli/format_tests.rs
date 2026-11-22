@@ -518,3 +518,45 @@ fn detail____app_with_routes____lists_each() {
     assert!(out.contains("route:     shop.example/shop"), "{out}");
     assert!(out.contains("route:     */api"), "{out}");
 }
+
+#[test]
+fn volumes____a_directory_and_an_undeployed_apps_zfs_volume____one_row_each() {
+    let dir = bulkhead::api::VolumeInfo {
+        name: "logs".into(),
+        kind: "directory".into(),
+        app: None,
+        path: "/srv/logs".into(),
+        used: None,
+        quota: None,
+        mounted: true,
+        deployed: None,
+    };
+    let zfs = bulkhead::api::VolumeInfo {
+        name: "data".into(),
+        kind: "zfs".into(),
+        app: Some("orders".into()),
+        path: "/srv/v/orders/data".into(),
+        used: Some(3 << 20),
+        quota: Some(64 << 20),
+        mounted: true,
+        deployed: Some(false),
+    };
+
+    let out = volumes(&[dir, zfs]);
+
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].starts_with("VOLUME"));
+    assert!(lines[1].starts_with("logs") && lines[1].contains("directory"));
+    assert!(
+        lines[2].contains("orders") && lines[2].contains("64.0MiB"),
+        "{}",
+        lines[2]
+    );
+    assert!(lines[2].ends_with("undeployed"));
+}
+
+#[test]
+fn volumes____none____says_so() {
+    assert_eq!(volumes(&[]), "no volumes");
+}

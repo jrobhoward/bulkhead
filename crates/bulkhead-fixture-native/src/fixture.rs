@@ -130,6 +130,42 @@ fn outcome<T, E: std::fmt::Display>(r: Result<T, E>) -> String {
     }
 }
 
+/// `fill DIR`: 1 MiB pieces of data no filesystem compresses, into files
+/// of 16 MiB under the guest directory `dir` (a preopen, opened as
+/// `vwrite` opens, so capability mode allows it), each synced, until a
+/// write is refused (a ZFS volume's quota, ROADMAP ZV1):
+/// `written=BYTES errno=N`, or `written=BYTES errno=0` after 1 GiB.
+fn fill_dir(dir: &str) -> String {
+    use std::io::Write;
+
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut piece = vec![0u8; 1 << 20];
+    let mut written = 0u64;
+    let refused = (0..64).find_map(|f| {
+        let path = format!("{dir}/fill-{f}");
+        let mut file =
+            match bulkhead_native::preopens::open(&path, bulkhead_native::preopens::Mode::Write) {
+                Ok(file) => file,
+                Err(e) => return Some(e),
+            };
+        for _ in 0..16 {
+            for chunk in piece.chunks_mut(8) {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                chunk.copy_from_slice(&seed.to_le_bytes()[..chunk.len()]);
+            }
+            if let Err(e) = file.write_all(&piece) {
+                return Some(e);
+            }
+            written += 1 << 20;
+        }
+        file.sync_all().err()
+    });
+    let errno = refused.and_then(|e| e.raw_os_error()).unwrap_or(0);
+    format!("written={written} errno={errno}")
+}
+
 /// A SQL answer as text: rows as `col=value` cells joined by `,`, rows
 /// by `;`; a count; or `ok`.
 fn sql_text(answer: SqlAnswer) -> String {
@@ -470,6 +506,7 @@ impl Fixture {
             }
             "read" => outcome(std::fs::read(rest)),
             "write" => outcome(std::fs::write(rest, b"x")),
+            "fill" => fill_dir(rest),
             "connect" => outcome(std::net::TcpStream::connect(rest)),
             "exec" => outcome(std::process::Command::new("/bin/true").status()),
             #[cfg(target_os = "linux")]

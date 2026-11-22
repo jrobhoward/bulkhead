@@ -516,12 +516,8 @@ impl FilesystemScope {
                         );
                     }
                     v.name("volume", &preopen.volume);
-                    if preopen.quota.is_some() {
-                        v.error_at(
-                            "quota",
-                            "is not enforced on a volume; the operator sets a \
-                             filesystem quota on the volume's directory instead",
-                        );
+                    if preopen.quota.is_some_and(|q| q.bytes() == 0) {
+                        v.error_at("quota", "must be greater than zero");
                     }
                 });
             });
@@ -548,11 +544,11 @@ pub struct Preopen {
     /// Read-only or read-write.
     #[serde(default)]
     pub mode: AccessMode,
-    /// Refused when set: Bulkhead cannot enforce a byte quota on a
-    /// preopened directory, so the operator sets a filesystem quota on the
-    /// volume's directory instead (a ZFS dataset quota, an XFS project
-    /// quota, a mount of its own). Kept so a manifest that sets it gets
-    /// that error rather than an unknown field.
+    /// The volume's quota, for a ZFS volume (ROADMAP ZV1): a volume not
+    /// among node config's `[volumes]` directories, on a node with
+    /// `[volumes.zfs]`, is the app's own dataset with this quota, which it
+    /// requires. Refused at deploy on a directory volume, whose quota is
+    /// the operator's to set on the filesystem.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<ByteSize>,
 }

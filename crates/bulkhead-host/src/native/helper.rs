@@ -26,7 +26,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bulkhead_priv_wire::{MAX_FDS, MAX_MESSAGE, Reply, Request, SOCKET_ENV, Spawn};
+use bulkhead_priv_wire::{MAX_FDS, MAX_MESSAGE, Reply, Request, SOCKET_ENV, Spawn, VolumeRequest};
 use rustix::net::{
     RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags,
@@ -94,6 +94,7 @@ enum Job {
     ),
     /// A `std` channel: [`PrivHelper::bind`] blocks its caller.
     Bind(String, std::sync::mpsc::Sender<Result<OwnedFd, String>>),
+    Volume(VolumeRequest, oneshot::Sender<Result<Reply, String>>),
 }
 
 /// What the task waits for, in the order the helper answers.
@@ -102,6 +103,7 @@ enum Pending {
     Signal(u64),
     Share(oneshot::Sender<Result<(), String>>),
     Bind(std::sync::mpsc::Sender<Result<OwnedFd, String>>),
+    Volume(oneshot::Sender<Result<Reply, String>>),
 }
 
 impl PrivHelper {
@@ -252,6 +254,18 @@ impl PrivHelper {
         Ok(listener)
     }
 
+    /// Ask the helper about a ZFS volume (ROADMAP ZV1); its answer
+    /// (`Volume`, `Volumes` or `Done`), or its refusal as the error.
+    pub(crate) async fn volume(&self, request: VolumeRequest) -> Result<Reply, String> {
+        let (tx, rx) = oneshot::channel();
+        self.0
+            .jobs
+            .send(Job::Volume(request, tx))
+            .map_err(|_| "the privileged helper has gone".to_string())?;
+        rx.await
+            .unwrap_or_else(|_| Err("the privileged helper has gone".into()))
+    }
+
     /// Ask the helper to send `signal` to instance `id`; its refusal is
     /// logged.
     pub(crate) fn signal(&self, id: u64, signal: i32) {
@@ -303,6 +317,9 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                     Job::Bind(address, tx) => {
                         (Request::Bind { address }.encode(), Vec::new(), Pending::Bind(tx))
                     }
+                    Job::Volume(request, tx) => {
+                        (Request::Volume(request).encode(), Vec::new(), Pending::Volume(tx))
+                    }
                 };
                 match send(&sock, &bytes, &fds).await {
                     Ok(()) => pending.push_back(waiting),
@@ -314,6 +331,9 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
                         Pending::Bind(tx) => {
+                            let _ = tx.send(Err(format!("the privileged helper: {e}")));
+                        }
+                        Pending::Volume(tx) => {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
                         Pending::Signal(_) => {}
@@ -411,6 +431,15 @@ fn deliver(
         (Some(Pending::Bind(tx)), Reply::Refused { reason }) => {
             let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
         }
+        (Some(Pending::Volume(tx)), Reply::Refused { reason }) => {
+            let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
+        }
+        (
+            Some(Pending::Volume(tx)),
+            reply @ (Reply::Volume { .. } | Reply::Volumes { .. } | Reply::Done),
+        ) => {
+            let _ = tx.send(Ok(reply));
+        }
         (Some(Pending::Signal(id)), Reply::Refused { reason }) => {
             tracing::warn!(id, reason, "the privileged helper refused a signal");
         }
@@ -428,6 +457,9 @@ fn deliver(
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
                 Some(Pending::Bind(tx)) => {
+                    let _ = tx.send(Err("the privileged helper answered out of order".into()));
+                }
+                Some(Pending::Volume(tx)) => {
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
                 _ => {}
@@ -451,6 +483,9 @@ fn gone(
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
             Pending::Bind(tx) => {
+                let _ = tx.send(Err("the privileged helper has gone".into()));
+            }
+            Pending::Volume(tx) => {
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
             Pending::Signal(_) => {}

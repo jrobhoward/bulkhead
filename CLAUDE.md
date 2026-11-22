@@ -230,7 +230,13 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   the test machines only: build as a user, then run the test binaries
   with `BULKHEAD_PRIV_TESTS=1` (`tests/priv.rs`) or
   `BULKHEAD_CONFORMANCE_NATIVE=1 BULKHEAD_CONFORMANCE_HELPER=1`, and
-  `CARGO=/bin/true` so nothing is built as root.
+  `CARGO=/bin/true` so nothing is built as root; with
+  `BULKHEAD_ZFS_PARENT=POOL/name` (a test machine with a pool) its ZFS
+  volume tests run too. `zfs.rs` is the helper's ZFS volumes (ROADMAP
+  ZV1): the `zfs` command's arguments and output, each app's volume at
+  `zfs_parent/APP/VOLUME`; the node's side is
+  `crates/bulkhead/src/node/daemon/volumes.rs` (which volumes are ZFS,
+  `bulkhead volume list|destroy`).
   `scripts/priv-e2e-systemd.sh` and `scripts/priv-e2e-rcd.sh` run it end
   to end under systemd and rc.
 - `crates/bulkhead-fixture-native` (an executable on the app API) and

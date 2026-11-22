@@ -1289,3 +1289,133 @@ async fn helper____modbus_drivers____poll_a_device_and_serve_a_master_under_thei
     assert_ne!(users.0[0], users.1[0], "a user of its own each");
     apps.stop().await;
 }
+
+/// The helper with ZFS volumes under `BULKHEAD_ZFS_PARENT` (ROADMAP ZV1),
+/// or `None` (and a note) when they do not run here.
+fn zfs_helper(name: &str) -> Option<Started> {
+    let parent = privhelper::zfs_parent();
+    if !privhelper::enabled() || parent.is_none() {
+        eprintln!("{name}: skipped (needs root, BULKHEAD_PRIV_TESTS=1 and BULKHEAD_ZFS_PARENT)");
+        return None;
+    }
+    Some(privhelper::start_zfs(
+        &native_fixtures().0,
+        &parent.unwrap_or_default(),
+    ))
+}
+
+/// `written=BYTES errno=N`, from the fixture's `fill`.
+fn filled(reply: &str) -> (u64, i32) {
+    let field = |k: &str| {
+        reply
+            .split(' ')
+            .find_map(|f| f.strip_prefix(k))
+            .unwrap_or("")
+            .to_string()
+    };
+    (
+        field("written=").parse().unwrap_or(0),
+        field("errno=").parse().unwrap_or(-1),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zfs____a_volume____the_apps_filled_to_its_quota_raised_then_destroyed_once_it_ends() {
+    let Some(started) = zfs_helper("zfs____a_volume") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let parent = started.zfs_parent.clone().unwrap_or_default();
+
+    let (listed_parent, none) = rt.volumes().await.unwrap();
+    let mp = rt.ensure_volume("alpha", "data", 32 << 20).await.unwrap();
+    let again = rt.ensure_volume("alpha", "data", 32 << 20).await.unwrap();
+    // As the node does when it installs an app: a root the app owns.
+    rt.share_with_app("alpha", &mp, true).await.unwrap();
+    let spec = InstanceSpec {
+        granted: [Capability::Filesystem].into(),
+        preopens: vec![bulkhead_host::Preopen {
+            host: mp.clone(),
+            guest: "/data".into(),
+            writable: true,
+        }],
+        callback_deadline: Duration::from_secs(30),
+        ..spec("alpha")
+    };
+    let i = rt.spawn(&app, spec).unwrap();
+    let (written, errno) = filled(&ask(&i, "fill /data").await);
+    let shrunk = rt.ensure_volume("alpha", "data", 8 << 20).await;
+    rt.ensure_volume("alpha", "data", 64 << 20).await.unwrap();
+    let (_, raised) = rt.volumes().await.unwrap();
+    let while_running = rt.destroy_volume("alpha", "data").await;
+    i.kill();
+    let _ = tokio::time::timeout(Duration::from_secs(5), i.wait()).await;
+    let destroyed = rt.destroy_volume("alpha", "data").await;
+    let (_, after) = rt.volumes().await.unwrap();
+    let app_dataset = std::process::Command::new(privhelper::ZFS)
+        .args(["list", &format!("{parent}/alpha")])
+        .output()
+        .unwrap();
+
+    assert_eq!(listed_parent, parent);
+    assert!(none.is_empty(), "{none:?}");
+    assert_eq!(mp, again);
+    assert!(mp.starts_with(started.dir.path()), "{}", mp.display());
+    assert_eq!(errno, libc::EDQUOT, "written {written}");
+    assert!(
+        (24 << 20..=32 << 20).contains(&written),
+        "written {written}"
+    );
+    assert!(
+        shrunk.is_err_and(|e| e.contains("less than")),
+        "below what is used"
+    );
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].refquota, 64 << 20);
+    assert!(
+        while_running.is_err_and(|e| e.contains("instances running")),
+        "refused while the app runs"
+    );
+    assert!(destroyed.is_ok(), "{destroyed:?}");
+    assert!(after.is_empty(), "{after:?}");
+    assert!(
+        !app_dataset.status.success(),
+        "the app's dataset went with its last volume"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zfs____a_new_volume____its_root_the_apps_user_s_mode_0770() {
+    let Some(started) = zfs_helper("zfs____a_new_volume") else {
+        return;
+    };
+    let rt = runtime(&started);
+
+    let mp = rt.ensure_volume("beta", "data", 16 << 20).await.unwrap();
+
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let meta = std::fs::metadata(&mp).unwrap();
+    assert_eq!(meta.uid(), started.first_uid);
+    assert_eq!(meta.gid(), started.first_uid);
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o770);
+    rt.destroy_volume("beta", "data").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zfs____requests_outside_the_rules____refused_by_the_helper() {
+    let Some(started) = zfs_helper("zfs____requests_outside") else {
+        return;
+    };
+    let rt = runtime(&started);
+
+    let over = rt.ensure_volume("gamma", "data", 2 << 30).await;
+    let bad_name = rt.ensure_volume("gamma", "../x", 1 << 20).await;
+    let bad_app = rt.ensure_volume("-o", "data", 1 << 20).await;
+    let missing = rt.destroy_volume("gamma", "none").await;
+
+    assert!(over.is_err_and(|e| e.contains("quota")));
+    assert!(bad_name.is_err_and(|e| e.contains("not a volume name")));
+    assert!(bad_app.is_err_and(|e| e.contains("not an app name")));
+    assert!(missing.is_err_and(|e| e.contains("no volume")));
+}

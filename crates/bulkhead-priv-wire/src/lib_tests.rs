@@ -33,6 +33,9 @@ fn spawn() -> Spawn {
 #[case(Request::Signal { id: 3, signal: 9 })]
 #[case(Request::Bind { address: "[::]:443".into() })]
 #[case(Request::Share { app: "orders".into(), bind: Bind { path: "/var/lib/bulkhead/priv/orders".into(), writable: false } })]
+#[case(Request::Volume(VolumeRequest::Ensure { app: "orders".into(), volume: "data".into(), refquota: 10 << 30 }))]
+#[case(Request::Volume(VolumeRequest::List))]
+#[case(Request::Volume(VolumeRequest::Destroy { app: "orders".into(), volume: "data".into() }))]
 fn Request____encoded____decodes_the_same(#[case] request: Request) {
     let bytes = request.encode();
 
@@ -48,6 +51,9 @@ fn Request____encoded____decodes_the_same(#[case] request: Request) {
 #[case(Reply::Refused { reason: "no".into() })]
 #[case(Reply::Exited { id: 1, code: Some(0), signal: None, memory_limit: false })]
 #[case(Reply::Exited { id: 1, code: None, signal: Some(9), memory_limit: true })]
+#[case(Reply::Volume { mountpoint: "/srv/bulkhead/volumes/orders/data".into() })]
+#[case(Reply::Volumes { parent: "tank/bulkhead/volumes".into(), rows: Vec::new() })]
+#[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true }] })]
 fn Reply____encoded____decodes_the_same(#[case] reply: Reply) {
     let bytes = reply.encode();
 

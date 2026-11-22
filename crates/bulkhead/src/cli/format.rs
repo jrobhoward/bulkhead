@@ -61,6 +61,36 @@ pub fn apps(apps: &[AppSummary]) -> String {
     )
 }
 
+/// `bulkhead volume list` (ROADMAP ZV1).
+pub(crate) fn volumes(list: &[bulkhead::api::VolumeInfo]) -> String {
+    if list.is_empty() {
+        return "no volumes".to_string();
+    }
+    let rows: Vec<Vec<String>> = list
+        .iter()
+        .map(|v| {
+            let state = match (v.kind.as_str(), v.mounted, v.deployed) {
+                ("zfs", false, _) => "unmounted",
+                ("zfs", true, Some(false)) => "undeployed",
+                _ => "",
+            };
+            vec![
+                v.name.clone(),
+                v.kind.clone(),
+                v.app.clone().unwrap_or_else(|| "-".into()),
+                v.used.map_or_else(|| "-".into(), memory),
+                v.quota.map_or_else(|| "-".into(), memory),
+                v.path.clone(),
+                state.to_string(),
+            ]
+        })
+        .collect();
+    table(
+        &["VOLUME", "KIND", "APP", "USED", "QUOTA", "PATH", ""],
+        &rows,
+    )
+}
+
 /// `bulkhead ps`.
 pub fn instances(list: &[InstanceInfo]) -> String {
     if list.is_empty() {

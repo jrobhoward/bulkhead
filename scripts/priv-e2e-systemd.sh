@@ -15,7 +15,10 @@
 # egress driver: the node must make the connection, not the driver.
 # A fake Modbus device is polled by the Modbus driver (ROADMAP DA5),
 # its updates going to the same app; the node must open the device's
-# connection, not the driver. It installs a `bulkhead` user,
+# connection, not the driver. With ZFS_PARENT set (a dataset that does
+# not exist yet, on a machine with a pool) an app gets a ZFS volume of its
+# own (ROADMAP ZV1): filled to its quota, listed, kept while the app is
+# deployed and destroyed once it is not. It installs a `bulkhead` user,
 # binaries under /usr/local, /etc/bulkhead and the unit, and removes them
 # all at the end unless KEEP=1.
 #
@@ -26,6 +29,7 @@
 #   cargo build -p bulkhead-egress -p bulkhead-fixture-sdk
 #   cargo build -p bulkhead-modbus --bins --example fake_device
 #   sudo sh scripts/priv-e2e-systemd.sh "$PWD"
+#   sudo ZFS_PARENT=tank/bulkhead/e2e sh scripts/priv-e2e-systemd.sh "$PWD"
 set -eu
 SRC=${1:?checkout}
 T=$SRC/target/debug
@@ -76,6 +80,35 @@ allow = ["http://127.0.0.1:8080"]
 TOML
 /usr/local/bin/bulkhead bundle fetcher.toml $T/bulkhead-fixture-sdk --key signer.key --out fetcher.rbp >/dev/null
 chmod 0644 fetcher.rbp
+# The SDK fixture again, with a ZFS volume of its own (ROADMAP ZV1).
+ZFS_PARENT=${ZFS_PARENT:-}
+ZV=/var/lib/bulkhead-volumes
+ZFS_NODE=""; ZFS_PRIV=""; ZFS_BINDS=""
+if [ -n "$ZFS_PARENT" ]; then
+    zfs create -o canmount=off -o mountpoint=$ZV "$ZFS_PARENT"
+    cat > keeper.toml <<'TOML'
+[app]
+name = "keeper"
+version = "1.0.0"
+
+[appserver.limits]
+callback_deadline_ms = 60000
+
+[appserver.capabilities."bulkhead:files".preopens."/data"]
+volume = "data"
+mode = "rw"
+quota = "64MiB"
+TOML
+    /usr/local/bin/bulkhead bundle keeper.toml $T/bulkhead-fixture-sdk --key signer.key --out keeper.rbp >/dev/null
+    chmod 0644 keeper.rbp
+    ZFS_NODE="[volumes.zfs]
+parent = \"$ZFS_PARENT\"
+max_quota = \"1GiB\"
+"
+    ZFS_PRIV="zfs_parent = $ZFS_PARENT
+zfs_max_quota = 1GiB"
+    ZFS_BINDS=", $ZV"
+fi
 cat > /etc/bulkhead/policy.toml <<'TOML'
 [apps.board]
 grant = ["bulkhead:http-routes", "bulkhead:keyvalue", "bulkhead:logging"]
@@ -87,6 +120,9 @@ grant = ["bulkhead:http-egress"]
 [apps.tally]
 grant = ["bulkhead:http-routes", "bulkhead:sql", "bulkhead:logging"]
 datasources = ["main"]
+
+[apps.keeper]
+grant = ["bulkhead:files"]
 TOML
 # A scratch Postgres for the datasource (ROADMAP DA3): peer authentication
 # on its socket, a password over TCP; the password in a file of the node's
@@ -144,6 +180,7 @@ durability = "disk"
 file = "$K/pg.password"
 
 $DATASOURCE
+$ZFS_NODE
 [extensions."bulkhead-modbus:modbus".devices.pump-1]
 address = "127.0.0.1:5021"
 poll_ms = 200
@@ -165,11 +202,12 @@ node_gid = $NGID
 runner = /usr/local/libexec/bulkhead/bulkhead-runner
 uids = 60000-60999
 state = /var/lib/bulkhead-priv
-binds = /var/lib/bulkhead, $K
+binds = /var/lib/bulkhead, $K$ZFS_BINDS
 memory_max = 2GiB
 pids_max = 1024
 ports = 80
 cgroup = /sys/fs/cgroup/system.slice/bulkhead.service
+$ZFS_PRIV
 CONF
 chmod 0600 /etc/bulkhead/priv.conf
 install -m 0644 $SRC/examples/systemd/bulkhead-priv.service /etc/systemd/system/bulkhead.service
@@ -265,6 +303,28 @@ if [ -n "$PGBIN" ]; then
     runuser -u postgres -- psql -Atq -h $P -p $PGPORT -d postgres \
         -c "SELECT 'session: ' || usename || ' ' || coalesce(client_addr::text, 'socket') FROM pg_stat_activity WHERE datname = 'tally'"
 fi
+if [ -n "$ZFS_PARENT" ]; then
+    echo "== a ZFS volume of the app's own (ROADMAP ZV1)"
+    cli deploy $W/keeper.rbp
+    VOL=$(zfs get -H -o value mountpoint "$ZFS_PARENT/keeper/data")
+    # The unit's sandbox (ProtectSystem, PrivateTmp) gives the helper a mount
+    # namespace of its own: a volume made at run time is mounted there, not
+    # on the host, until the host mounts it too (docs/OPERATIONS.md).
+    IN_HELPER="nsenter --mount --target $(pgrep -x bulkhead-priv)"
+    ROOT=$($IN_HELPER stat -c '%a %u:%g' $VOL)
+    echo "dataset: $(zfs get -H -p -o value refquota "$ZFS_PARENT/keeper/data") bytes of quota, root $ROOT in the helper's namespace; on the host: $(stat -c '%a %u:%g' $VOL)"
+    case "$ROOT" in 770\ 0:*|770\ *:0) echo "FAILED: the volume's root is root's"; exit 1 ;; 770\ *) ;; *) echo "FAILED: the volume's root is $ROOT"; exit 1 ;; esac
+    FILL=$(cli call --timeout-ms 60000 keeper 'file-fill /data')
+    echo "filled: $FILL"
+    case "$FILL" in *errno=122*) ;; *) echo "FAILED: the quota did not stop the app (EDQUOT is 122)"; exit 1 ;; esac
+    cli volume list
+    if cli volume destroy keeper data 2>&1; then echo "FAILED: destroyed while deployed"; exit 1; fi
+    cli remove keeper
+    echo "kept after the undeploy: $(zfs list -H -o name "$ZFS_PARENT/keeper/data")"
+    cli volume destroy keeper data
+    if zfs list "$ZFS_PARENT/keeper" >/dev/null 2>&1; then echo "FAILED: the app's dataset is left"; exit 1; fi
+    echo "the app's datasets are gone"
+fi
 echo "== status"; cli status board
 # The board's process, by its cgroup: the node's drivers start first, so
 # its user is not the first of the range.
@@ -300,6 +360,7 @@ if [ "${KEEP:-0}" != 1 ]; then
     pg_down
     kill $FAKE 2>/dev/null || true
     rm -rf /usr/local/libexec/bulkhead /etc/bulkhead /var/lib/bulkhead /var/lib/bulkhead-priv $W $K $P
+    [ -n "$ZFS_PARENT" ] && zfs destroy -r "$ZFS_PARENT" && rm -rf $ZV
     userdel bulkhead
     echo "== removed"
 fi

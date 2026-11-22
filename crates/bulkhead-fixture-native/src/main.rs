@@ -27,7 +27,7 @@
 //! | `forks N MIB` | `made=… alive=… last=PID err=…`: `N` children forked, each touching `MIB` MiB and sleeping a minute, counted 200 ms later |
 //! | `threads N` | `made=… err=…`: `N` threads started, parked for good |
 //! | `hold MIB` | `ok` once allocated, touched and kept |
-//! | `read PATH`, `write PATH`, `connect ADDR`, `exec`, `kill PID`, `io-uring` (set up a ring), `shrink-channel` (truncate the channel's memfd to nothing), `user-namespace` (fork into a new user namespace) | `ok` or `err:` and the OS error |
+//! | `read PATH`, `write PATH`, `fill DIR` (1 MiB pieces into the guest directory until a write is refused: `written=BYTES errno=N`), `connect ADDR`, `exec`, `kill PID`, `io-uring` (set up a ring), `shrink-channel` (truncate the channel's memfd to nothing), `user-namespace` (fork into a new user namespace) | `ok` or `err:` and the OS error |
 //! | `memfd` | nothing: making a memfd is outside the seccomp allow-list, and the instance ends |
 //! | `priv FILE` | `ok` if the bundle's `priv/` file reads, else `err:` |
 //! | `udp-bind ADDR`; `udp-send S ADDR TEXT`; `udp-recv S`; `net-watch S TAG` | a UDP socket the node holds (its number); a datagram sent; one received as `FROM TEXT`, or `none`; an `io-ready` notice tagged `TAG` (recorded as `event io-ready {"tag":TAG}`) |

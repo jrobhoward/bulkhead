@@ -13,6 +13,12 @@
 //! [volumes]
 //! orders-data = "/srv/bulkhead/volumes/orders-data"
 //!
+//! # ZFS volumes (needs [priv]): a manifest volume not named above is the
+//! # app's own dataset, PARENT/APP/VOLUME, with the quota it asks for.
+//! [volumes.zfs]
+//! parent = "tank/bulkhead/volumes"   # the helper's zfs_parent, compared at start
+//! max_quota = "50GiB"                # the largest quota a manifest may ask for
+//!
 //! # An extension's own configuration, by package.
 //! [extensions."bulkhead-modbus:modbus".devices.pump-1]
 //! address = "10.0.0.5:502"
@@ -151,6 +157,61 @@ use serde::Deserialize;
 
 use super::error::NodeError;
 
+/// `[volumes]`: host directories by volume name, and with `[volumes.zfs]`
+/// an app's own ZFS dataset for each volume its manifest names that is not
+/// among them (ROADMAP ZV1). `zfs` is not a directory volume's name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Volumes {
+    /// Host directories, by volume name.
+    pub dirs: BTreeMap<String, PathBuf>,
+    /// ZFS volumes, made by the privileged helper.
+    pub zfs: Option<ZfsVolumes>,
+}
+
+/// `[volumes.zfs]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZfsVolumes {
+    /// The parent dataset; the helper's own configuration names it too
+    /// (`zfs_parent`), and the node refuses to start when the two differ.
+    pub parent: String,
+    /// The largest quota a manifest may ask for one volume; at most the
+    /// helper's `zfs_max_quota`.
+    pub max_quota: ByteSize,
+}
+
+impl<'de> Deserialize<'de> for Volumes {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        let mut volumes = Self::default();
+        for (name, value) in BTreeMap::<String, toml::Value>::deserialize(d)? {
+            match (name.as_str(), value) {
+                ("zfs", toml::Value::Table(table)) => {
+                    let zfs = ZfsVolumes::deserialize(toml::Value::Table(table))
+                        .map_err(|e| D::Error::custom(format!("volumes.zfs: {e}")))?;
+                    volumes.zfs = Some(zfs);
+                }
+                ("zfs", _) => {
+                    return Err(D::Error::custom(
+                        "volumes.zfs is a table (parent, max_quota), not a directory: \
+                         zfs is no directory volume's name",
+                    ));
+                }
+                (_, toml::Value::String(dir)) => {
+                    volumes.dirs.insert(name, PathBuf::from(dir));
+                }
+                (_, _) => {
+                    return Err(D::Error::custom(format!(
+                        "volumes.{name} must be a directory's path"
+                    )));
+                }
+            }
+        }
+        Ok(volumes)
+    }
+}
+
 /// The node's configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,9 +246,10 @@ pub struct NodeConfig {
     /// process holds every secret and the cluster key (Linux).
     #[serde(default)]
     pub debuggable: bool,
-    /// Host directories backing volume names in manifests.
+    /// Host directories backing volume names in manifests, and ZFS
+    /// volumes (`[volumes.zfs]`, ROADMAP ZV1).
     #[serde(default)]
-    pub volumes: BTreeMap<String, PathBuf>,
+    pub volumes: Volumes,
     /// Shared keyvalue buckets, by name.
     #[serde(default)]
     pub buckets: BTreeMap<String, BucketConfig>,
@@ -1441,6 +1503,25 @@ impl NodeConfig {
                 .any(|b| b.scope == BucketScope::Cluster)
     }
 
+    fn check_volumes(&self) -> Result<(), NodeError> {
+        let Some(zfs) = &self.volumes.zfs else {
+            return Ok(());
+        };
+        if zfs.max_quota.bytes() == 0 {
+            return Err(NodeError::Invalid(
+                "node config: volumes.zfs.max_quota must be more than 0".into(),
+            ));
+        }
+        if self.privileges.is_none() || !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            return Err(NodeError::Invalid(
+                "node config: [volumes.zfs] needs [priv]: the privileged helper makes the \
+                 datasets (Linux and FreeBSD)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_native(&self) -> Result<(), NodeError> {
         let n = &self.native;
         for (name, value) in [
@@ -1742,6 +1823,7 @@ impl NodeConfig {
         config.check_extensions()?;
         config.check_sockets()?;
         config.check_native()?;
+        config.check_volumes()?;
         config.check_drivers()?;
         config.check_http_driver()?;
         config.check_resolver()?;

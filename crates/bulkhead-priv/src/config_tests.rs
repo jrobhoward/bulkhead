@@ -43,6 +43,51 @@ fn parse____unconfined____the_listed_apps() {
     assert_eq!(c.unconfined, ["kafka-bridge", "amqp"]);
 }
 
+#[test]
+fn parse____zfs_parent____the_volumes_settings_with_the_default_program() {
+    let c = Config::parse(&format!(
+        "{GOOD}zfs_parent = tank/bulkhead/volumes\nzfs_max_quota = 50GiB\n"
+    ))
+    .unwrap();
+
+    let zfs = c.zfs.unwrap();
+    assert_eq!(zfs.parent, "tank/bulkhead/volumes");
+    assert_eq!(zfs.max_quota, 50 << 30);
+    assert_eq!(zfs.program, std::path::Path::new(ZFS_PROGRAM));
+    assert!(Config::parse(GOOD).unwrap().zfs.is_none());
+}
+
+#[rstest]
+#[case("zfs_parent = tank/v@snap\nzfs_max_quota = 1GiB", "not a dataset name")]
+#[case("zfs_parent = -o/x\nzfs_max_quota = 1GiB", "not a dataset name")]
+#[case("zfs_parent = tank//v\nzfs_max_quota = 1GiB", "not a dataset name")]
+#[case("zfs_parent = tank/v", "zfs_max_quota is missing")]
+#[case("zfs_parent = tank/v\nzfs_max_quota = 0", "above 0")]
+#[case(
+    "zfs_parent = tank/v\nzfs_max_quota = 1GiB\nzfs = zfs",
+    "absolute path"
+)]
+#[case("zfs_max_quota = 1GiB", "need zfs_parent")]
+fn parse____bad_zfs_settings____refused_saying_why(#[case] lines: &str, #[case] says: &str) {
+    let err = Config::parse(&format!("{GOOD}{lines}\n")).unwrap_err();
+
+    assert!(err.contains(says), "{err}");
+}
+
+#[rstest]
+#[case("tank", true)]
+#[case("tank/bulkhead/volumes", true)]
+#[case("zroot/a_b-c.d:e", true)]
+#[case("tank/v@s", false)]
+#[case("tank/v#b", false)]
+#[case("tank/a b", false)]
+#[case("/tank", false)]
+#[case("tank/", false)]
+#[case("tank/-o", false)]
+fn is_dataset_name____a_name____accepted_when_a_dataset_path(#[case] name: &str, #[case] ok: bool) {
+    assert_eq!(is_dataset_name(name), ok);
+}
+
 #[rstest]
 #[case("node_uid = 990", "node_uid = 0", "root")]
 #[case("node_uid = 990", "node_uid = 60001", "inside uids")]
@@ -117,6 +162,7 @@ fn parse____a_key_missing____refused() {
 #[case("64KiB", Some(64 << 10))]
 #[case("64 MiB", Some(64 << 20))]
 #[case("2GiB", Some(2 << 30))]
+#[case("1TiB", Some(1 << 40))]
 #[case("1.5GiB", None)]
 #[case("", None)]
 #[case("18446744073709551615GiB", None)]

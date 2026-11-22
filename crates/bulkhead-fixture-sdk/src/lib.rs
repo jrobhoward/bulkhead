@@ -56,6 +56,9 @@
 //!   `/crash` panics; `/never` never replies; `/big/<n>` replies n bytes;
 //!   `/client` replies the client certificate's SHA-256, or `-`; anything else replies 200 with
 //!   `<method> <path>?<query> key=<key> body=<body> scheme=<scheme> pid=<pid>`.
+//! - `file-fill <guest dir>` (`bulkhead_sdk::files`): 1 MiB pieces into
+//!   files under the preopened directory until a write is refused (a ZFS
+//!   volume's quota, ROADMAP ZV1); replies `written=<bytes> errno=<n>`.
 //! - `changes`: every change notice received, `<key>@<revision>`, joined
 //!   by `,`.
 //! - SQL (`bulkhead:sql`), fields separated by `\x1f` (statements contain
@@ -493,6 +496,9 @@ impl App for Fixture {
         if let Some(rest) = command.strip_prefix("fetch ") {
             return Reply::Now(Envelope::text(fetch(rest)));
         }
+        if let Some(guest) = command.strip_prefix("file-fill ") {
+            return Reply::Now(Envelope::text(file_fill(guest)));
+        }
         if command.starts_with("blob-") || command.starts_with("sender-blob-") {
             return Reply::Now(Envelope::text(blob(ctx, command)));
         }
@@ -669,4 +675,37 @@ fn blob(ctx: &mut Ctx, command: &str) -> String {
         other => Err(blob::BlobError::Other(format!("unknown {other}"))),
     })();
     result.unwrap_or_else(|e| format!("err:{e}"))
+}
+
+/// `file-fill <guest dir>`: 1 MiB pieces of data no filesystem compresses,
+/// in files of 16 MiB, each synced, until a write is refused or 1 GiB is
+/// written: `written=<bytes> errno=<n>` (0 for none).
+fn file_fill(guest: &str) -> String {
+    use std::io::Write;
+
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut piece = vec![0u8; 1 << 20];
+    let mut written = 0u64;
+    let refused = (0..64).find_map(|f| {
+        let path = format!("{guest}/fill-{f}");
+        let mut file = match bulkhead_sdk::files::open(&path, bulkhead_sdk::files::Mode::Write) {
+            Ok(file) => file,
+            Err(e) => return Some(e),
+        };
+        for _ in 0..16 {
+            for chunk in piece.chunks_mut(8) {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                chunk.copy_from_slice(&seed.to_le_bytes()[..chunk.len()]);
+            }
+            if let Err(e) = file.write_all(&piece) {
+                return Some(e);
+            }
+            written += 1 << 20;
+        }
+        file.sync_all().err()
+    });
+    let errno = refused.and_then(|e| e.raw_os_error()).unwrap_or(0);
+    format!("written={written} errno={errno}")
 }

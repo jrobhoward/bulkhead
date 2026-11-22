@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use super::{
     ApiError, AppDetail, AppSummary, DeployResponse, Done, DrInfo, Event, FailoverInfo,
     InstanceInfo, LogLine, MemberInfo, ReleaseInfo, RolloutParams, StateResponse, Target,
-    UpgradeResponse,
+    UpgradeResponse, VolumeInfo,
 };
 
 /// How long a stream may go without a line, keepalives included, before
@@ -395,6 +395,28 @@ impl Client {
     /// Any [`ClientError`]; not found for a node without `[failover]`.
     pub async fn failover(&self) -> Result<FailoverInfo, ClientError> {
         self.json(Method::GET, "/v1/failover", None).await
+    }
+
+    /// The node's volumes: its directories and the apps' ZFS volumes
+    /// (ROADMAP ZV1).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`].
+    pub async fn volumes(&self) -> Result<Vec<VolumeInfo>, ClientError> {
+        self.json(Method::GET, "/v1/volumes", None).await
+    }
+
+    /// Remove `app`'s ZFS volume `volume` and what it holds (ROADMAP
+    /// ZV1).
+    ///
+    /// # Errors
+    ///
+    /// Any [`ClientError`]; conflict while the app is deployed or one of
+    /// its instances runs, not found for no such volume.
+    pub async fn destroy_volume(&self, app: &str, volume: &str) -> Result<Done, ClientError> {
+        self.json(Method::DELETE, &format!("/v1/volumes/{app}/{volume}"), None)
+            .await
     }
 
     /// The node's copy of its pair's replicated log, as a DR node.

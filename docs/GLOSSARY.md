@@ -76,7 +76,7 @@ Two words have more than one meaning:
 - **Listener, connection handler:** a TCP port the node owns, whose every accepted connection goes to an instance of the app's pool, each holding many (MANIFEST.md, `listeners`).
 - **Blob:** data one app writes into memory the node made and seals, read by id by the apps it was shared with, without a copy each (`bulkhead:blobs`, ROADMAP BL1); freed once every app concerned released it, or at its time to live. [DESIGN.md](DESIGN.md), "Blobs".
 - **Egress:** outgoing HTTP from an app, checked by the node against the manifest's `allow` and node config's ceiling, and sent by the app's egress driver, the app `bulkhead-egress-<app>`, over connections the node opens (ROADMAP DA4). [OPERATIONS.md](OPERATIONS.md).
-- **Volume:** a host directory node config names (`[volumes]`), mapped to a guest path by a manifest preopen, read-only or read-write.
+- **Volume:** a host directory node config names (`[volumes]`), or with `[volumes.zfs]` an app's own ZFS dataset with a quota (ROADMAP ZV1), mapped to a guest path by a manifest preopen, read-only or read-write (MANIFEST.md, OPERATIONS.md "ZFS volumes").
 - **DR node (disaster-recovery node):** a node at a second site, the witness or one of its own, that keeps a copy of the HA pair's replicated log and buckets, pulled from either pair node (`[dr]`, ROADMAP Phase 8). Its lag is the time since it last held every committed entry. [OPERATIONS.md](OPERATIONS.md), [DESIGN.md](DESIGN.md).
 - **Datasource:** a Postgres database node config binds (`[datasources.<name>]`), that granted apps query through `bulkhead:sql` by name; pooled by a driver of its own, the app `bulkhead-sql-<name>`, which the node connects to that database alone (ROADMAP DA3). [OPERATIONS.md](OPERATIONS.md).
 

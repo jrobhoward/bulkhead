@@ -39,7 +39,7 @@ orders-data = "/srv/v/orders"
     assert_eq!(config.node, 3);
     assert_eq!(config.socket(), PathBuf::from("/run/p.sock"));
     assert_eq!(
-        config.volumes["orders-data"],
+        config.volumes.dirs["orders-data"],
         PathBuf::from("/srv/v/orders")
     );
     assert_eq!(config.config["orders"]["db.host"], "pg");
@@ -1118,4 +1118,46 @@ fn NodeConfig____client_ca_without_tls_or_auth_without_ca____refused() {
     let main = &read.http["main"];
     assert_eq!(main.client_ca.as_deref(), Some(Path::new("/ca.pem")));
     assert_eq!(main.client_auth, Some(ClientAuthMode::Optional));
+}
+
+#[test]
+fn NodeConfig____volumes_zfs____read_beside_the_directories() {
+    let config = NodeConfig::from_toml_str(
+        r#"
+data_dir = "/d"
+
+[priv]
+
+[volumes]
+logs = "/srv/v/logs"
+
+[volumes.zfs]
+parent = "tank/bulkhead/volumes"
+max_quota = "50GiB"
+"#,
+    )
+    .unwrap();
+
+    let zfs = config.volumes.zfs.unwrap();
+    assert_eq!(zfs.parent, "tank/bulkhead/volumes");
+    assert_eq!(zfs.max_quota.bytes(), 50 << 30);
+    assert_eq!(config.volumes.dirs.len(), 1);
+}
+
+#[rstest::rstest]
+#[case(
+    "[volumes.zfs]\nparent = \"t/v\"\nmax_quota = \"1GiB\"\n",
+    "needs [priv]"
+)]
+#[case(
+    "[priv]\n[volumes.zfs]\nparent = \"t/v\"\nmax_quota = \"0\"\n",
+    "more than 0"
+)]
+#[case("[volumes]\nzfs = \"/srv/zfs\"\n", "not a directory")]
+#[case("[priv]\n[volumes.zfs]\nparent = \"t/v\"\n", "max_quota")]
+#[case("[volumes]\nlogs = 3\n", "directory's path")]
+fn NodeConfig____bad_volumes_zfs____refused(#[case] text: &str, #[case] says: &str) {
+    let err = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n{text}")).unwrap_err();
+
+    assert!(err.to_string().contains(says), "{err}");
 }

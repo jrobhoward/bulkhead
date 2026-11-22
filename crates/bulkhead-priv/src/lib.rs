@@ -42,6 +42,7 @@ mod serve;
 pub mod share;
 mod socket;
 mod sys;
+pub mod zfs;
 
 use std::os::fd::OwnedFd;
 use std::path::Path;

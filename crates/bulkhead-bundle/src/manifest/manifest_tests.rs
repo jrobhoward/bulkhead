@@ -255,6 +255,18 @@ fn AppSpec____memory_max_above_4_gib____accepted() {
     assert!(result.is_ok(), "{result:?}");
 }
 
+#[test]
+fn AppSpec____a_volume_with_a_quota____accepted_for_the_node_to_judge() {
+    let spec: AppSpec = serde_json::from_value(json!({ "capabilities": { "bulkhead:files": {
+        "preopens": { "/data": { "volume": "data", "mode": "rw", "quota": "10GiB" } }
+    } } }))
+    .unwrap();
+
+    let result = spec.validate();
+
+    assert!(result.is_ok(), "{result:?}");
+}
+
 #[rstest]
 #[case(json!({ "limits": { "memory_max": 0 } }), "limits.memory_max")]
 #[case(json!({ "limits": { "callback_deadline_ms": 0 } }), "limits.callback_deadline_ms")]
@@ -291,8 +303,7 @@ fn AppSpec____memory_max_above_4_gib____accepted() {
 #[case(json!({ "capabilities": { "bulkhead:keyvalue": { "buckets": { "b": { "durability": "disk", "read_concurrency": true } } } } }), "capabilities.bulkhead:keyvalue.buckets.b.read_concurrency")]
 #[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "data": { "volume": "v" } } } } }), "capabilities.bulkhead:files.preopens.data")]
 #[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "/data/../etc": { "volume": "v" } } } } }), "capabilities.bulkhead:files.preopens./data/../etc")]
-#[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "/data": { "volume": "v", "mode": "rw", "quota": "5GiB" } } } } }), "capabilities.bulkhead:files.preopens./data.quota")]
-#[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "/data": { "volume": "v", "quota": "1MiB" } } } } }), "capabilities.bulkhead:files.preopens./data.quota")]
+#[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "/data": { "volume": "v", "mode": "rw", "quota": "0" } } } } }), "capabilities.bulkhead:files.preopens./data.quota")]
 #[case(json!({ "capabilities": { "bulkhead:sockets": { "connect": [{ "cidr": "10.0.0.0/33" }] } } }), "capabilities.bulkhead:sockets.connect[0].cidr")]
 #[case(json!({ "capabilities": { "bulkhead:sockets": { "max_sockets": 0 } } }), "capabilities.bulkhead:sockets.max_sockets")]
 #[case(json!({ "capabilities": { "bulkhead:http-egress": { "allow": ["x"], "methods": ["get"] } } }), "capabilities.bulkhead:http-egress.methods[0]")]

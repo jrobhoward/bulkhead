@@ -53,7 +53,7 @@ Solid arrows point from a crate to the crates it depends on; dotted arrows are w
 | `bulkhead-admin` | library and `bulkhead-admin` | The remote admin API's TLS as a driver (ROADMAP DA7): accepts only operators' keys, then copies each connection's bytes to and from a stream into the node's admin API (`Request::AdminStream`). |
 | `bulkhead-bundle` | library | The app manifest model and validation, `.rbp` opening and signature checks against operator keys (the program's platform variant), operator policy and the effective grant. |
 | `bulkhead-host` | library | The runtime: process table, instances, links and monitors, supervisors, app sets and pools, host services, the HTTP route table, listeners, the cluster transport, liveness, membership, failover, replication, moving singletons and release versions. |
-| `bulkhead-priv-wire` | library | The messages between a node and its privileged helper (spawn, signal, bind; spawned, exited, refused) and their bounded parser, with no `unsafe`. |
+| `bulkhead-priv-wire` | library | The messages between a node and its privileged helper (spawn, signal, bind, share, ZFS volumes; spawned, exited, refused) and their bounded parser, with no `unsafe`. |
 | `bulkhead-priv` | `bulkhead-priv` (root) | The privileged helper (ROADMAP PS1): started as root, it starts the node under its user and each native instance under its app's, in a cgroup, namespaces and a minimal root (Linux) or a process group with `rctl` rules (FreeBSD). Synchronous, no async runtime; `unsafe` only in `sys`. `bulkhead-host`'s `native::helper` is the node's side. |
 | `bulkhead-native` | library | The frame protocol between a node and a native app, the channel it travels over (shared-memory rings, the pipes that wake each side, the descriptor socket; feature `channel`), published buckets' snapshot format, and the app API for native executables (feature `app`). `bulkhead-host` takes the protocol, the channel and the snapshot format. |
 | `bulkhead-runner` | library and `bulkhead-runner` | The launcher that sandboxes itself (Landlock and seccomp on Linux, Capsicum on FreeBSD) and loads or executes a native app, and its lease watchdog; a crate of its own (ROADMAP CR1), so nothing the node, apps or drivers link holds the sandbox. |
@@ -280,7 +280,7 @@ flowchart LR
 3. The effective grant: manifest ∩ operator policy.
 4. The ceilings: `[egress] allow`, `[sockets]`, datasources bound.
 5. The program is written under `compiled/` (mode 0500) and loaded with `Runtime::load_native`.
-6. The `InstanceSpec`, from the manifest, narrowed by the grant.
+6. The `InstanceSpec`, from the manifest, narrowed by the grant; each volume resolved (`daemon/volumes.rs`): a directory of `[volumes]`, or with `[volumes.zfs]` the app's own ZFS dataset, made or resized by the helper (`Runtime::ensure_volume`, ROADMAP ZV1).
 7. The store: `priv/` extracted, the bundle kept as `bundles/<app>/<version>.rbp`.
 8. Run: HTTP routes, if granted. A singleton on a failover node goes to `gate.hold` and starts only while `may_run`; anything else goes to `Apps::add`: the dependency check, the root supervisor and a pool of instances, each spawned as a process, then `init`, then serving.
 9. `state.json` saved, and an `audit.log` record.
