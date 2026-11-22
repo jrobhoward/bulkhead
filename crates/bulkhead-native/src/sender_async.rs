@@ -262,8 +262,10 @@ impl AsyncSender {
     fn ask(&self, request: Request) -> Asked {
         let id = {
             let mut state = self.core.state.borrow_mut();
-            let id = state.sender.send_request(request);
-            state.slots.insert(id, Slot::Waiting(None));
+            let (id, refused) = state.sender.send_request_checked(request);
+            state
+                .slots
+                .insert(id, refused.map_or(Slot::Waiting(None), Slot::Done));
             id
         };
         self.core.work.notify_one();

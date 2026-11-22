@@ -157,3 +157,57 @@ fn since____every_frame____within_the_current_version() {
     assert_eq!(since, vec![1, 1, 1, 11]);
     assert!(since.iter().all(|v| *v <= VERSION));
 }
+
+#[test]
+fn too_large____each_kind_of_request____its_own_error_or_none() {
+    let msg = || Envelope::new("text/plain", "x");
+    let n = MAX_FRAME + 1;
+
+    let cast = too_large(
+        &Request::Cast {
+            to: pid(),
+            msg: msg(),
+        },
+        n,
+    );
+    let call = too_large(
+        &Request::Call {
+            to: pid(),
+            msg: msg(),
+            timeout_ms: 1,
+        },
+        n,
+    );
+    let reply = too_large(
+        &Request::Reply {
+            call_ref: 1,
+            msg: msg(),
+        },
+        n,
+    );
+    let kv = too_large(
+        &Request::Kv(KvRequest::SetMany {
+            bucket: "b".into(),
+            entries: Vec::new(),
+        }),
+        n,
+    );
+    let timer = too_large(&Request::SendAfter { ms: 1, msg: msg() }, n);
+
+    assert_eq!(cast, Some(Answer::CastFailed(CastError::TooLarge)));
+    assert_eq!(call, Some(Answer::Called(Err(CallError::TooLarge))));
+    assert_eq!(reply, Some(Answer::Unit));
+    assert!(
+        matches!(kv, Some(Answer::Kv(Err(KvError::Other(why)))) if why.contains("frame limit"))
+    );
+    assert_eq!(timer, None);
+}
+
+#[test]
+fn over_limit____encoded_frame____only_a_body_past_max_frame() {
+    let at = vec![0u8; 4 + MAX_FRAME];
+    let past = vec![0u8; 5 + MAX_FRAME];
+
+    assert!(!over_limit(&at));
+    assert!(over_limit(&past));
+}

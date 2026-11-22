@@ -47,7 +47,8 @@ fn shared() -> &'static (Runtime, LoadedApp) {
 fn up(app: &str, senders: Option<u32>, accept_from: &[&str]) -> InstanceHandle {
     let (rt, loaded) = shared();
     let mut spec = InstanceSpec {
-        memory_max: 64 << 20,
+        // Room for a request over the frame limit, and its encoding.
+        memory_max: 256 << 20,
         callback_deadline: Duration::from_secs(5),
         init_timeout: Duration::from_secs(5),
         granted: [Capability::KeyValue, Capability::Metrics].into(),
@@ -242,4 +243,21 @@ async fn sender____reply_after_the_caller_gave_up____dropped_and_the_instance_ru
     assert!(gave_up.is_err(), "{gave_up:?}");
     assert_eq!(after, "still here");
     a.kill();
+}
+
+/// A sender's request over the 17 MiB frame limit is refused on the app's
+/// side, as the callback thread's are, and the sender goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender____request_over_the_frame_limit____refused_and_the_sender_goes_on() {
+    let a = up("snd-big", None, &[]);
+    ask(&a, "sender open").await;
+
+    let big = ask(&a, "sender 0 kv big data s-big 18").await;
+    let after = ask(&a, "sender 0 kv set data s-after ok").await;
+
+    assert!(
+        big.starts_with("err:Other") && big.contains("frame limit"),
+        "{big}"
+    );
+    assert_eq!(after, "ok");
 }

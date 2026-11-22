@@ -1470,6 +1470,41 @@ pub fn encode<T: Serialize>(frame: &T) -> Vec<u8> {
     out
 }
 
+/// Whether `encoded` (from [`encode`], prefix included) holds a frame the
+/// node would refuse: a body over [`MAX_FRAME`].
+#[must_use]
+pub fn over_limit(encoded: &[u8]) -> bool {
+    encoded.len().saturating_sub(4) > MAX_FRAME
+}
+
+/// The answer an app gives itself, instead of sending it, for `request`
+/// whose frame of `len` bytes is over [`MAX_FRAME`] (ROADMAP, "Smaller
+/// open items"): the node would end the instance on such a frame. An error
+/// of the answer's own type, the one the node gives for a message over a
+/// target's limit where there is one: [`CastError::TooLarge`],
+/// [`CallError::TooLarge`], [`SqlError::TooLarge`]. A reply has no one to
+/// answer, so it is dropped (`Unit`), and its caller times out. `None`
+/// for a request whose answer carries no error (`SendAfter`, `Exit`):
+/// that frame is sent, and the node ends the instance as before.
+#[must_use]
+pub fn too_large(request: &Request, len: usize) -> Option<Answer> {
+    let why = || format!("a request of {len} bytes is over the {MAX_FRAME}-byte frame limit");
+    Some(match request {
+        Request::Cast { .. } | Request::CastWait { .. } | Request::CastApp { .. } => {
+            Answer::CastFailed(CastError::TooLarge)
+        }
+        Request::Call { .. } | Request::CallApp { .. } => Answer::Called(Err(CallError::TooLarge)),
+        Request::Reply { .. } => Answer::Unit,
+        Request::Kv(_) => Answer::Kv(Err(KvError::Other(why()))),
+        Request::Groups(_) => Answer::Groups(Err(GroupsError::LimitReached)),
+        Request::Sql(_) => Answer::Sql(Err(SqlError::TooLarge)),
+        Request::Net(_) => Answer::Net(Err(NetError::Other(why()))),
+        Request::Http(_) => Answer::Http(Err(HttpError::Invalid(why()))),
+        Request::Extension { .. } => Answer::Extension(Err(ExtensionError::BadArguments(why()))),
+        _ => return None,
+    })
+}
+
 /// Decode a frame's body (without its length prefix).
 ///
 /// # Errors

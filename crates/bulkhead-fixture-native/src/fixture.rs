@@ -316,6 +316,7 @@ impl Fixture {
                 Ok(reply) => String::from_utf8_lossy(&reply.body).into_owned(),
                 Err(e) => format!("err:{e:?}"),
             },
+            "bigcall" => big_call(ctx, pid(), tail.parse().unwrap_or(0)),
             "cast" => {
                 ctx.cast(pid(), text(tail));
                 "ok".into()
@@ -791,6 +792,15 @@ fn dumpable() -> String {
     "err:linux and freebsd only".into()
 }
 
+/// `bigcall PID MIB`: a call to `to` with a body of `mib` MiB.
+fn big_call(ctx: &mut Ctx, to: Pid, mib: usize) -> String {
+    let body = Envelope::new("text/plain", vec![b'x'; mib << 20]);
+    match ctx.call(to, body, 5_000) {
+        Ok(reply) => String::from_utf8_lossy(&reply.body).into_owned(),
+        Err(e) => format!("err:{e:?}"),
+    }
+}
+
 /// `kv OP BUCKET ...`: the keyvalue requests, answered as text (`err:` and
 /// the error for a failure).
 fn kv(ctx: &mut Ctx, command: &str) -> String {
@@ -831,6 +841,12 @@ fn kv(ctx: &mut Ctx, command: &str) -> String {
                         .collect::<Vec<_>>()
                         .join(",")
                 })
+            }
+            "bigmany" => {
+                let entries: Vec<(String, Vec<u8>)> = (0..arg(2).parse().unwrap_or(0))
+                    .map(|i: u32| (format!("big-{i}"), vec![b'x'; 1 << 20]))
+                    .collect();
+                b.set_many(&entries).map(|()| "ok".into())
             }
             "setmany" => {
                 let entries: Vec<(String, Vec<u8>)> = arg(2)

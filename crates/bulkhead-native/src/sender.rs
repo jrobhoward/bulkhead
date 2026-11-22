@@ -307,25 +307,25 @@ impl Sender {
         msg: Envelope,
         timeout_ms: u32,
     ) -> u64 {
-        let id = self.send_request(Request::CallApp {
+        let (id, refused) = self.send_request_checked(Request::CallApp {
             app: app.into(),
             msg,
             timeout_ms,
             partner: false,
         });
-        self.started.insert(id, None);
+        self.started.insert(id, called(refused));
         id
     }
 
     /// Start a call without waiting for its reply: its id, for
     /// [`Sender::next_answer`].
     pub fn start_call(&mut self, to: Pid, msg: Envelope, timeout_ms: u32) -> u64 {
-        let id = self.send_request(Request::Call {
+        let (id, refused) = self.send_request_checked(Request::Call {
             to,
             msg,
             timeout_ms,
         });
-        self.started.insert(id, None);
+        self.started.insert(id, called(refused));
         id
     }
 
@@ -519,7 +519,10 @@ impl Sender {
     /// Ask and wait for the answer; answers to started calls that come
     /// first are kept for [`Sender::next_answer`].
     fn request(&mut self, request: Request) -> Answer {
-        let id = self.send_request(request);
+        let (id, refused) = self.send_request_checked(request);
+        if let Some(answer) = refused {
+            return answer;
+        }
         loop {
             match self.read() {
                 Got::Frame(ToApp::Answer { id: got, answer }) if got == id => return answer,
@@ -544,21 +547,47 @@ impl Sender {
     }
 
     pub(crate) fn send_request(&mut self, request: Request) -> u64 {
+        self.send_request_checked(request).0
+    }
+
+    /// Send `request`, or, for one whose frame is over the limit, keep it
+    /// and give the answer it gets instead ([`protocol::too_large`]).
+    pub(crate) fn send_request_checked(&mut self, request: Request) -> (u64, Option<Answer>) {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(&FromApp::Request { id, request });
-        id
+        let frame = FromApp::Request { id, request };
+        if let Err(len) = self.try_send(&frame, true) {
+            if let FromApp::Request { request, .. } = &frame
+                && let Some(answer) = protocol::too_large(request, len)
+            {
+                return (id, Some(answer));
+            }
+            // No error to give: sent, and the node ends the instance.
+            self.send(&frame);
+        }
+        (id, None)
     }
 
     fn send(&mut self, frame: &FromApp) {
+        let _ = self.try_send(frame, false);
+    }
+
+    fn try_send(&mut self, frame: &FromApp, refuse_over_limit: bool) -> Result<(), usize> {
         let mut out = std::mem::take(&mut self.out);
         out.clear();
+        let mut result = Ok(());
         if crate::hot::write_from_app(&mut out, frame).is_some() {
             self.write(&out);
         } else {
-            self.write(&protocol::encode(frame));
+            let bytes = protocol::encode(frame);
+            if refuse_over_limit && protocol::over_limit(&bytes) {
+                result = Err(bytes.len() - 4);
+            } else {
+                self.write(&bytes);
+            }
         }
         self.out = out;
+        result
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -629,6 +658,15 @@ fn cold_request(bucket: &str, op: KvOp, key: &str, value: &[u8]) -> KvRequest {
 
 fn unexpected(answer: &Answer) -> ! {
     protocol_error(&format!("unexpected answer {answer:?}"))
+}
+
+/// A started call's answer, if it is one given without the node (a frame
+/// over the limit).
+fn called(refused: Option<Answer>) -> Option<Result<Envelope, CallError>> {
+    match refused {
+        Some(Answer::Called(result)) => Some(result),
+        _ => None,
+    }
 }
 
 pub(crate) fn unexpected_frame(frame: &ToApp) -> ! {

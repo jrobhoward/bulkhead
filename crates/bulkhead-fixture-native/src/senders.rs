@@ -17,7 +17,8 @@
 //! `N-1`, each `echo I`, checked against its id: `OK/N`);
 //! `calls PID,PID,.. N`
 //! (`N` calls of `echo I` started together, each answer checked against
-//! its id: `OK/N`); `kv get B K`, `kv set B K V`, `kv incr B K N`,
+//! its id: `OK/N`); `kv get B K`, `kv set B K V`, `kv big B K MIB` (a value
+//! of `MIB` MiB), `kv incr B K N`,
 //! `kv watch B K`; `metric register NAME` (a counter's id), `metric add
 //! ID N`; `bad` (a `link` request, which a sender may not make).
 
@@ -194,6 +195,11 @@ fn run(s: &mut Sender, cmd: &str) -> String {
                     bucket,
                     key,
                     value: arg(4).as_bytes().into(),
+                }),
+                "big" => s.kv(KvRequest::Set {
+                    bucket,
+                    key,
+                    value: vec![b'x'; arg(4).parse::<usize>().unwrap_or(0) << 20].into(),
                 }),
                 "incr" => s.kv(KvRequest::Increment {
                     bucket,

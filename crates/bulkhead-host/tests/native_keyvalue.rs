@@ -65,7 +65,8 @@ fn shared() -> &'static (Runtime, LoadedApp) {
 /// configure. Tests share the runtime, so each uses its own keys.
 fn spec(app: &str, mode: AccessMode) -> InstanceSpec {
     let mut spec = InstanceSpec {
-        memory_max: 64 << 20,
+        // Room for the requests over the frame limit, and their encoding.
+        memory_max: 256 << 20,
         callback_deadline: Duration::from_secs(5),
         init_timeout: Duration::from_secs(5),
         granted: [Capability::KeyValue].into(),
@@ -292,4 +293,26 @@ async fn native_kv____published_bucket_not_listed____no_snapshot() {
     assert_eq!(mapped, "none");
     assert!(read.starts_with("err:"), "{read}");
     h.kill();
+}
+
+/// A request whose frame would be over the 17 MiB limit (ROADMAP, "Smaller
+/// open items") is refused by the app's side as an error of its own type,
+/// and never sent: the node would end the instance on such a frame.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kv____requests_over_the_frame_limit____refused_and_the_instance_runs_on() {
+    let a = up("kv-big", AccessMode::Rw);
+    let b = up("kv-big-peer", AccessMode::Rw);
+    let b_pid = ask(&b, "self").await;
+
+    let many = ask(&a, "kv bigmany data 18").await;
+    let call = ask(&a, &format!("bigcall {b_pid} 18")).await;
+    let after = ask(&a, "kv set data big-ok fine").await;
+
+    assert!(
+        many.contains("over the") && many.contains("frame limit"),
+        "{many}"
+    );
+    assert_eq!(call, "err:TooLarge");
+    assert_eq!(after, "ok");
+    assert_eq!(a.state(), bulkhead_host::LifecycleState::Active);
 }

@@ -153,6 +153,13 @@ fn send_bytes(frame: &[u8]) {
 /// Send one frame to the node. Without a node (before [`serve`]) a log
 /// record goes to stderr and anything else is dropped.
 fn send(frame: &FromApp) {
+    let _ = try_send(frame, false);
+}
+
+/// [`send`]; with `refuse_over_limit`, a frame over the limit is not sent
+/// and its encoded length comes back, for a request to answer itself
+/// ([`protocol::too_large`]).
+fn try_send(frame: &FromApp, refuse_over_limit: bool) -> Result<(), usize> {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     if END.get().is_some() {
         // A hot frame where the layouts cover it (ROADMAP T7), written into
@@ -168,13 +175,18 @@ fn send(frame: &FromApp) {
             Some(())
         });
         if hot.is_none() {
-            send_bytes(&protocol::encode(frame));
+            let bytes = protocol::encode(frame);
+            if refuse_over_limit && protocol::over_limit(&bytes) {
+                return Err(bytes.len() - 4);
+            }
+            send_bytes(&bytes);
         }
-        return;
+        return Ok(());
     }
     if let FromApp::Log { level, message } = frame {
         eprintln!("{level:?}: {message}");
     }
+    Ok(())
 }
 
 /// Log a record through the node's logging, from any thread.
@@ -376,7 +388,22 @@ pub(crate) fn request(request: Request) -> Answer {
         conn.next_id += 1;
         conn.next_id
     });
-    send(&FromApp::Request { id, request });
+    let frame = FromApp::Request { id, request };
+    if let Err(len) = try_send(&frame, true) {
+        if let FromApp::Request { request, .. } = &frame
+            && let Some(answer) = protocol::too_large(request, len)
+        {
+            if matches!(request, Request::Reply { .. }) {
+                log(
+                    Level::Warn,
+                    format!("a reply of {len} bytes, over the frame limit, was dropped"),
+                );
+            }
+            return answer;
+        }
+        // No error to give: sent, and the node ends the instance.
+        send(&frame);
+    }
     match next_frame() {
         ToApp::Answer { id: got, answer } if got == id => answer,
         other => protocol_error(&format!("expected answer {id}, got {other:?}")),
