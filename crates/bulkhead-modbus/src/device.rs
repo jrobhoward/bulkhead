@@ -15,6 +15,7 @@
 //! node runs as a singleton (`bulkhead-modbus-primary`), so only while it
 //! holds the failover lease; this module polls whatever it is given.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use bulkhead_native::protocol::Envelope;
@@ -25,7 +26,9 @@ use tokio_modbus::client::{Context, Reader, Writer};
 use tokio_modbus::prelude::Slave;
 
 use crate::config::DeviceConfig;
-use crate::points::{Kind, Scan, Table, Update, changes, record_bits, record_words};
+use crate::points::{
+    Kind, Scan, Table, TagValue, Update, changes, covered, record_bits, record_words, tag_changes,
+};
 
 /// A request to a device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,10 +100,12 @@ pub(crate) fn spawn(name: String, config: DeviceConfig, sender: AsyncSender) -> 
     let (jobs, queue) = mpsc::channel(64);
     let device = Device {
         name,
-        config,
         sender,
         ctx: None,
+        covered: covered(&config.tags),
+        config,
         last: Scan::new(),
+        tags_sent: BTreeMap::new(),
         online: None,
         resend: false,
         last_full: Instant::now(),
@@ -116,6 +121,10 @@ struct Device {
     ctx: Option<Context>,
     /// The last scan delivered.
     last: Scan,
+    /// The registers and bits the tags cover: sent as tags, not points.
+    covered: BTreeSet<(Table, u16)>,
+    /// Each tag's value as last sent, for its deadband.
+    tags_sent: BTreeMap<String, TagValue>,
     /// Whether the last poll succeeded; `None` before the first.
     online: Option<bool>,
     /// The next poll sends every point (a delivery failed).
@@ -267,6 +276,7 @@ impl Device {
                         full: false,
                         points: Vec::new(),
                         error: Some(error),
+                        tags: Vec::new(),
                     };
                     // An offline notice that cannot be delivered is
                     // retried on the next failed poll.
@@ -275,6 +285,7 @@ impl Device {
                     }
                 }
                 self.last.clear();
+                self.tags_sent.clear();
                 return;
             }
         };
@@ -283,7 +294,9 @@ impl Device {
             .full_every_ms
             .is_some_and(|ms| self.last_full.elapsed() >= Duration::from_millis(ms));
         let full = self.online != Some(true) || self.resend || integrity;
-        let points = changes(&self.last, &scan, full);
+        let mut points = changes(&self.last, &scan, full);
+        points.retain(|p| !self.covered.contains(&(p.table, p.address)));
+        let tags = tag_changes(&self.config.tags, &mut self.tags_sent, &scan, full);
         if self.online == Some(false) {
             bulkhead_sdk::info!("modbus device {} online", self.name);
         }
@@ -292,7 +305,7 @@ impl Device {
         if full {
             self.last_full = Instant::now();
         }
-        if points.is_empty() && !full {
+        if points.is_empty() && tags.is_empty() && !full {
             return;
         }
         let update = Update {
@@ -301,6 +314,7 @@ impl Device {
             full,
             points,
             error: None,
+            tags,
         };
         self.resend = !self.deliver(&app, &update).await;
     }

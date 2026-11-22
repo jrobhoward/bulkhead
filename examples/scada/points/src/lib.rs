@@ -1,6 +1,8 @@
 //! The point table: a pool of instances, each device's updates routed to
 //! one of them by `hash:device`, keeping every point in the shared `points`
-//! bucket under `<device>/<table>/<address>` and each device's state under
+//! bucket under `<device>/<table>/<address>`, each tag (a typed value the
+//! device's configuration declares) under `<device>/tag/<name>`, and each
+//! device's state under
 //! `<device>/status` (`online`, or `offline: <why>`). One update is one
 //! batch write, so a scan costs one transaction. The `hmi` app serves the
 //! table and `control` raises alarms from it (see the README).
@@ -21,6 +23,35 @@ struct Update {
     points: Vec<Point>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    tags: Vec<Tag>,
+}
+
+/// A typed value (ROADMAP DA5b): an integer, a float or a bool.
+#[derive(Debug, Deserialize)]
+struct Tag {
+    name: String,
+    value: TagValue,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TagValue {
+    Bool(bool),
+    Unsigned(u64),
+    Signed(i64),
+    Float(f64),
+}
+
+impl std::fmt::Display for TagValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Unsigned(n) => write!(f, "{n}"),
+            Self::Signed(n) => write!(f, "{n}"),
+            Self::Float(x) => write!(f, "{x}"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +79,10 @@ fn store(update: &Update) -> Result<(), String> {
             let key = format!("{}/{}/{}", update.device, p.table, p.address);
             (key, p.value.to_string().into_bytes())
         })
+        .chain(update.tags.iter().map(|t| {
+            let key = format!("{}/tag/{}", update.device, t.name);
+            (key, t.value.to_string().into_bytes())
+        }))
         .collect();
     let status = match update.kind.as_str() {
         "offline" => format!("offline: {}", update.error.as_deref().unwrap_or("")),

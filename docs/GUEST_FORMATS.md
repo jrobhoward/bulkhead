@@ -167,6 +167,7 @@ The Modbus devices' driver (`bulkhead-modbus`, ROADMAP DA5) casts to the app its
 | `full` | bool | Whether `points` holds every polled point, not only the changes; true for the first scan after an `offline` |
 | `points` | array of maps | Each `{table, address, value}`: `table` is `holding`, `input`, `coil` or `discrete`; `address` and `value` are unsigned 16-bit integers, with 0 or 1 for coils and discrete inputs |
 | `error` | text | Only with `offline`: why |
+| `tags` | array of maps | Only for a device that declares tags (ROADMAP DA5b): each `{name, value}`, the tags whose value moved by at least their `deadband` since the value last sent (every tag when `full`). `value` is an integer for an integer type without `scale` or `offset`, a float otherwise, or a bool. A register or bit a tag covers is not in `points`. |
 
 ```text
 {"device": "pump-1", "kind": "points", "full": false,
@@ -188,6 +189,19 @@ f466706f696e747381a3657461626c6567686f6c64696e676761646472657373
 a5666465766963656670756d702d31646b696e64676f66666c696e656466756c
 6cf466706f696e747380656572726f7272636f6e6e656374696f6e2072656675
 736564
+```
+
+A device with tags, a scan in which an `f32` and a `bool` moved and no untagged register did (CBOR writes 12.5 as a half-precision float, its shortest exact form; a reader takes any float width):
+
+```text
+{"device": "pump-1", "kind": "points", "full": false, "points": [],
+ "tags": [{"name": "flow", "value": 12.5}, {"name": "running", "value": true}]}
+```
+
+```cbor-hex modbus-tags
+a5666465766963656670756d702d31646b696e6466706f696e74736466756c6c
+f466706f696e747380647461677382a2646e616d6564666c6f776576616c7565
+f94a40a2646e616d656772756e6e696e676576616c7565f5
 ```
 
 ## Not covered here

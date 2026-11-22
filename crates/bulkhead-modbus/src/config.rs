@@ -17,7 +17,7 @@ pub(crate) const MAX_WRITE_REGISTERS: usize = 123;
 pub(crate) const MAX_WRITE_BITS: usize = 1968;
 
 /// The extension's node configuration.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Devices the node polls, by name.
@@ -29,7 +29,7 @@ pub struct Config {
 }
 
 /// One device: `[extensions."bulkhead-modbus:modbus".devices.<name>]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceConfig {
     /// `ip:port`.
@@ -69,6 +69,200 @@ pub struct DeviceConfig {
     /// Discrete inputs polled.
     #[serde(default)]
     pub discrete: Vec<Range>,
+    /// Typed values read from the polled registers and bits (ROADMAP
+    /// DA5b), by name. A register a tag covers is delivered as the tag
+    /// only, not as a raw point.
+    #[serde(default)]
+    pub tags: BTreeMap<String, Tag>,
+}
+
+/// A typed value: `[extensions."bulkhead-modbus:modbus".devices.<d>.tags.<name>]`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tag {
+    /// The table it is read from.
+    pub table: crate::points::Table,
+    /// Its first register, or its bit's address.
+    pub address: u16,
+    /// How its registers are read; `u16` for registers and `bool` for
+    /// coils and discrete inputs when unset.
+    #[serde(default, rename = "type")]
+    pub kind: Option<TagType>,
+    /// The byte order of a 32- or 64-bit value's registers.
+    #[serde(default)]
+    pub order: Option<WordOrder>,
+    /// With `type = "bool"` on a register: which of its bits, 0 to 15.
+    #[serde(default)]
+    pub bit: Option<u8>,
+    /// The value is `raw * scale + offset`.
+    #[serde(default = "one")]
+    pub scale: f64,
+    /// Added after `scale`.
+    #[serde(default)]
+    pub offset: f64,
+    /// A new value is sent only when it differs from the last one sent by
+    /// at least this; 0 sends every change.
+    #[serde(default)]
+    pub deadband: f64,
+}
+
+/// How a tag's registers are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TagType {
+    /// One register, unsigned.
+    U16,
+    /// One register, two's complement.
+    I16,
+    /// Two registers, unsigned.
+    U32,
+    /// Two registers, two's complement.
+    I32,
+    /// Two registers, IEEE 754.
+    F32,
+    /// Four registers, unsigned.
+    U64,
+    /// Four registers, two's complement.
+    I64,
+    /// Four registers, IEEE 754.
+    F64,
+    /// A coil, a discrete input, or one bit of a register.
+    Bool,
+}
+
+impl TagType {
+    /// How many registers a value takes.
+    #[must_use]
+    pub fn registers(self) -> u16 {
+        match self {
+            Self::U16 | Self::I16 | Self::Bool => 1,
+            Self::U32 | Self::I32 | Self::F32 => 2,
+            Self::U64 | Self::I64 | Self::F64 => 4,
+        }
+    }
+}
+
+/// The byte order of a value across registers, naming its bytes `a` (the
+/// most significant) to `d` for 32 bits; 64-bit values pair their bytes
+/// alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WordOrder {
+    /// Big-endian: the first register holds the most significant word, high
+    /// byte first (Modbus's own order).
+    #[default]
+    Abcd,
+    /// Word-swapped: the first register holds the least significant word.
+    Cdab,
+    /// Byte-swapped within each register, words big-endian.
+    Badc,
+    /// Little-endian: words and bytes reversed.
+    Dcba,
+}
+
+impl Tag {
+    /// Its type, with the default for its table.
+    #[must_use]
+    pub fn kind(&self) -> TagType {
+        self.kind.unwrap_or(if self.table.is_bits() {
+            TagType::Bool
+        } else {
+            TagType::U16
+        })
+    }
+
+    /// The registers (or the bit) it reads.
+    #[must_use]
+    pub fn span(&self) -> std::ops::Range<u32> {
+        let start = u32::from(self.address);
+        start..start + u32::from(self.kind().registers())
+    }
+
+    /// What is wrong with it, if anything.
+    fn problem(&self, device: &DeviceConfig) -> Option<String> {
+        let kind = self.kind();
+        let bits = self.table.is_bits();
+        if bits && (kind != TagType::Bool || self.bit.is_some()) {
+            return Some("a coil or discrete input is a bool, without bit".into());
+        }
+        if self.bit.is_some_and(|b| b > 15) {
+            return Some("bit must be 0 to 15".into());
+        }
+        if self.bit.is_some() && kind != TagType::Bool {
+            return Some("bit goes with type = \"bool\"".into());
+        }
+        if !bits && kind == TagType::Bool && self.bit.is_none() {
+            return Some("a bool in a register names its bit".into());
+        }
+        if self.order.is_some() && kind.registers() < 2 {
+            return Some("order is for 32- and 64-bit types".into());
+        }
+        if !self.scale.is_finite() || self.scale == 0.0 {
+            return Some("scale must be a finite number other than 0".into());
+        }
+        if !self.offset.is_finite() {
+            return Some("offset must be a finite number".into());
+        }
+        if !self.deadband.is_finite() || self.deadband < 0.0 {
+            return Some("deadband must be a finite number of at least 0".into());
+        }
+        let ranges = match self.table {
+            crate::points::Table::Holding => &device.holding,
+            crate::points::Table::Input => &device.input,
+            crate::points::Table::Coil => &device.coils,
+            crate::points::Table::Discrete => &device.discrete,
+        };
+        let span = self.span();
+        let polled = ranges.iter().any(|r| {
+            let start = u32::from(r.start);
+            start <= span.start && span.end <= start + u32::from(r.count)
+        });
+        if !polled {
+            return Some(format!(
+                "{:?} {} to {} is not inside one of the device's polled ranges",
+                self.table,
+                span.start,
+                span.end - 1
+            ));
+        }
+        None
+    }
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+/// A tag's name: lowercase letters, digits, `_` and `-`, 1 to 64 of them.
+fn is_tag_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// The first problem with a device's tags.
+fn tags_problem(name: &str, device: &DeviceConfig) -> Option<String> {
+    let mut words: BTreeMap<(crate::points::Table, u32), (&str, bool)> = BTreeMap::new();
+    for (tag_name, tag) in &device.tags {
+        let at = |why: String| Some(format!("devices.{name}.tags.{tag_name}: {why}"));
+        if !is_tag_name(tag_name) {
+            return at("a name of lowercase letters, digits, _ and -".into());
+        }
+        if let Some(why) = tag.problem(device) {
+            return at(why);
+        }
+        // Several bit tags may share a register; nothing else shares.
+        let bit = tag.bit.is_some();
+        for word in tag.span() {
+            if let Some((other, other_bit)) = words.insert((tag.table, word), (tag_name, bit))
+                && !(bit && other_bit)
+            {
+                return at(format!("shares {:?} {word} with tag {other}", tag.table));
+            }
+        }
+    }
+    None
 }
 
 /// A run of addresses: `{ start = 0, count = 10 }`.
@@ -205,6 +399,9 @@ impl Config {
                         ));
                     }
                 }
+            }
+            if let Some(why) = tags_problem(name, device) {
+                return Err(why);
             }
             if device.deliver_to.is_none() && ranges.iter().any(|(_, list, _)| !list.is_empty()) {
                 return Err(format!(

@@ -203,6 +203,12 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- A restarted HTTP ingress driver (a crash, or a certificate replaced by
+  rename, ROADMAP DA2b) answered `404 no route` to the first requests,
+  those queued while it restarted among them, until the node's route
+  table reached it. It now accepts no connection before the table, which
+  the node sends just after its start; connections wait in the listen
+  queue meanwhile. Found by `bulkhead-ingress`'s restart test.
 - `bulkhead log-level <app> debug` (or `trace`) showed nothing more in
   `bulkhead logs`: `RUST_LOG`'s filter (default `info`) applied to the
   node's log ring as well as to stderr, so an app's records below `info`
@@ -750,6 +756,17 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Typed Modbus values (ROADMAP DA5b): a device's
+  `[extensions."bulkhead-modbus:modbus".devices.<d>.tags.<name>]` reads
+  a value from polled registers or bits (`type` `u16`, `i16`, `u32`,
+  `i32`, `f32`, `u64`, `i64`, `f64` or `bool`; `order` `abcd`, `cdab`,
+  `badc` or `dcba`; `bit` of a register; `scale`, `offset`), sent in the
+  update's new `tags` (`{name, value}`) when it moves by its `deadband`
+  from the value last sent. A register a tag covers is no longer sent as
+  a raw point; a device without tags sends the same updates as before.
+  Tags are read only (writes by tag: ROADMAP DA5c). The cost per scan of
+  a device with tags was not measured. `examples/scada`'s `points` stores
+  tags under `<device>/tag/<name>`.
 - A tutorial for app developers (ROADMAP DOC1): `examples/app-tutorial`,
   a chat room built from an empty crate in six chapters (a node started
   and stopped; a first app built, bundled and deployed; logs and a

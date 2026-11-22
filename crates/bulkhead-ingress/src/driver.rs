@@ -199,6 +199,7 @@ impl App for Ingress {
                         .routes
                         .write()
                         .unwrap_or_else(PoisonError::into_inner) = routes;
+                    self.shared.routed.send_replace(true);
                 }
                 Err(e) => bulkhead_sdk::error!("routes event: {e}"),
             }
@@ -322,6 +323,9 @@ async fn accept(
     next: Arc<AtomicU64>,
     shared: Arc<Shared>,
 ) {
+    // Connections wait in the node's listen queue until the routes come.
+    let mut routed = shared.routed.subscribe();
+    let _ = routed.wait_for(|r| *r).await;
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,

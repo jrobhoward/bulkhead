@@ -65,3 +65,70 @@ fn Config____invalid_ranges_and_missing_target____refused() {
     assert!(unknown.unwrap_err().contains("colis"));
     assert!(no_target.unwrap_err().contains("deliver_to"));
 }
+
+/// A device polling holding 0 to 9 and coils 0 to 3, with `tags`.
+fn with_tags(tags: serde_json::Value) -> Result<Config, String> {
+    Config::from_json(&json!({
+        "devices": { "pump-1": {
+            "address": "10.0.0.5:502",
+            "deliver_to": "scada",
+            "holding": [{ "start": 0, "count": 10 }],
+            "coils": [{ "start": 0, "count": 4 }],
+            "tags": tags
+        } }
+    }))
+}
+
+#[test]
+fn Config____tags____types_and_defaults_read() {
+    let config = with_tags(json!({
+        "flow": { "table": "holding", "address": 0, "type": "f32", "order": "cdab",
+                  "scale": 2.0, "deadband": 0.5 },
+        "level": { "table": "holding", "address": 2 },
+        "pump-on": { "table": "coil", "address": 1 },
+        "alarm": { "table": "holding", "address": 3, "type": "bool", "bit": 4 },
+        "fault": { "table": "holding", "address": 3, "type": "bool", "bit": 5 }
+    }))
+    .unwrap();
+
+    let tags = &config.devices["pump-1"].tags;
+    assert_eq!(tags["flow"].kind(), TagType::F32);
+    assert_eq!(tags["flow"].order, Some(WordOrder::Cdab));
+    assert_eq!(tags["level"].kind(), TagType::U16);
+    assert_eq!(tags["level"].scale, 1.0);
+    assert_eq!(tags["pump-on"].kind(), TagType::Bool);
+    assert_eq!(tags["flow"].span(), 0..2);
+}
+
+#[rstest::rstest]
+#[case(json!({ "x": { "table": "holding", "address": 9, "type": "f32" } }), "not inside one of the device's polled ranges")]
+#[case(json!({ "x": { "table": "input", "address": 0 } }), "not inside one of the device's polled ranges")]
+#[case(json!({ "a": { "table": "holding", "address": 0, "type": "u32" }, "b": { "table": "holding", "address": 1 } }), "shares")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "type": "bool" } }), "names its bit")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "type": "bool", "bit": 16 } }), "0 to 15")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "bit": 1 } }), "bit goes with")]
+#[case(json!({ "x": { "table": "coil", "address": 0, "type": "u16" } }), "a coil or discrete input is a bool")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "order": "cdab" } }), "order is for 32- and 64-bit")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "scale": 0.0 } }), "scale")]
+#[case(json!({ "x": { "table": "holding", "address": 0, "deadband": -1.0 } }), "deadband")]
+#[case(json!({ "Flow": { "table": "holding", "address": 0 } }), "lowercase")]
+fn Config____tag_breaks_a_rule____refused_naming_it(
+    #[case] tags: serde_json::Value,
+    #[case] says: &str,
+) {
+    let err = with_tags(tags).unwrap_err();
+
+    assert!(
+        err.contains("devices.pump-1.tags.") && err.contains(says),
+        "{err}"
+    );
+}
+
+#[test]
+fn Config____unknown_tag_field_or_type____refused() {
+    let field = with_tags(json!({ "x": { "table": "holding", "address": 0, "units": "m" } }));
+    let kind = with_tags(json!({ "x": { "table": "holding", "address": 0, "type": "f16" } }));
+
+    assert!(field.is_err());
+    assert!(kind.is_err());
+}

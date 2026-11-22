@@ -11,6 +11,16 @@
 #   deliver_to = "points"
 #   holding = [{ start = 0, count = 10 }]
 #
+# A typed value from registers it polls comes as a tag instead of those
+# registers, stored under `pump-1/tag/<name>` (MANIFEST.md, Modbus):
+#
+#   [extensions."bulkhead-modbus:modbus".devices.pump-1.tags.flow]
+#   table = "holding"
+#   address = 4
+#   type = "f32"            # registers 4 and 5
+#   order = "cdab"          # the device's word order
+#   deadband = 0.5          # send when it moves by 0.5 or more
+#
 # On an HA pair the table is one `cluster` bucket polled by the primary
 # alone, so the standby's copy comes from it and has the same revisions:
 #

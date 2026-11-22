@@ -525,7 +525,21 @@ full_every_ms = 60000                  # optional integrity scan: every point, c
 deliver_to = "points"                  # the app each scan's changes are cast to
 primary_only = false                   # poll only while the node runs singletons (an HA pair's primary)
 holding = [{ start = 0, count = 10 }]  # also input, coils, discrete
+
+# A typed value from polled registers (ROADMAP DA5b), sent in updates'
+# `tags` in place of its registers' raw points.
+[extensions."bulkhead-modbus:modbus".devices.pump-1.tags.flow]
+table = "holding"                      # holding, input, coil or discrete
+address = 4                            # its first register, or its bit's address
+type = "f32"                           # u16 (registers' default), i16, u32, i32, f32, u64, i64, f64, bool (bits' default)
+order = "cdab"                         # 32- and 64-bit: abcd (default, big-endian), cdab, badc, dcba
+scale = 0.1                            # value = raw * scale + offset; default 1
+offset = 0.0                           # default 0
+deadband = 0.5                         # send only when it moved by this from the value last sent; default 0, every change
+# bit = 3                              # with type = "bool" on a register: one of its bits, 0 to 15
 ```
+
+A tag's registers must lie in one of the device's polled ranges, and two tags share no register (bit tags may share one). An integer type without `scale` or `offset` arrives as an integer, anything else as a float; GUEST_FORMATS.md, "Modbus updates", has the format. Tags are read only: apps write registers through the `client` interface. A table entry that breaks a rule refuses the driver's start, naming the tag.
 
 Devices are polled by the driver `bulkhead-modbus`, over connections the node opens to each `address` alone. With `primary_only = true`, a device is polled instead by `bulkhead-modbus-primary`, run as a singleton: on an HA pair the primary alone runs it, while its lease holds, and a `cluster` bucket carries the table to the standby; apps' reads and writes through the `client` interface reach it through the primary's driver. The first poll after a node becomes primary sends every point. A node without `[failover]` always runs it.
 

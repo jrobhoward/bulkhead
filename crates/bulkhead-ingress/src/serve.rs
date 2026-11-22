@@ -37,6 +37,10 @@ pub type Reply = hyper::Response<Full<Bytes>>;
 pub struct Shared {
     /// The node's routes, from the host event `routes`.
     pub routes: RwLock<Routes>,
+    /// Whether the first `routes` event has come: the driver accepts no
+    /// connection before it, so none is answered "no route" for a route
+    /// the node has (the node sends the table just after `init`).
+    pub routed: tokio::sync::watch::Sender<bool>,
     /// What the driver has served.
     pub counters: Counters,
 }

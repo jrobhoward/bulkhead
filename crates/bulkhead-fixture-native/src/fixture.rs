@@ -12,6 +12,8 @@ use bulkhead_native::protocol::{
 #[derive(Default)]
 struct Fixture {
     infos: Vec<String>,
+    /// The bodies of the CBOR casts received, as hex.
+    cbor_casts: Vec<String>,
     waiting: Option<CallRef>,
     /// The state its snapshot carries, one note per line.
     notes: Vec<String>,
@@ -338,6 +340,7 @@ impl Fixture {
                 "ok".into()
             }
             "infos" => self.infos.join("\n"),
+            "cbor-casts" => self.cbor_casts.join("\n"),
             "note" => {
                 self.notes.push(rest.to_string());
                 "ok".into()
@@ -670,6 +673,10 @@ impl App for Fixture {
     }
 
     fn handle_cast(&mut self, ctx: &mut Ctx, msg: Envelope) {
+        if msg.content_type == "application/cbor" {
+            self.cbor_casts
+                .push(msg.body.iter().map(|b| format!("{b:02x}")).collect());
+        }
         let body = String::from_utf8_lossy(&msg.body).into_owned();
         if let Some(rest) = body.strip_prefix("reply ")
             && let Some(call) = self.waiting.take()

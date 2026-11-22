@@ -220,6 +220,7 @@ impl tokio_modbus::server::Service for Service {
                     full: false,
                     points: written,
                     error: None,
+                    tags: Vec::new(),
                 };
                 let _ = self.updates.send((app.clone(), update));
             }

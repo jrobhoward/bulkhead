@@ -6,7 +6,7 @@ feature). Three apps:
 
 | App | Placement | What it does |
 | --- | --- | --- |
-| `points` | a pool of 4, `hash:device` | Takes each device's updates from the Modbus extension and writes them into the node's shared `points` bucket: `<device>/<table>/<address>` and `<device>/status`. |
+| `points` | a pool of 4, `hash:device` | Takes each device's updates from the Modbus extension and writes them into the node's shared `points` bucket: `<device>/<table>/<address>`, `<device>/tag/<name>` for a device's tags (typed values, `points/bulkhead.toml`), and `<device>/status`. |
 | `hmi` | a pool of 2 | Serves the table over HTTP, `GET /scada/points`, and holds a long poll (`?after=<revision>&wait_ms=<n>`) until the bucket changes. |
 | `control` | singleton | Watches the table and raises alarms from it (rules in its `rules` config, and `<device>-offline`), takes acknowledgements and device writes, and keeps an event log, in disk buckets of its own. Version 2 (`bulkhead-v2.toml`, `--features v2`) adds a field and migrates version 1's snapshot; version 1 reads version 2's, so a rollback keeps the alarms. |
 

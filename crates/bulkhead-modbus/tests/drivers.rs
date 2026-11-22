@@ -158,6 +158,11 @@ struct Node {
 }
 
 async fn node(device: SocketAddr) -> Node {
+    node_with(device, json!({ "holding": [{ "start": 0, "count": 2 }] })).await
+}
+
+/// [`node`] with `pump-1`'s polled ranges and tags from `pump`.
+async fn node_with(device: SocketAddr, pump: serde_json::Value) -> Node {
     let p = programs();
     let ghost: SocketAddr = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -213,11 +218,14 @@ async fn node(device: SocketAddr) -> Node {
             kind: NativeProgram::Executable,
         })
     };
+    let mut pump_1 = json!({
+        "address": device.to_string(), "poll_ms": 50, "deliver_to": "scada",
+    });
+    for (k, v) in pump.as_object().unwrap() {
+        pump_1[k] = v.clone();
+    }
     let devices_args = json!({ "devices": {
-        "pump-1": {
-            "address": device.to_string(), "poll_ms": 50, "deliver_to": "scada",
-            "holding": [{ "start": 0, "count": 2 }],
-        },
+        "pump-1": pump_1,
         "ghost": { "address": ghost.to_string(), "timeout_ms": 300 },
     } });
     let server_args = json!({ "server": {
@@ -267,6 +275,22 @@ impl Node {
 
     async fn call(&self, function: &str, args: &str) -> String {
         self.ask(&format!("ext {PACKAGE} {function} {args}")).await
+    }
+
+    /// The Modbus updates `scada` received, decoded.
+    async fn updates(&self) -> Vec<bulkhead_modbus::points::Update> {
+        self.ask("cbor-casts")
+            .await
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|hex| {
+                let bytes: Vec<u8> = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                    .collect();
+                ciborium::from_reader(bytes.as_slice()).unwrap()
+            })
+            .collect()
     }
 
     /// The casts `scada` received, once one contains `text`.
@@ -342,5 +366,72 @@ async fn server____master_and_app____share_the_tables_and_writes_are_delivered()
     assert_eq!(read, vec![5, 6]);
     assert_eq!(got, r#"{"Ok":[5,6,77,0]}"#);
     assert!(infos.contains("cast"), "{infos}");
+    n.apps.stop().await;
+}
+
+/// Tags (ROADMAP DA5b): an f32 across registers 2 and 3, word-swapped, and
+/// a scaled, deadbanded u16 at register 0, delivered as `tags`; only the
+/// untagged register 1 comes as a raw point. A change inside the deadband
+/// sends nothing; one past it sends the tag.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn devices____tags____typed_scaled_and_deadbanded_in_place_of_their_registers() {
+    use bulkhead_modbus::points::{Point, Table, TagValue};
+    let device = fake_device(vec![7, 8, 0x0000, 0x4148]).await;
+    let n = node_with(
+        device,
+        json!({
+            "holding": [{ "start": 0, "count": 4 }],
+            "tags": {
+                "flow": { "table": "holding", "address": 2, "type": "f32", "order": "cdab" },
+                "level": { "table": "holding", "address": 0, "scale": 0.5, "deadband": 10.0 },
+            },
+        }),
+    )
+    .await;
+    n.received("flow").await;
+
+    let first = n.updates().await.remove(0);
+    let inside = n
+        .call("client#write-holding", r#"["pump-1", 0, [9]]"#)
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after_inside = n.updates().await.len();
+    let past = n
+        .call("client#write-holding", r#"["pump-1", 0, [40]]"#)
+        .await;
+    let mut level = None;
+    for _ in 0..100 {
+        level = n
+            .updates()
+            .await
+            .iter()
+            .skip(after_inside)
+            .find_map(|u| u.tags.iter().find(|t| t.name == "level").map(|t| t.value));
+        if level.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let tag = |name: &str| first.tags.iter().find(|t| t.name == name).map(|t| t.value);
+    assert_eq!(
+        first.points,
+        [Point {
+            table: Table::Holding,
+            address: 1,
+            value: 8
+        }]
+    );
+    assert_eq!(tag("flow"), Some(TagValue::Float(12.5)));
+    assert_eq!(tag("level"), Some(TagValue::Float(3.5)));
+    assert_eq!(
+        (inside.as_str(), past.as_str()),
+        (r#"{"Ok":null}"#, r#"{"Ok":null}"#)
+    );
+    assert_eq!(
+        after_inside, 1,
+        "a change inside the deadband sent an update"
+    );
+    assert_eq!(level, Some(TagValue::Float(20.0)));
     n.apps.stop().await;
 }

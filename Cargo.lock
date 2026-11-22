@@ -536,6 +536,7 @@ dependencies = [
  "bulkhead-native",
  "bulkhead-sdk",
  "ciborium",
+ "proptest",
  "rstest",
  "serde",
  "serde_json",
