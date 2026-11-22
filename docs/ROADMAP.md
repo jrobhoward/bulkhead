@@ -82,7 +82,7 @@ flowchart LR
 
 - **Security before features.** Phases 6 and 7 come before new platform features, and before tuning that is not measuring a new boundary.
 - **Next:** the open Phase 7 threads by the order above; Phase 8 waits on ZFS volumes (DR6) and DR4c's TLC runs.
-- **While TLC runs** (DR4c holds 12 of the 16-core machine's cores for hours at a time), take items whose result is not a benchmark: DA5b and H12. Items measured by a benchmark (DA3b, DA4b, AP1b, PF1, PF2, FO1) wait for an idle machine (their numbers would be contended).
+- **While TLC runs** (DR4c holds 12 of the 16-core machine's cores for hours at a time), take items whose result is not a benchmark: DA5c. Items measured by a benchmark (DA3b, DA4b, AP1b, PF1, PF2, FO1) wait for an idle machine (their numbers would be contended).
 - DOC1 (the app tutorial, `examples/app-tutorial`), AP4 (unconfined apps, consent on four sides), AP3 (flat supervision: `supervision.children` removed) and DR4b (a DR node apart from the witness) landed on 2026-11-21; DR3b (what DR5's drill left) and DR5 (the drill and its soak) on 2026-11-20; DR4 (activation and failback, operator fencing) on 2026-11-19, with DR2 and DR3 the same day; Phase 6's exit was met that day too, and PS6b removed the CPU limits by decision.
 - **The helper before the FreeBSD runner and ZFS**, since jails, a uid per app and datasets all need it, and one helper does all three.
 - **Driver apps do not wait for the helper:** a driver runs under the node's user without it, and under a user of its own with it, as any app (PS2).
@@ -246,9 +246,8 @@ From the comparison with ETS (BASELINE.md, 2026-10-30) and spikes S25 to S28. Go
 
 - [ ] **H6 Cheaper bucket operations: what is left.** `watch::next` as a cursor rather than a one-entry scan per step (14 to 20 times ETS's `next`); a faster hasher for the bucket map (about 4% of a read); and a batch read returning one buffer, only if an app reads many keys per call. Areas: `crates/bulkhead-host/src/services/keyvalue/`, SDK.
 - [ ] **H7 Concurrent writers** (from S26; only if an app needs it). Writers to one memory bucket serialize on its lock, so a hot key or a write-heavy mix does not scale (0.5 to 0.6 million operations per second at 50 writes in 100), and `read_concurrency` halves one hot key's writes. ETS's `write_concurrency` would need each write's revision and the quota check without the bucket's lock. Areas: keyvalue service.
-- [ ] **H8 A watched mirror in the SDK** (S28 done, 2026-10-31). `bulkhead_sdk::watch::Mirror`: a bucket or prefix kept in the instance by a watch started first and a scan after it, a hash map for point reads and a B-tree only for ordered ones, read without requests; with WRITING_APPS guidance on when one pays (reads well above ten times the writes; an instance that stays live). A conformance case. First, the notice path, about 9 µs per change per mirror: a notice that carries the value and revision, a watch's pending changes as one event per callback, and an index of prefix watches for the writer's 0.6 to 0.9 µs per mirror; keep what pays. Areas: SDK, conformance, protocol, keyvalue service.
+- [ ] **H8 A watched mirror in the SDK** (S28 done, 2026-10-31). `bulkhead_sdk::watch::Mirror`: a bucket or prefix kept in the instance by a watch started first and a scan after it, a hash map for point reads and a B-tree only for ordered ones, read without requests; WRITING_APPS ("Reading shared data") says when one pays and how to build one by hand until then. A conformance case. First, the notice path, about 9 µs per change per mirror: a notice that carries the value and revision, a watch's pending changes as one event per callback, and an index of prefix watches for the writer's 0.6 to 0.9 µs per mirror; keep what pays. Areas: SDK, conformance, protocol, keyvalue service.
 - [ ] **H11 Filters pushed into scans** (when an app scans for a few matches in many). `scan` with simple predicates on the key and counts, as ETS's `select` and `select_count`. Areas: protocol, keyvalue service, SDK.
-- [ ] **H12 Docs.** WRITING_APPS.md: which read path for which data (bucket, batch, scan, mirror, a published bucket, an owner pool), with the numbers; DESIGN.md's keyvalue section updated.
 
 ## Performance
 
@@ -290,11 +289,9 @@ Alongside the phases, measuring every new boundary first (S36, S37, S39, S40); o
 
 ## Doc debt
 
-
 Narrative docs a change left out of date, to fix in a later docs pass:
 
-- README.md, CLAUDE.md and DESIGN.md ("Instance model", "Isolation", "Operating a node") describe native apps as Linux only and every app under the node's user: true as built, and to be rewritten as Phase 6 lands, not before.
-- ARCHITECTURE.md ("Native-process apps", "Threads and tasks") does not describe sender channels (AP1): the node's task per sender channel, and the port's `Link` it shares with the instance's task.
+- None (the last pass: 2026-11-22).
 
 ## Investigations
 

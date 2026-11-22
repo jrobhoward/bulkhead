@@ -21,8 +21,8 @@ a restricted native process, with Erlang/OTP-style semantics:
   (Linux or FreeBSD), started through `bulkhead-runner`, which fences it
   with Landlock and seccomp (Capsicum on FreeBSD) before the app's code runs; it talks to its node
   through rings in shared memory, each side spinning briefly before it
-  sleeps, so a request to the node costs 4 to 5 µs and a call between
-  instances 13 µs. Instances are meant to live long and pass messages and
+  sleeps, so a request to the node costs 1.4 to 3.1 µs and a call between
+  instances 5 to 8 µs (16-core machine, 2026-11-06). Instances are meant to live long and pass messages and
   reach databases efficiently, not to be spawned by the thousand as
   Erlang's processes are.
 - **Messaging** is call (request and reply, with a timeout) and cast (fire and
@@ -39,7 +39,10 @@ a restricted native process, with Erlang/OTP-style semantics:
   steps, for apps whose state lives outside the instance.
 - **Isolation**: each instance is its own process with a memory limit, a
   deadline per callback, and only the
-  capabilities its manifest declares and the operator grants.
+  capabilities its manifest declares and the operator grants. Under the
+  privileged helper (`bulkhead-priv`), each app runs as a user of its own,
+  in a cgroup, namespaces and a minimal root on Linux or a jail on
+  FreeBSD, and the node holds no capabilities.
 - **Host services** behind those capabilities: key-value buckets (memory,
   disk, or replicated across a pair), watches, process groups, config,
   secrets, logging, metrics, timers, HTTP ingress and allow-listed HTTP
@@ -70,10 +73,18 @@ within a node, and a shared-memory channel and published
 buckets brought a call between native instances from 41 to 13 µs and a
 read of read-mostly data into ETS's range (`docs/BASELINE.md`). rustbridge's
 bundle format 1.2 comes from its `experiment/wasm` branch on GitHub until it
-is released.
+is released. Since then, Phase 7 moved the protocols out of the node (HTTP
+ingress, SQL, HTTP egress, Modbus and name lookups run in driver apps;
+met 2026-11-15), Phase 6 hardened the core (each app under a user of its
+own, seccomp allow-lists, FreeBSD with a jail per instance; met
+2026-11-19), and disaster recovery has a second site with activation and
+failback (Phase 8, ZFS volumes still to come).
 
 - [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md): run a node and
   deploy, upgrade and roll back an app.
+- [`examples/app-tutorial`](examples/app-tutorial/README.md): an app of
+  one's own from an empty crate, through failover and a DR site, as
+  scripts.
 - [`examples/tutorial`](examples/tutorial/README.md): one node, then a pair
   and a witness with failover, a hot standby, and a database, as scripts.
 - [`docs/WRITING_APPS.md`](docs/WRITING_APPS.md): write an app with

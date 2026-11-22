@@ -8,8 +8,10 @@ Bulkhead is a clustered application server with Erlang/OTP-style
 semantics: mailboxes, call/cast, links, monitors, supervisors and hot
 upgrade with explicit state migration. Nodes connect over QUIC with mutual
 TLS. It is a fork of Paddock (2026-10-31) that runs each app instance as a
-native OS process, sandboxed by `bulkhead-runner` (Landlock, seccomp) and
-talking to its node over shared-memory rings. Apps see only the capabilities their manifest declares
+native OS process, sandboxed by `bulkhead-runner` (Landlock and seccomp on
+Linux, Capsicum on FreeBSD), each app under a user of its own with the
+privileged helper (`bulkhead-priv`), and talking to its node over
+shared-memory rings. Apps see only the capabilities their manifest declares
 and an operator grants. Bundles use the rustbridge `.rbp` format.
 `docs/PADDOCK.md` compares the two.
 
