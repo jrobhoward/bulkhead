@@ -126,3 +126,81 @@ fn dr_apps_metrics____held_and_not_ready____both_gauges() {
     assert!(text.contains("\nbulkhead_dr_apps_not_ready 1\n"), "{text}");
     assert!(text.contains("# TYPE bulkhead_dr_apps_not_ready gauge"));
 }
+
+/// An app asking to run unconfined (ROADMAP AP4).
+fn unconfined_manifest() -> bulkhead_bundle::manifest::AppManifest {
+    use bulkhead_bundle::manifest::{AppInfo, AppManifest, AppSpec, ProgramRef, Provenance};
+    AppManifest {
+        app: AppInfo {
+            name: "bridge".into(),
+            version: semver::Version::new(1, 0, 0),
+            description: None,
+            authors: vec![],
+            license: None,
+            repository: None,
+        },
+        program: ProgramRef {
+            path: "bridge".into(),
+            checksum: "sha256:00".into(),
+        },
+        provenance: Provenance {
+            signer_key: "RWQ".into(),
+            build_info: None,
+            sbom: None,
+        },
+        spec: AppSpec::from_json_value(
+            &serde_json::json!({ "unconfined": { "reason": "rdkafka" } }),
+        )
+        .unwrap(),
+    }
+}
+
+#[rstest::rstest]
+#[case("", true, Some("no privileged helper"))]
+#[case("[priv]\n", true, Some("[native] allow_unconfined"))]
+#[case(
+    "[priv]\n[native]\nallow_unconfined = true\n",
+    false,
+    Some("does not grant bulkhead:unconfined to bridge")
+)]
+#[case("[priv]\n[native]\nallow_unconfined = true\n", true, None)]
+fn unconfined_refusal____each_consent____refused_until_all_given(
+    #[case] config: &str,
+    #[case] granted: bool,
+    #[case] says: Option<&str>,
+) {
+    use bulkhead_bundle::manifest::Capability;
+    let config = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n{config}")).unwrap();
+    let manifest = unconfined_manifest();
+    let policy = if granted {
+        "[apps.bridge]\ngrant = [\"bulkhead:unconfined\"]\n"
+    } else {
+        ""
+    };
+    let grant = bulkhead_bundle::effective_grant(
+        &manifest.spec,
+        &bulkhead_bundle::OperatorPolicy::from_toml_str(policy)
+            .unwrap()
+            .granted("bridge", "RWQ"),
+    );
+
+    let refusal = deploy::unconfined_refusal(&manifest, &grant, &config);
+
+    assert_eq!(grant.granted.contains(&Capability::Unconfined), granted);
+    match says {
+        Some(says) => assert!(
+            refusal.as_deref().is_some_and(|r| r.contains(says)),
+            "{refusal:?}"
+        ),
+        None => assert_eq!(refusal, None),
+    }
+}
+
+#[test]
+fn config____allow_unconfined_without_priv____refused() {
+    let err = NodeConfig::from_toml_str("data_dir = \"/d\"\n[native]\nallow_unconfined = true\n")
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("allow_unconfined needs [priv]"), "{err}");
+}

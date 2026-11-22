@@ -111,6 +111,34 @@ fn OperatorPolicy____extension_in_grant____granted_as_extension() {
 }
 
 #[test]
+fn OperatorPolicy____unconfined_by_app_name____granted_to_that_app_only() {
+    let policy =
+        OperatorPolicy::from_toml_str("[apps.bridge]\ngrant = [\"bulkhead:unconfined\"]\n")
+            .unwrap();
+
+    let bridge = policy.granted("bridge", "RWQ");
+    let other = policy.granted("other", "RWQ");
+
+    assert!(bridge.capabilities.contains(&Capability::Unconfined));
+    assert!(!other.capabilities.contains(&Capability::Unconfined));
+}
+
+#[rstest::rstest]
+#[case("[defaults]\ngrant = [\"bulkhead:unconfined\"]\n", "[defaults]")]
+#[case(
+    "[signers.ci]\nkey = \"RWQ\"\ngrant = [\"bulkhead:unconfined\"]\n",
+    "[signers.ci]"
+)]
+fn OperatorPolicy____unconfined_not_by_name____refused_naming_where(
+    #[case] text: &str,
+    #[case] place: &str,
+) {
+    let err = OperatorPolicy::from_toml_str(text).unwrap_err().to_string();
+
+    assert!(err.contains("by name only") && err.contains(place), "{err}");
+}
+
+#[test]
 fn OperatorPolicy____reserved_or_bad_key____refused() {
     let reserved = OperatorPolicy::from_toml_str("[defaults]\ngrant = [\"bulkhead:telepathy\"]\n");
     let bad = OperatorPolicy::from_toml_str("[defaults]\ngrant = [\"nonsense\"]\n");

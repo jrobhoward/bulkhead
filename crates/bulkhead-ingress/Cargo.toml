@@ -25,7 +25,11 @@ ring = { workspace = true }
 rustls-pki-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt", "net", "time", "sync"] }
+# `signal` though the driver handles none: the node turns it on whenever
+# both are built together (cargo unifies features), and its driver makes a
+# socket pair that `--profile ingress` must allow; on here too, the driver's
+# own tests run the same binary as a release (DA2b's fix, 2026-11-21).
+tokio = { workspace = true, features = ["rt", "net", "time", "sync", "signal"] }
 tokio-rustls = { workspace = true }
 
 [dev-dependencies]

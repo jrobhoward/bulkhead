@@ -158,7 +158,7 @@ pub fn start(runner: &Path) -> Started {
     let mut text = format!(
         "node = /bin/false\nnode_args = \nnode_uid = {node_uid}\nnode_gid = {node_uid}\n\
          runner = {}\nuids = {first_uid}-{}\nstate = {}\nbinds = {}\n\
-         memory_max = 1GiB\npids_max = 256\nports = 81\n",
+         memory_max = 1GiB\npids_max = 256\nports = 81\nunconfined = loose\n",
         runner.display(),
         first_uid + 99,
         state.display(),

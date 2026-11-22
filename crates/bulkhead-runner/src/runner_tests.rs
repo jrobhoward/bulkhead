@@ -53,6 +53,23 @@ fn parse____executable_only____landlock_required() {
 
     assert_eq!(found.program, Program::Executable("/b/app".into()));
     assert!(found.landlock_required);
+    assert!(!found.unconfined);
+}
+
+#[test]
+fn parse____unconfined____kept() {
+    let found = args("--executable /b/app --write /data --unconfined").unwrap();
+
+    assert!(found.unconfined);
+}
+
+#[rstest::rstest]
+#[case("--executable /b/app --unconfined --profile ingress")]
+#[case("--executable /b/app --unconfined --accept-fd 8")]
+fn parse____unconfined_driver____refused(#[case] s: &str) {
+    let found = args(s).unwrap_err();
+
+    assert!(found.contains("driver keeps its fences"), "{found}");
 }
 
 #[rstest::rstest]
@@ -241,6 +258,9 @@ fn ingress_profile____the_apps_list_without_process_and_file_changes____and_buil
         libc::SYS_accept4,
         libc::SYS_openat,
         libc::SYS_futex,
+        // tokio's signal driver, built in beside the node (the e2e run on
+        // the Ubuntu VM, 2026-11-21).
+        libc::SYS_socketpair,
     ] {
         assert!(ingress.contains(&kept), "{kept}");
     }

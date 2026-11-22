@@ -335,6 +335,17 @@ mod process {
                 launch.args.push("--landlock".into());
                 launch.args.push("best-effort".into());
             }
+            // Without the runner's fences (ROADMAP AP4): only as the app's
+            // own user under the helper, never as the node's.
+            if spec.granted.contains(&Capability::Unconfined) {
+                if config.helper.is_none() {
+                    return Err(format!(
+                        "{} is unconfined, which needs the privileged helper ([priv])",
+                        spec.app
+                    ));
+                }
+                launch.args.push("--unconfined".into());
+            }
             // A lease's first deadline is in the pipe before the runner
             // starts; the rest follow from a task.
             let lease_pipe = match &lease {
@@ -914,6 +925,7 @@ mod process {
             env,
             binds,
             fds: targets,
+            unconfined: spec.granted.contains(&Capability::Unconfined),
         };
         let started = helper.spawn(request, fds).await?;
         Ok(HelperProc {

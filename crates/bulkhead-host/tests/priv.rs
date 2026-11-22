@@ -174,6 +174,80 @@ async fn helper____seccomp____its_filter_and_the_runners_on_an_instance() {
     assert_eq!(instances, ["4"]);
 }
 
+/// The app `loose`, which the test helper's configuration lists as
+/// unconfined (ROADMAP AP4), with the node's grant.
+fn unconfined(app: &str) -> InstanceSpec {
+    let mut s = spec(app);
+    s.granted.insert(Capability::Unconfined);
+    s
+}
+
+/// An unconfined instance: no runner fences (Linux: the helper's filter
+/// alone; FreeBSD: out of capability mode), the host's network and `/etc`,
+/// and still its own user and PID namespace or jail.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____unconfined_app____own_sockets_and_etc_under_its_user() {
+    let Some(started) = helper("helper____unconfined_app") else {
+        return;
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, unconfined("loose")).unwrap();
+
+    let connect = ask(&i, &format!("connect {address}")).await;
+    let hosts = ask(&i, "read /etc/hosts").await;
+    let ids = ask(&i, "ids").await;
+    let node = ask(
+        &i,
+        &format!("read {}", started.dir.path().join("priv.conf").display()),
+    )
+    .await;
+
+    assert_eq!(connect, "ok", "the host's network");
+    assert_eq!(hosts, "ok", "the host's /etc, read-only");
+    let uid = started.first_uid;
+    assert_eq!(ids, format!("{uid} {uid}"), "its own user");
+    assert!(node.starts_with("err:"), "{node}");
+    #[cfg(target_os = "linux")]
+    {
+        let shadow = ask(&i, "read /etc/shadow").await;
+        let pid = ask(&i, "os-pid").await;
+        let children =
+            std::fs::read_to_string(format!("/proc/{0}/task/{0}/children", started.pid())).unwrap();
+        let filters: Vec<String> = children
+            .split_whitespace()
+            .map(|pid| proc_status(pid.parse().unwrap(), "Seccomp_filters"))
+            .collect();
+        assert!(shadow.starts_with("err:"), "{shadow}");
+        assert_eq!(pid, "1", "its PID namespace");
+        assert_eq!(filters, ["1"], "the helper's filter alone");
+    }
+}
+
+/// The node's grant alone does not unconfine an app: the helper refuses
+/// one its own configuration does not list.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____unconfined_app_not_listed____refused_by_the_helper() {
+    let Some(started) = helper("helper____unconfined_app_not_listed") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+
+    let i = rt.spawn(&app, unconfined("alpha")).unwrap();
+    let reason = i.wait().await;
+
+    let ExitReason::Crashed(why) = &reason else {
+        panic!("{reason:?}");
+    };
+    assert!(
+        why.contains("not unconfined in the helper's configuration"),
+        "{why}"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn helper____minimal_root____the_system_hidden() {

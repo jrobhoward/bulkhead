@@ -93,7 +93,7 @@ impl Node {
         match &result {
             Ok(r) => self.audit.record(
                 "upgrade",
-                json!({ "app": name, "from": r.from, "to": r.to, "mode": r.mode, "restart_requested": params.restart, "approved": r.approved, "granted": self.st().info.get(name).map(|i| i.granted.clone()) }),
+                json!({ "app": name, "from": r.from, "to": r.to, "mode": r.mode, "restart_requested": params.restart, "approved": r.approved, "granted": self.st().info.get(name).map(|i| i.granted.clone()), "unconfined": self.st().info.get(name).and_then(|i| i.unconfined.clone()) }),
             ),
             Err(e) => self.audit.record("upgrade_refused", json!({ "app": name, "kind": e.kind(), "reason": e.to_string() })),
         }

@@ -227,6 +227,25 @@ fn AppSpec____malformed____parse_error_names_path(
 }
 
 #[test]
+fn AppSpec____unconfined____declares_the_capability_beside_the_section() {
+    let spec = AppSpec::from_json_value(&json!({
+        "unconfined": { "reason": "rdkafka opens its own sockets" },
+        "capabilities": { "bulkhead:logging": {} }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        spec.unconfined.as_ref().map(|u| u.reason.as_str()),
+        Some("rdkafka opens its own sockets")
+    );
+    assert_eq!(spec.capabilities.declared(), vec![Capability::Logging]);
+    assert_eq!(
+        spec.declared(),
+        vec![Capability::Logging, Capability::Unconfined]
+    );
+}
+
+#[test]
 fn AppSpec____memory_max_above_4_gib____accepted() {
     let spec: AppSpec =
         serde_json::from_value(json!({ "limits": { "memory_max": "64GiB" } })).unwrap();
@@ -264,6 +283,7 @@ fn AppSpec____memory_max_above_4_gib____accepted() {
 #[case(json!({ "registered_names": ["a", "a"] }), "registered_names[1]")]
 #[case(json!({ "dependencies": [{ "app": "b", "version": "1" }, { "app": "b", "version": "2" }] }), "dependencies[1].app")]
 #[case(json!({ "supervision": { "period_ms": 0 } }), "supervision.period_ms")]
+#[case(json!({ "unconfined": { "reason": " " } }), "unconfined.reason")]
 #[case(json!({ "supervision": { "backoff": { "initial_ms": 10, "max_ms": 5 } } }), "supervision.backoff.max_ms")]
 #[case(json!({ "upgrade": { "mode": "snapshot" } }), "upgrade.snapshot_version")]
 #[case(json!({ "capabilities": { "bulkhead:keyvalue": { "buckets": { "Bad Name": {} } } } }), "capabilities.bulkhead:keyvalue.buckets.Bad Name")]

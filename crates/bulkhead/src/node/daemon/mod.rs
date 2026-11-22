@@ -122,6 +122,9 @@ struct DeployInfo {
     warnings: Vec<String>,
     /// The registered names the manifest lists, reserved for this app.
     names: Vec<String>,
+    /// Its manifest's reason for running unconfined (ROADMAP AP4); a
+    /// build refuses one this node may not run so.
+    unconfined: Option<String>,
 }
 
 impl Node {
@@ -159,9 +162,7 @@ impl Node {
             }
             None => OperatorPolicy::default(),
         };
-        if config.trusted_keys.is_empty() {
-            tracing::warn!("no trusted keys configured: every deploy will be refused");
-        }
+        warn_config(&config);
         let desired = store.load_state()?;
         if config.cluster.role == ClusterRole::Witness
             && config.dr.is_none()
@@ -329,9 +330,9 @@ impl Node {
         // The metrics a driver reads: the runtime's and the node's own,
         // kept here while the runtime holds the closure weakly (ROADMAP DA7).
         let render: bulkhead_host::MetricsText = {
-            let (rt, quic) = (node.rt.clone(), node.quic.clone());
+            let (rt, quic, apps) = (node.rt.clone(), node.quic.clone(), node.apps.clone());
             let held = node.config.dr.is_some().then(|| node.held.clone());
-            Arc::new(move || metrics_text(&rt, &quic, held.as_ref()))
+            Arc::new(move || metrics_text(&rt, &quic, &apps, held.as_ref()))
         };
         node.rt.set_metrics_text(&render);
         let _ = node.metrics_text.set(KeptMetricsText(render));
@@ -382,7 +383,7 @@ impl Node {
     #[must_use]
     pub fn metrics(&self) -> String {
         let held = self.config.dr.is_some().then_some(&self.held);
-        metrics_text(&self.rt, &self.quic, held)
+        metrics_text(&self.rt, &self.quic, &self.apps, held)
     }
 
     /// Reload every HTTPS ingress's certificates from their files. An
@@ -531,9 +532,11 @@ impl std::fmt::Debug for KeptMetricsText {
 fn metrics_text(
     rt: &Runtime,
     quic: &std::sync::Mutex<Option<QuicTransport>>,
+    apps: &Apps,
     held: Option<&dr_deploys::Held>,
 ) -> String {
     let mut text = rt.render_metrics();
+    text.push_str(&unconfined_metrics(apps));
     let quic = quic
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -593,6 +596,33 @@ fn dr_metrics(lag: Option<Duration>, commit: Option<u64>) -> String {
 /// The pair's apps a DR node holds (ROADMAP DR3), in the Prometheus text
 /// format: how many, and how many would not start here or have a grant
 /// that differs from the primary's.
+/// What node config makes worth a warning at the node's start.
+fn warn_config(config: &NodeConfig) {
+    if config.trusted_keys.is_empty() {
+        tracing::warn!("no trusted keys configured: every deploy will be refused");
+    }
+    if config.native.allow_unconfined {
+        tracing::warn!(
+            "[native] allow_unconfined: apps that policy grants bulkhead:unconfined by name, \
+             and the helper's configuration lists, run without the runner's fences"
+        );
+    }
+}
+
+/// The apps the node runs without the runner's fences (ROADMAP AP4).
+fn unconfined_metrics(apps: &Apps) -> String {
+    let n = apps
+        .names()
+        .iter()
+        .filter_map(|n| apps.app(n))
+        .filter(|a| a.deployment().manifest.spec.unconfined.is_some())
+        .count();
+    format!(
+        "# HELP bulkhead_unconfined_apps Apps this node runs unconfined, without the runner's \
+         fences.\n# TYPE bulkhead_unconfined_apps gauge\nbulkhead_unconfined_apps {n}\n"
+    )
+}
+
 fn dr_apps_metrics(apps: usize, not_ready: usize) -> String {
     format!(
         "# HELP bulkhead_dr_apps The pair's apps the DR node holds, deployed and not started.\n\

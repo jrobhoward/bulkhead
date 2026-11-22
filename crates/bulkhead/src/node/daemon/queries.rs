@@ -102,6 +102,7 @@ impl Node {
             new_version: app.new_side.as_ref().map(|n| n.version.clone()),
             new_traffic: app.new_side.as_ref().map(|n| n.percent),
             built_in: false,
+            unconfined: self.st().info.get(name).and_then(|i| i.unconfined.clone()),
         }
     }
 
@@ -132,6 +133,7 @@ impl Node {
             new_version: None,
             new_traffic: None,
             built_in: true,
+            unconfined: None,
         }
     }
 

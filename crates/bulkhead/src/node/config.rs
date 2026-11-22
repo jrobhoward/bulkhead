@@ -1158,6 +1158,11 @@ pub struct NativeBinding {
     /// Run native apps on a Linux kernel without Landlock (FreeBSD's fence
     /// is Capsicum, always present).
     pub landlock_optional: bool,
+    /// Let an app run without the runner's fences when its manifest asks
+    /// (`unconfined`) and policy grants `bulkhead:unconfined` to it by name
+    /// (ROADMAP AP4). Needs `[priv]`, whose own configuration must list the
+    /// app too. Off by default.
+    pub allow_unconfined: bool,
     /// How long, in microseconds, the node and a native app spin waiting
     /// for each other before they sleep; 0 always sleeps.
     pub spin_us: u64,
@@ -1185,6 +1190,7 @@ impl Default for NativeBinding {
             ping_interval_ms: 10_000,
             ping_timeout_ms: 5_000,
             landlock_optional: false,
+            allow_unconfined: false,
             spin_us: u64::try_from(host.spin.as_micros()).unwrap_or(20),
             sender_spin_us: u64::try_from(host.sender_spin.as_micros()).unwrap_or(50),
         }
@@ -1458,6 +1464,13 @@ impl NodeConfig {
         if self.privileges.is_some() && n.cgroup.is_some() {
             return Err(NodeError::Invalid(
                 "node config: native.cgroup and [priv] together: the helper makes each instance's cgroup".into(),
+            ));
+        }
+        if n.allow_unconfined && self.privileges.is_none() {
+            return Err(NodeError::Invalid(
+                "node config: native.allow_unconfined needs [priv]: an unconfined app runs as \
+                 its own user under the privileged helper, never as the node's"
+                    .into(),
             ));
         }
         Ok(())

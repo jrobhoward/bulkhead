@@ -61,7 +61,6 @@ pub fn effective_grant(spec: &AppSpec, operator: &Granted) -> EffectiveGrant {
         .cloned()
         .partition(|package| operator.extensions.contains(package));
     let (granted, denied): (BTreeSet<Capability>, BTreeSet<Capability>) = spec
-        .capabilities
         .declared()
         .into_iter()
         .partition(|c| operator_grants.contains(c));

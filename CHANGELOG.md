@@ -22,9 +22,13 @@ All notable changes are recorded here. The format follows
 - The HTTP ingress driver runs under a narrower seccomp list than other
   apps (ROADMAP DA2b): the runner's `--profile ingress`
   (`DriverProfile::seccomp_profile`) leaves out starting and waiting for
-  processes, every call that writes or changes files, copies between
-  descriptors and socket pairs. Linux only; FreeBSD's Capsicum is
-  unchanged.
+  processes, every call that writes or changes files, and copies between
+  descriptors. Linux only; FreeBSD's Capsicum is unchanged. It first left
+  out socket pairs too, which crashed the driver at its start
+  (`crashed: syscall 53`) wherever it was built beside the node: cargo
+  then gives tokio its `signal` feature, whose driver makes an `AF_UNIX`
+  pair (found by `scripts/priv-e2e-systemd.sh` on the Ubuntu VM,
+  2026-11-21).
 - `bulkhead list` shows the node's own drivers after the deployed apps,
   marked `built-in`, and `bulkhead status` shows a driver too and an
   app's HTTP routes (ROADMAP DA2b). The API lists them only when asked
@@ -727,6 +731,28 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Unconfined apps, an escape hatch (ROADMAP AP4): a manifest's
+  `unconfined = { reason = "..." }` runs the app without the runner's
+  fences (`bulkhead-runner --unconfined`: no seccomp list or Landlock on
+  Linux, no capability mode on FreeBSD), with sockets of its own on the
+  host's network, as its own user under the privileged helper, in its
+  cgroup or jail, the helper's minimal root with `/etc` read-only (on
+  FreeBSD `/usr` whole too) and the helper's inherited seccomp list.
+  Four consents: the manifest; policy's `bulkhead:unconfined`, granted
+  in the app's own `[apps.<name>]` entry only (policy granting it in
+  `[defaults]` or `[signers.*]` is refused); node config's
+  `[native] allow_unconfined`, which needs `[priv]`; and the helper's
+  own `unconfined = <app>, ...`, without which it refuses the spawn
+  (and the runner's flag in any other). The node refuses a deploy or
+  upgrade short of the first three, and does not start a stored one
+  (restore, start, a DR copy). It is a capability, so an upgrade that
+  adds it needs `--approve`. `bulkhead list` marks the app
+  `(unconfined)`, `bulkhead status` shows its reason (`AppSummary`
+  gains `unconfined`), the `deploy` and `upgrade` audit records carry
+  it, the node warns at each start of it and when `allow_unconfined`
+  is set, and `bulkhead_unconfined_apps` counts such apps. The helper's
+  `Spawn` request gains `unconfined`: node and helper must be the same
+  release.
 - A disaster-recovery copy of the pair's replicated log (ROADMAP DR2): a
   node with `[dr] pair = [1, 2]`, the witness or one of its own, pulls
   committed entries from either pair node over the cluster transport,

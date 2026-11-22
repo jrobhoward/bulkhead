@@ -45,7 +45,11 @@ pub fn apps(apps: &[AppSummary]) -> String {
                 } else {
                     a.version.clone()
                 },
-                a.status.clone(),
+                if a.unconfined.is_some() {
+                    format!("{} (unconfined)", a.status)
+                } else {
+                    a.status.clone()
+                },
                 a.instances.to_string(),
                 a.previous.clone().unwrap_or_else(|| "-".into()),
             ]
@@ -170,6 +174,11 @@ pub fn detail(d: &AppDetail) -> String {
     ));
     if !d.runs_as.is_empty() {
         out.push(format!("runs as:   {}", d.runs_as));
+    }
+    if let Some(why) = &s.unconfined {
+        out.push(format!(
+            "unconfined: {why} (no seccomp, Landlock or capability mode; the host's network)"
+        ));
     }
     if let Some((count, bytes)) = d.blobs {
         out.push(format!("blobs:     {count}, {bytes} bytes"));

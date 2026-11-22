@@ -45,10 +45,15 @@ pub enum Capability {
     /// `bulkhead:blobs`: data passed between apps as sealed memory
     /// (ROADMAP BL1).
     Blobs,
+    /// `bulkhead:unconfined`: run without the runner's fences (ROADMAP
+    /// AP4). Declared by the manifest's `unconfined` section, not under
+    /// `capabilities`, and granted only by policy's `[apps.<name>]`.
+    Unconfined,
 }
 
 impl Capability {
-    /// Every capability.
+    /// Every capability declared under the manifest's `capabilities`
+    /// (all but [`Capability::Unconfined`]).
     pub const ALL: &'static [Self] = &[
         Self::Logging,
         Self::Config,
@@ -81,13 +86,18 @@ impl Capability {
             Self::Metrics => "bulkhead:metrics",
             Self::Groups => "bulkhead:groups",
             Self::Blobs => "bulkhead:blobs",
+            Self::Unconfined => "bulkhead:unconfined",
         }
     }
 
     /// The capability with this key.
     #[must_use]
     pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|c| c.key() == key)
+        Self::ALL
+            .iter()
+            .copied()
+            .chain([Self::Unconfined])
+            .find(|c| c.key() == key)
     }
 }
 
@@ -285,6 +295,7 @@ impl Capabilities {
             Capability::Metrics => self.metrics.is_some(),
             Capability::Groups => self.groups.is_some(),
             Capability::Blobs => self.blobs.is_some(),
+            Capability::Unconfined => false,
         }
     }
 

@@ -111,6 +111,13 @@ fn start() -> Shared {
             .unwrap();
         s.routes.set("ghost", vec![route("/ghost")]).unwrap();
         s.routes.set("phantom", vec![route("/phantom")]).unwrap();
+        // The driver learns the table from an event: wait until it has
+        // the last route, or a test that runs first finds none (404).
+        let main = s.address("main");
+        until("the driver has the routes", || async {
+            request(main, "GET", "/phantom", &[], "").await.status != 404
+        })
+        .await;
         s
     });
     Shared {

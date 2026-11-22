@@ -164,6 +164,11 @@ pub const NAMESPACES: u64 = (libc::CLONE_NEWNS
     | libc::CLONE_NEWIPC
     | libc::CLONE_NEWUTS) as u64;
 
+/// The network namespace among [`NAMESPACES`], left out for an unconfined
+/// instance (ROADMAP AP4).
+#[cfg(target_os = "linux")]
+pub const NETWORK: u64 = libc::CLONE_NEWNET as u64;
+
 /// `clone3` like `fork`, with `namespaces` (some of [`NAMESPACES`]) and
 /// straight into the cgroup `cgroup` (an open directory), with a pidfd
 /// for the parent.

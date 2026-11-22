@@ -1,8 +1,15 @@
 //! `bulkhead-runner`: the launcher a node runs every native app through.
 //!
 //! ```text
-//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]... [--profile app|ingress]
+//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]... [--profile app|ingress] [--unconfined]
 //! ```
+//!
+//! `--unconfined` (ROADMAP AP4) leaves out steps 2 and 3 and, on FreeBSD,
+//! capability mode: the app runs as the helper started it, under its own
+//! user, in its cgroup or jail, with the host's network. The node passes
+//! it only with the operator's consent on every side, and the helper
+//! refuses it for an app its own configuration does not list. Steps 0
+//! and 1 stay, the watchdog fenced as ever.
 //!
 //! In order, before any code from the bundle runs:
 //!
@@ -52,7 +59,6 @@ pub mod sandbox;
 pub mod seccomp;
 pub mod watchdog;
 
-#[cfg(not(target_os = "freebsd"))]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -96,6 +102,9 @@ pub struct Args {
     /// `--profile`: which system calls the app may make (Linux; on
     /// FreeBSD Capsicum fences every app alike).
     pub profile: Profile,
+    /// `--unconfined`: no Landlock, seccomp filter or capability mode for
+    /// the app (ROADMAP AP4).
+    pub unconfined: bool,
 }
 
 /// Which system calls a process gets (the runner's `--profile`, ROADMAP
@@ -138,9 +147,14 @@ impl Args {
         let mut lease = false;
         let mut accept_fds = Vec::new();
         let mut profile = Profile::App;
+        let mut unconfined = false;
         while let Some(flag) = it.next() {
             if flag == bulkhead_native::lease::FLAG {
                 lease = true;
+                continue;
+            }
+            if flag == "--unconfined" {
+                unconfined = true;
                 continue;
             }
             let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -174,6 +188,9 @@ impl Args {
             }
         }
         let program = program.ok_or("--library or --executable is required")?;
+        if unconfined && (profile != Profile::App || !accept_fds.is_empty()) {
+            return Err("--unconfined is for apps; a driver keeps its fences".into());
+        }
         Ok(Self {
             program,
             read,
@@ -182,6 +199,7 @@ impl Args {
             lease,
             accept_fds,
             profile,
+            unconfined,
         })
     }
 }
@@ -206,12 +224,16 @@ pub fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     #[cfg(target_os = "linux")]
-    if let Err(e) = sandbox::restrict(&args) {
+    if !args.unconfined
+        && let Err(e) = sandbox::restrict(&args)
+    {
         eprintln!("bulkhead-runner: landlock: {e}");
         return ExitCode::from(2);
     }
     #[cfg(target_os = "linux")]
-    if let Err(e) = seccomp::install(&args.accept_fds, args.profile) {
+    if !args.unconfined
+        && let Err(e) = seccomp::install(&args.accept_fds, args.profile)
+    {
         eprintln!("bulkhead-runner: seccomp: {e}");
         return ExitCode::from(2);
     }
@@ -242,8 +264,11 @@ pub fn main() -> ExitCode {
             .filter_map(|var| std::env::var(var).ok().map(|v| (var.to_string(), v)))
             .collect();
             #[cfg(target_os = "freebsd")]
-            return capsicum::exec(&args, path, env);
-            #[cfg(not(target_os = "freebsd"))]
+            if !args.unconfined {
+                return capsicum::exec(&args, path, env);
+            }
+            // Unconfined, the app opens its preopens by path, as without
+            // the descriptors capability mode needs.
             {
                 let mut cmd = std::process::Command::new(path);
                 cmd.env_clear().envs(env);

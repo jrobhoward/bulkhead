@@ -33,6 +33,14 @@ fn parse____a_full_file____every_value() {
     assert_eq!(c.tmp_size, 16 << 20);
     assert!(c.cgroup.is_some());
     assert_eq!(c.devfs_ruleset, 4290);
+    assert!(c.unconfined.is_empty());
+}
+
+#[test]
+fn parse____unconfined____the_listed_apps() {
+    let c = Config::parse(&format!("{GOOD}unconfined = kafka-bridge, amqp\n")).unwrap();
+
+    assert_eq!(c.unconfined, ["kafka-bridge", "amqp"]);
 }
 
 #[rstest]
@@ -63,6 +71,7 @@ fn parse____a_full_file____every_value() {
 )]
 #[case("pids_max = 4096", "pids_max = 0", "above 0")]
 #[case("memory_max = 8GiB", "memory_max = lots", "not a size")]
+#[case("ports = 80, 443", "unconfined = ../etc", "not an app name")]
 fn parse____a_bad_value____refused_saying_why(
     #[case] from: &str,
     #[case] to: &str,

@@ -72,6 +72,10 @@ pub struct AppSummary {
     /// (ROADMAP DA2b).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub built_in: bool,
+    /// Why the app runs unconfined, without the runner's fences (ROADMAP
+    /// AP4): its manifest's reason. Absent for a fenced app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unconfined: Option<String>,
 }
 
 /// One app in detail, as `GET /v1/apps/{app}` returns it.

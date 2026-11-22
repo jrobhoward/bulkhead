@@ -155,7 +155,33 @@ impl OperatorPolicy {
     ///
     /// [`BundleError::Policy`] with the location of the problem.
     pub fn from_toml_str(text: &str) -> Result<Self, BundleError> {
-        toml::from_str(text).map_err(|e| BundleError::Policy(e.to_string()))
+        let policy: Self = toml::from_str(text).map_err(|e| BundleError::Policy(e.to_string()))?;
+        policy.check_by_name_only()?;
+        Ok(policy)
+    }
+
+    /// `bulkhead:unconfined` is granted to an app by its name alone (ROADMAP
+    /// AP4): never to every app, nor to whatever a signer signs.
+    fn check_by_name_only(&self) -> Result<(), BundleError> {
+        let unconfined = |g: &Granted| g.capabilities.contains(&Capability::Unconfined);
+        let mut places = Vec::new();
+        if unconfined(&self.defaults.grant) {
+            places.push("[defaults]".to_string());
+        }
+        for (label, signer) in &self.signers {
+            if unconfined(&signer.grant) {
+                places.push(format!("[signers.{label}]"));
+            }
+        }
+        if places.is_empty() {
+            Ok(())
+        } else {
+            Err(BundleError::Policy(format!(
+                "{} is granted to an app by name only ([apps.<name>]), not in {}",
+                Capability::Unconfined,
+                places.join(", ")
+            )))
+        }
     }
 
     /// Read and parse a policy file.

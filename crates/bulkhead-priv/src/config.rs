@@ -59,6 +59,10 @@ pub struct Config {
     /// start for its jails' `/dev` (`null`, `zero`, `random`, `urandom`,
     /// `pvclock`); any ruleset of that number is replaced.
     pub devfs_ruleset: u16,
+    /// The apps whose instances may run unconfined (ROADMAP AP4): with the
+    /// host's network and `/etc`, the runner's fences left off. Root's
+    /// consent beside the node's; empty by default.
+    pub unconfined: Vec<String>,
 }
 
 impl Config {
@@ -132,6 +136,16 @@ impl Config {
         {
             return Err("cgroup must be under /sys/fs/cgroup".into());
         }
+        let unconfined = match kv.get("unconfined") {
+            Some(v) => list(v)
+                .map(|a| {
+                    bulkhead_priv_wire::is_app_name(a)
+                        .then(|| a.to_string())
+                        .ok_or_else(|| format!("unconfined: {a} is not an app name"))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
         let pids_max = num("pids_max")?;
         let memory_max = size(get("memory_max")?).ok_or("memory_max is not a size")?;
         if pids_max == 0 || memory_max == 0 {
@@ -166,6 +180,7 @@ impl Config {
                     .ok_or("devfs_ruleset is not a number above 4")?,
                 None => 4290,
             },
+            unconfined,
         })
     }
 
@@ -191,7 +206,7 @@ impl Config {
     }
 }
 
-const KEYS: [&str; 14] = [
+const KEYS: [&str; 15] = [
     "node",
     "node_args",
     "node_uid",
@@ -206,6 +221,7 @@ const KEYS: [&str; 14] = [
     "cgroup",
     "tmp_size",
     "devfs_ruleset",
+    "unconfined",
 ];
 
 fn list(v: &str) -> impl Iterator<Item = &str> {

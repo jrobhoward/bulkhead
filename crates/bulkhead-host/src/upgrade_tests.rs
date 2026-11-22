@@ -70,6 +70,23 @@ fn validate_upgrade____new_capability_without_approval____needs_approval() {
 }
 
 #[test]
+fn validate_upgrade____becoming_unconfined_without_approval____needs_approval() {
+    let old = manifest("c", "1.0.0", json!({}));
+    let new = manifest(
+        "c",
+        "2.0.0",
+        json!({ "unconfined": { "reason": "a library's own sockets" } }),
+    );
+
+    let result = validate_upgrade(&old, &new, false);
+
+    assert_eq!(
+        result,
+        Err(UpgradeError::NeedsApproval(vec![Capability::Unconfined]))
+    );
+}
+
+#[test]
 fn validate_upgrade____old_version_outside_from_versions____invalid() {
     let old = manifest("c", "1.0.0", json!({}));
     let new = manifest(

@@ -117,6 +117,10 @@ struct Port {
 
 impl Port {
     fn spawn(program: &str, path: &PathBuf) -> Self {
+        Self::spawn_with(program, path, &[])
+    }
+
+    fn spawn_with(program: &str, path: &PathBuf, extra: &[&str]) -> Self {
         let (channel, memfd) = Channel::create().unwrap();
         let (bell, bell_app) = channel::bell().unwrap();
         rustix::fs::fcntl_setfl(&bell, rustix::fs::OFlags::NONBLOCK).unwrap();
@@ -126,6 +130,7 @@ impl Port {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_bulkhead-runner"));
         cmd.arg(program)
             .arg(path)
+            .args(extra)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_app.try_clone().unwrap()))
             .stderr(Stdio::from(log_app));
@@ -409,6 +414,24 @@ fn executable____sandboxed____files_exec_sockets_and_signals_refused() {
             "{signal_group}"
         );
     }
+}
+
+/// `--unconfined` (ROADMAP AP4): the fences of the test above are off, so
+/// files the user may read open, and a socket of the app's own connects.
+/// (The node passes the flag only under the helper, which keeps the app's
+/// own user, cgroup or jail; here it runs as the test's user.)
+#[test]
+fn executable____unconfined____files_and_own_sockets_reached() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut port = Port::spawn_with("--executable", &fixtures().0, &["--unconfined"]);
+    assert_eq!(port.init(Vec::new()), FromApp::Init(Ok(())));
+
+    let hosts = port.command("read /etc/hosts");
+    let connect = port.command(&format!("connect {address}"));
+
+    assert_eq!(hosts, "ok");
+    assert_eq!(connect, "ok");
 }
 
 // FreeBSD's runner refuses plugins: they load by path, which capability

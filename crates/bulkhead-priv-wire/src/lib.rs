@@ -93,6 +93,10 @@ pub struct Spawn {
     /// For each descriptor passed beside the message, in order, the
     /// number it gets in the instance.
     pub fds: Vec<u8>,
+    /// Start the instance without the network namespace or jail without
+    /// addresses, with `/etc` in its root (ROADMAP AP4): refused unless
+    /// the helper's own configuration lists the app as unconfined.
+    pub unconfined: bool,
 }
 
 /// What the node asks.
@@ -293,6 +297,7 @@ impl Request {
                 }
                 w.len(s.fds.len());
                 w.0.extend_from_slice(&s.fds);
+                w.u8(u8::from(s.unconfined));
             }
             Self::Signal { id, signal } => {
                 w.u8(T_SIGNAL);
@@ -344,6 +349,7 @@ impl Request {
                     .collect::<Option<Vec<_>>>()?;
                 let n = r.count(MAX_FDS)?;
                 let fds = r.take(n)?.to_vec();
+                let unconfined = r.bool()?;
                 Self::Spawn(Spawn {
                     id,
                     app,
@@ -353,6 +359,7 @@ impl Request {
                     env,
                     binds,
                     fds,
+                    unconfined,
                 })
             }
             T_SIGNAL => Self::Signal {

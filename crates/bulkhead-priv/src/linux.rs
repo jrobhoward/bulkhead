@@ -17,6 +17,11 @@
 //! without `exec`); `/dev/null`, `zero`, `full`, `random` and `urandom`;
 //! a private tmpfs `/tmp`; and `/proc`, which in the new PID namespace
 //! shows the instance's own processes only.
+//!
+//! An unconfined instance (ROADMAP AP4, its app in the configuration's
+//! `unconfined`) keeps the host's network namespace, and its root holds
+//! the whole of `/etc`, read-only, for its libraries' `resolv.conf`,
+//! `hosts` and certificate roots; the rest is as above.
 
 use std::collections::BTreeSet;
 use std::ffi::CString;
@@ -204,7 +209,7 @@ pub fn spawn(
         cleanup(None);
         return Err(format!("{}: {e}", root.display()));
     }
-    let plan_root = match root_plan(config, &root, binds) {
+    let plan_root = match root_plan(config, &root, binds, s.unconfined) {
         Ok(p) => p,
         Err(e) => {
             cleanup(Some(&root));
@@ -229,7 +234,12 @@ pub fn spawn(
         },
         err: err_write.as_raw_fd(),
     };
-    let forked = match sys::clone3(sys::NAMESPACES, Some(cg.as_fd())) {
+    let namespaces = if s.unconfined {
+        sys::NAMESPACES & !sys::NETWORK
+    } else {
+        sys::NAMESPACES
+    };
+    let forked = match sys::clone3(namespaces, Some(cg.as_fd())) {
         Ok(f) => f,
         Err(e) => {
             cleanup(Some(&root));
@@ -343,8 +353,14 @@ fn inside(root: &Path, path: &Path) -> PathBuf {
 }
 
 /// The steps to build `root` for an instance with `binds` (canonical,
-/// checked paths, and whether each is writable).
-fn root_plan(config: &Config, root: &Path, binds: &[(PathBuf, bool)]) -> io::Result<RootPlan> {
+/// checked paths, and whether each is writable); with the host's `/etc`,
+/// read-only, if `unconfined`.
+fn root_plan(
+    config: &Config,
+    root: &Path,
+    binds: &[(PathBuf, bool)],
+    unconfined: bool,
+) -> io::Result<RootPlan> {
     let ro = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
     let mut ops = Vec::new();
     let mut made = BTreeSet::new();
@@ -383,7 +399,17 @@ fn root_plan(config: &Config, root: &Path, binds: &[(PathBuf, bool)]) -> io::Res
         }
     }
     dirs(&mut ops, Path::new("/etc"))?;
-    for f in ["/etc/ld.so.cache", "/etc/localtime"] {
+    if unconfined {
+        ops.push(RootOp::Bind {
+            src: c(Path::new("/etc"))?,
+            dst: c(&inside(root, Path::new("/etc")))?,
+            flags: ro,
+        });
+    }
+    for f in ["/etc/ld.so.cache", "/etc/localtime"]
+        .into_iter()
+        .filter(|_| !unconfined)
+    {
         let host = Path::new(f);
         if host.is_file() {
             ops.push(RootOp::File(c(&inside(root, host))?));

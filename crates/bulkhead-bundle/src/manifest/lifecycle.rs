@@ -31,6 +31,20 @@ pub struct Native {
     pub program: NativeProgram,
 }
 
+/// The `unconfined` section (ROADMAP AP4): the app asks to run without the
+/// runner's fences (the seccomp allow-list, Landlock or capability mode, the
+/// rule against its own sockets), as its own user under the privileged
+/// helper, with the host's network. It runs only with the operator's grant
+/// of `bulkhead:unconfined` to the app by name, node config's
+/// `[native] allow_unconfined` and the helper's own `unconfined` list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unconfined {
+    /// Why the app needs it, shown to the operator in `bulkhead status` and
+    /// the audit log.
+    pub reason: String,
+}
+
 /// What a `native-process` app's platform variant is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

@@ -16,6 +16,7 @@ fn summary(name: &str, status: &str) -> AppSummary {
         new_version: None,
         new_traffic: None,
         built_in: false,
+        unconfined: None,
     }
 }
 
@@ -442,6 +443,34 @@ fn dr____deploys_not_ready_and_grants_differ____a_line_each() {
             "            points: 1.2.0: no trusted key",
             "grants:     shop: not granted here: timers",
         ]
+    );
+}
+
+#[test]
+fn apps_and_detail____unconfined_app____marked_with_its_reason() {
+    let mut bridge = summary("bridge", "running");
+    bridge.unconfined = Some("rdkafka opens its own sockets".into());
+    let detail = AppDetail {
+        summary: bridge.clone(),
+        signer: "RWQ".into(),
+        granted: vec!["bulkhead:unconfined".into()],
+        denied: vec![],
+        warnings: vec![],
+        restarts: 0,
+        instance_list: vec![],
+        listeners: vec![],
+        runs_as: "its own user".into(),
+        blobs: None,
+        routes: vec![],
+    };
+
+    let list = apps(&[bridge]);
+    let status = super::detail(&detail);
+
+    assert!(list.contains("running (unconfined)"), "{list}");
+    assert!(
+        status.contains("unconfined: rdkafka opens its own sockets"),
+        "{status}"
     );
 }
 

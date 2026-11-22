@@ -17,6 +17,12 @@
 //! non-persistent, so it goes with its last process. `SIGKILL` removes
 //! the jail, which ends everything the app forked (PS7 on FreeBSD).
 //!
+//! An unconfined instance (ROADMAP AP4, its app in the configuration's
+//! `unconfined`) gets a jail that inherits the host's IPv4 and IPv6, and
+//! read-only views of the whole of `/usr` (for libraries under
+//! `/usr/local/lib` and certificate roots under `/usr/share` and
+//! `/usr/local/share`) and `/etc`; the runner leaves capability mode off.
+//!
 //! The helper learns of exits from one kqueue of process descriptors
 //! (`EVFILT_PROCDESC`). A dying jail holds its root for a moment after its
 //! last process (PB5), so a busy unmount is retried from the helper's
@@ -46,6 +52,9 @@ const HOSTNAME: &[u8] = b"bulkhead-app";
 /// The system's directories in every jail, read-only: the libraries and
 /// the run-time linker, where they exist.
 const SYSTEM: [&str; 3] = ["/lib", "/usr/lib", "/libexec"];
+
+/// The system directories an unconfined instance's root shows instead.
+const SYSTEM_UNCONFINED: [&str; 4] = ["/lib", "/usr", "/libexec", "/etc"];
 
 /// The devices a jail's `/dev` shows.
 const DEVICES: [&str; 5] = ["null", "zero", "random", "urandom", "pvclock"];
@@ -251,7 +260,13 @@ fn build_root(
     jails: &Path,
     id: u64,
     binds: &[(PathBuf, bool)],
+    unconfined: bool,
 ) -> io::Result<Root> {
+    let system: &[&str] = if unconfined {
+        &SYSTEM_UNCONFINED
+    } else {
+        &SYSTEM
+    };
     let dir = jails.join(format!("i{id}"));
     std::fs::create_dir(&dir)?;
     let mut root = Root {
@@ -267,7 +282,7 @@ fn build_root(
                 .text("size", b"1048576")?,
             libc::MNT_NOSUID | libc::MNT_NOEXEC,
         )?;
-        for d in SYSTEM {
+        for d in system {
             if Path::new(d).is_dir() {
                 root.view(Path::new(d), false)?;
             }
@@ -293,7 +308,7 @@ fn build_root(
             .parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| io::Error::other("the runner has no directory"))?;
-        let shown = |p: &Path| SYSTEM.iter().any(|d| p.starts_with(d));
+        let shown = |p: &Path| system.iter().any(|d| p.starts_with(d));
         if !shown(&runner_dir) && !binds.iter().any(|(p, _)| runner_dir.starts_with(p)) {
             root.view(&runner_dir, false)?;
         }
@@ -319,16 +334,21 @@ fn jail_name(id: u64) -> String {
 }
 
 /// Create instance `id`'s jail on `root`: persistent until its process
-/// runs, with no network addresses.
-fn create_jail(id: u64, root: &Root) -> io::Result<i32> {
+/// runs, with no network addresses, or the host's if `unconfined`.
+fn create_jail(id: u64, root: &Root, unconfined: bool) -> io::Result<i32> {
     let path = cpath(&root.dir)?;
     let name = jail_name(id);
+    let ip = if unconfined {
+        libc::JAIL_SYS_INHERIT
+    } else {
+        libc::JAIL_SYS_DISABLE
+    };
     Params::new()
         .text("path", path.as_bytes())?
         .text("name", name.as_bytes())?
         .text("host.hostname", HOSTNAME)?
-        .int("ip4", libc::JAIL_SYS_DISABLE)?
-        .int("ip6", libc::JAIL_SYS_DISABLE)?
+        .int("ip4", ip)?
+        .int("ip6", ip)?
         .flag("persist")?
         .jail_set(libc::JAIL_CREATE)
 }
@@ -395,9 +415,9 @@ pub fn spawn(
     exec: Exec,
     fds: Vec<(i32, i32)>,
 ) -> Result<Instance, String> {
-    let mut root =
-        build_root(config, &st.jails, s.id, binds).map_err(|e| format!("jail root: {e}"))?;
-    let jid = match create_jail(s.id, &root) {
+    let mut root = build_root(config, &st.jails, s.id, binds, s.unconfined)
+        .map_err(|e| format!("jail root: {e}"))?;
+    let jid = match create_jail(s.id, &root, s.unconfined) {
         Ok(jid) => jid,
         Err(e) => {
             root.unmount(true);

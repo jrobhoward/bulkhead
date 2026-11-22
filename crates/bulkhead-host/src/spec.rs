@@ -141,7 +141,7 @@ impl InstanceSpec {
                 .as_ref()
                 .map(|v| v.to_string().into_bytes())
                 .unwrap_or_default(),
-            granted: spec.capabilities.declared().into_iter().collect(),
+            granted: spec.declared().into_iter().collect(),
             preopens: Vec::new(),
             services: ServiceSpecs::from_manifest(spec),
             announce_role: spec

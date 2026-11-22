@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::api::{DeployResponse, Done};
-use bulkhead_bundle::manifest::{AppManifest, Durability};
+use bulkhead_bundle::manifest::{AppManifest, Capability, Durability};
 use bulkhead_bundle::{BundleError, VerifiedBundle};
 use bulkhead_host::{AppDeployment, AppHandle, InstanceSpec};
 use serde_json::json;
@@ -49,6 +49,33 @@ pub(super) fn check_packages(manifest: &AppManifest) -> Result<(), NodeError> {
         ))),
         None => Ok(()),
     }
+}
+
+/// Why `manifest`'s app may not run without the runner's fences on this
+/// node (ROADMAP AP4), or `None` if it does not ask to or may. Checked at
+/// every build (deploy, upgrade, restore, start, a DR copy), since policy
+/// and node config may change while it is stored.
+pub(super) fn unconfined_refusal(
+    manifest: &AppManifest,
+    grant: &bulkhead_bundle::EffectiveGrant,
+    config: &crate::node::config::NodeConfig,
+) -> Option<String> {
+    manifest.spec.unconfined.as_ref()?;
+    let name = &manifest.app.name;
+    let why = if config.privileges.is_none() {
+        "this node runs no privileged helper ([priv]), and an unconfined app runs only as \
+         its own user under it"
+            .to_string()
+    } else if !config.native.allow_unconfined {
+        "node config does not allow unconfined apps ([native] allow_unconfined)".to_string()
+    } else if !grant.granted.contains(&Capability::Unconfined) {
+        format!("policy does not grant bulkhead:unconfined to {name} ([apps.{name}])")
+    } else if config.drivers.contains_key(name) {
+        "a driver app keeps its fences".to_string()
+    } else {
+        return None;
+    };
+    Some(format!("{name} asks to run unconfined: {why}"))
 }
 
 /// A verified bundle, its program written out, ready to run.
@@ -235,6 +262,12 @@ impl Node {
             )));
         }
         super::egress::check_name(&name, &manifest)?;
+        if let Some(why) = unconfined_refusal(&manifest, &grant, &self.config) {
+            return Err(NodeError::Refused(why));
+        }
+        if let Some(u) = &manifest.spec.unconfined {
+            tracing::warn!(app = %name, %version, reason = %u.reason, "unconfined: runs without the runner's fences");
+        }
         let rt = self.rt.clone();
         let program = bundle.program.clone();
         // A program is written where only the node can change it.
@@ -350,6 +383,7 @@ impl Node {
                 .collect::<Vec<_>>()
         };
         let info = DeployInfo {
+            unconfined: manifest.spec.unconfined.as_ref().map(|u| u.reason.clone()),
             names: manifest
                 .spec
                 .registered_names
@@ -502,7 +536,7 @@ impl Node {
         match &result {
             Ok(r) => self.audit.record(
                 "deploy",
-                json!({ "app": r.app.name, "version": r.app.version, "granted": r.granted, "denied": r.denied, "warnings": r.warnings }),
+                json!({ "app": r.app.name, "version": r.app.version, "granted": r.granted, "denied": r.denied, "warnings": r.warnings, "unconfined": r.app.unconfined }),
             ),
             Err(e) => self.audit.record("deploy_refused", json!({ "kind": e.kind(), "reason": e.to_string() })),
         }

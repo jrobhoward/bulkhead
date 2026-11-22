@@ -291,7 +291,18 @@ How the rest works natively:
 - `bulkhead:http-egress`: each request is checked by the node on the same rules (the `allow` list, `methods`, forbidden headers, `max_concurrent`) and sent by the app's egress driver (`bulkhead-egress-<app>`, ROADMAP DA4) over connections the node opens under the address guard, with node config's timeouts, roots and CA file, and no redirects; the whole response comes back, its body up to `[egress] max_response_body` (16 MiB at most, a frame).
 - `listeners` (an executable only) bind on the node's addresses, and each accepted connection goes to an instance of the app's pool: the next in turn, or by the peer's IP address with `instances.routing = "hash:<any>"`, so one client's connections share an instance while the pool's size holds. The node passes the stream on the instance's descriptor socket and runs its `handle_connection` (`bulkhead_sdk::connection::Handler`); the instance reads it when the node says it has bytes (`io-ready`), as a `bulkhead:sockets` stream, so one instance serves many connections, one callback at a time. `max_connections` counts a connection until the app closes it or its instance exits, and the idle timeout is the kernel's `TCP_INFO`: no data either way for `idle_timeout_ms` and the node shuts the socket down. A crash closes every connection its instance held, and the listener's `crashed` stays 0 (the app's restarts count it). The app is upgraded as any app; an upgrade closes the connections open on the instances it replaces. The connections do not count against `max_sockets`, and the app needs no `bulkhead:sockets`.
 - The Modbus package (`extensions."bulkhead-modbus:modbus"`) is granted by the operator by package name; the program calls its functions through the node (`bulkhead_modbus_client`, over `bulkhead_sdk::extension::call` and `Ctx::extension` on the app API) by name (`client#read-holding`), with arguments and results in CBOR; the node checks the scope table and the grant, and forwards the call to the Modbus drivers.
-- The runner restricts the program before it runs (SECURITY.md, "Native-process apps"): it reads only the system libraries, its own directory, the app's `priv/` files and its volumes, writes only its read-write volumes, executes nothing else, opens no sockets of its own (no `socket`, `connect`, `accept` or `io_uring`), and signals only itself. Linux only: on FreeBSD nothing yet (ROADMAP FB2).
+- The runner restricts the program before it runs (SECURITY.md, "Native-process apps"): it reads only the system libraries, its own directory, the app's `priv/` files and its volumes, writes only its read-write volumes, executes nothing else, opens no sockets of its own (no `socket`, `connect`, `accept` or `io_uring`), and signals only itself. On FreeBSD capability mode fences it (ROADMAP FB2).
+
+### `unconfined`
+
+An escape hatch (ROADMAP AP4), for an app that needs a library or a system call the runner's fences refuse (a Kafka or AMQP client that opens its own sockets, say) and whose developer takes responsibility for it, as Rust's `unsafe` does:
+
+```toml
+[appserver]
+unconfined = { reason = "rdkafka opens its own sockets to the brokers" }
+```
+
+The app then runs without the runner's fences: no seccomp allow-list or Landlock on Linux, no capability mode on FreeBSD, and sockets of its own on the host's network. What stays: its own user under the privileged helper, its cgroup or jail (memory and process limits, its own PID namespace or jail, the helper's minimal root with the host's `/etc` added, read-only), the helper's own seccomp list (inherited on Linux: the socket calls are on it; `bpf`, `unshare`, `setns`, `mount` and the like are not), and every node service through the node's grants and messaging ACLs. It runs only with consent on every side, and is refused otherwise, at deploy, upgrade, restore and start: the operator's policy grants `bulkhead:unconfined` to the app by name (`[apps.<name>]`; policy refuses it in `[defaults]` and `[signers.*]`), node config sets `[native] allow_unconfined` (which needs `[priv]`), and the helper's own configuration lists the app (`unconfined = <app>, ...`). `reason` must not be empty; it shows in `bulkhead status` and the audit log. A version that adds it is an added capability, so its upgrade needs `--approve`. A driver app keeps its fences.
 
 ### Documentation-only and later sections
 
@@ -383,6 +394,7 @@ pids_max = 64                          # most processes and threads per native i
 ping_interval_ms = 10000               # an idle native instance is pinged this often
 ping_timeout_ms = 5000                 # and killed (timeout) without an answer within this
 landlock_optional = false              # run native apps on a Linux kernel without Landlock; no effect on FreeBSD (Capsicum)
+allow_unconfined = false               # let apps granted bulkhead:unconfined by name run without the runner's fences (manifest `unconfined`); needs [priv], whose configuration lists them too
 spin_us = 20                           # the node and a native app spin this long waiting for each other, then sleep; 0: always sleep (at most 10000)
 sender_spin_us = 50                    # how long an app's thread waits spinning for an answer on a sender channel (its own threads, a driver's requests); at most 10000
 ingress = "/usr/local/bin/bulkhead-ingress"  # the HTTP ingress driver, needed with [http]; unset: bulkhead-ingress beside the runner
@@ -554,4 +566,4 @@ key = "RWQ..."
 grant = ["bulkhead:keyvalue"]
 ```
 
-A `grant` list takes the Modbus package (`"bulkhead-modbus:modbus"`) as well as capability keys. Policy grants or withholds whole capabilities, and each shared bucket by name (`buckets`, in any entry). A deploy reports shared buckets as `bucket:<name>` under `granted` or `denied`; opening a denied one returns `access-denied`. Other scopes an app requests (its own buckets, preopens) are used as written; narrowing them by policy is not supported.
+A `grant` list takes the Modbus package (`"bulkhead-modbus:modbus"`) as well as capability keys. `bulkhead:unconfined` (the manifest's `unconfined`, ROADMAP AP4) is granted in an app's own entry only: policy that grants it in `[defaults]` or a `[signers.*]` entry is refused. Policy grants or withholds whole capabilities, and each shared bucket by name (`buckets`, in any entry). A deploy reports shared buckets as `bucket:<name>` under `granted` or `denied`; opening a denied one returns `access-denied`. Other scopes an app requests (its own buckets, preopens) are used as written; narrowing them by policy is not supported.

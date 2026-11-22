@@ -38,6 +38,7 @@ fn spawn() -> Spawn {
             },
         ],
         fds: vec![1, 2, 3, 4, 5, 6],
+        unconfined: false,
     }
 }
 
@@ -60,6 +61,9 @@ fn spawn____within_every_bound____accepted() {
 #[case::bind_dotdot(|s: &mut Spawn| s.binds[0].path = "/var/lib/bulkhead/../../etc".into(), "normal form")]
 #[case::bind_relative(|s: &mut Spawn| s.binds[0].path = "var/lib/bulkhead/x".into(), "normal form")]
 #[case::bind_nested(|s: &mut Spawn| s.binds[1].path = "/var/lib/bulkhead/compiled/orders/1/x".into(), "one inside the other")]
+#[case::unconfined_unlisted(|s: &mut Spawn| { s.unconfined = true; s.args.push(UNCONFINED_FLAG.into()); }, "not unconfined in the helper's configuration")]
+#[case::runner_flag_alone(|s: &mut Spawn| s.args.push(UNCONFINED_FLAG.into()), "goes with an unconfined spawn")]
+#[case::spawn_without_flag(|s: &mut Spawn| s.unconfined = true, "goes with an unconfined spawn")]
 fn spawn____one_thing_wrong____refused_saying_what(
     #[case] change: fn(&mut Spawn),
     #[case] says: &str,
@@ -70,6 +74,17 @@ fn spawn____one_thing_wrong____refused_saying_what(
     let err = super::spawn(&config(), &s, 6).unwrap_err();
 
     assert!(err.contains(says), "{err}");
+}
+
+#[test]
+fn spawn____unconfined_app_listed____accepted() {
+    let mut c = config();
+    c.unconfined = vec!["orders".into()];
+    let mut s = spawn();
+    s.unconfined = true;
+    s.args.push(UNCONFINED_FLAG.into());
+
+    assert_eq!(super::spawn(&c, &s, 6), Ok(()));
 }
 
 #[test]

@@ -71,6 +71,32 @@ pub fn spawn(config: &Config, s: &Spawn, passed: usize) -> Result<(), String> {
     }
     fds(&s.fds, passed)?;
     binds(config, s)?;
+    unconfined(config, s)
+}
+
+/// The runner's flag that leaves its fences off (ROADMAP AP4).
+pub const UNCONFINED_FLAG: &str = "--unconfined";
+
+/// An unconfined spawn only for an app this configuration lists, and the
+/// runner's [`UNCONFINED_FLAG`] only with one: the node chooses neither
+/// alone.
+///
+/// # Errors
+///
+/// Which of the two it breaks.
+pub fn unconfined(config: &Config, s: &Spawn) -> Result<(), String> {
+    let flag = s.args.iter().any(|a| a == UNCONFINED_FLAG);
+    if flag != s.unconfined {
+        return Err(format!(
+            "the runner's {UNCONFINED_FLAG} goes with an unconfined spawn, and only with one"
+        ));
+    }
+    if s.unconfined && !config.unconfined.contains(&s.app) {
+        return Err(format!(
+            "{} is not unconfined in the helper's configuration (unconfined = ...)",
+            s.app
+        ));
+    }
     Ok(())
 }
 

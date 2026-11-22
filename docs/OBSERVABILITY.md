@@ -99,6 +99,8 @@ With a cluster transport, also, labelled `node` (the other node): `bulkhead_clus
 
 On a pair node with `cluster` buckets, gauges for the replicated log: `bulkhead_replication_commit_index` (the last entry applied to this node's copy) and `bulkhead_replication_last_index` (the last entry in its log); on the primary, `bulkhead_replication_partner_lag_entries` (entries the standby has not acknowledged) and `bulkhead_replication_alone` (1 while it commits without the standby, which the witness has recorded out of date).
 
+Unconfined apps (ROADMAP AP4): `bulkhead_unconfined_apps`, the apps this node runs without the runner's fences (the manifest's `unconfined`, granted on every side).
+
 Shipping to a disaster-recovery node (ROADMAP DR2): `bulkhead_dr_lag_seconds`, on a pair node with `[failover] dr` the time since the DR node last asked with every entry this node had committed, and on the DR node the time since it last held every entry its source had committed (both since the node started, until the first time); and on the DR node `bulkhead_dr_commit_index`, the last entry in its copy. The DR node's figure leaves out the one-way delay of the last answer. Each side logs a warning once the lag passes the DR node's `[dr] rpo_target_s`, and an `info` record once it is back within it. The pair's deployments the DR node holds (DR3): `bulkhead_dr_apps`, the apps held, and `bulkhead_dr_apps_not_ready`, those that would not start there or whose grant there differs from the primary's (`bulkhead dr` names each and why; each is logged as a warning when found).
 
 

@@ -23,11 +23,13 @@ fn spawn() -> Spawn {
             writable: true,
         }],
         fds: vec![1, 2, 3, 4, 5, 6],
+        unconfined: false,
     }
 }
 
 #[rstest]
 #[case(Request::Spawn(spawn()))]
+#[case(Request::Spawn(Spawn { unconfined: true, ..spawn() }))]
 #[case(Request::Signal { id: 3, signal: 9 })]
 #[case(Request::Bind { address: "[::]:443".into() })]
 #[case(Request::Share { app: "orders".into(), bind: Bind { path: "/var/lib/bulkhead/priv/orders".into(), writable: false } })]

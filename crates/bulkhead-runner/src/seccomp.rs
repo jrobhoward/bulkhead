@@ -271,7 +271,10 @@ pub fn allowed() -> Vec<i64> {
 
 /// What the ingress driver's list leaves out of the apps': processes
 /// started and waited for, file and directory changes, copies between
-/// descriptors, socket pairs.
+/// descriptors. Not socket pairs: tokio makes one for its signal driver
+/// when its `signal` feature is on, which it is wherever the driver is
+/// built beside the node (cargo unifies features), and an `AF_UNIX` pair
+/// reaches nothing outside the process.
 pub const INGRESS_WITHOUT: &[i64] = &[
     libc::SYS_wait4,
     libc::SYS_waitid,
@@ -294,7 +297,6 @@ pub const INGRESS_WITHOUT: &[i64] = &[
     libc::SYS_copy_file_range,
     libc::SYS_sendfile,
     libc::SYS_splice,
-    libc::SYS_socketpair,
     #[cfg(target_arch = "x86_64")]
     libc::SYS_fork,
     #[cfg(target_arch = "x86_64")]

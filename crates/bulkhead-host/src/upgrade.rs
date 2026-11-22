@@ -82,10 +82,9 @@ pub fn validate_upgrade(
             new.app.name, new.app.version, old.app.version
         ));
     }
-    let before: BTreeSet<Capability> = old.spec.capabilities.declared().into_iter().collect();
+    let before: BTreeSet<Capability> = old.spec.declared().into_iter().collect();
     let added: Vec<Capability> = new
         .spec
-        .capabilities
         .declared()
         .into_iter()
         .filter(|c| !before.contains(c))

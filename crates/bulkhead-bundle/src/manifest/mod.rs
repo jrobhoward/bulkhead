@@ -45,7 +45,7 @@ pub use capabilities::{
 pub use error::{ManifestError, ValidationError};
 pub use lifecycle::{
     Backoff, Instances, Kind, Lifecycle, Native, NativeProgram, RestartType, Routing, Strategy,
-    Supervision, Upgrade, UpgradeMode,
+    Supervision, Unconfined, Upgrade, UpgradeMode,
 };
 pub use limits::Limits;
 pub use sections::{
@@ -72,6 +72,9 @@ pub struct AppSpec {
     /// A `native-process` app's program; only for that kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native: Option<Native>,
+    /// Run without the runner's fences (ROADMAP AP4); see [`Unconfined`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unconfined: Option<Unconfined>,
     /// Message catalog.
     pub api: Api,
     /// Apps that must be running first, in start order.
@@ -189,7 +192,27 @@ impl AppSpec {
             v.at(format!("listeners[{i}]"), |v| l.validate(v));
         }
         v.unique_names("listeners", self.listeners.iter().map(|l| l.name.as_str()));
+        if let Some(u) = &self.unconfined
+            && u.reason.trim().is_empty()
+        {
+            v.error_at(
+                "unconfined.reason",
+                "must say why the app needs to run without the runner's fences",
+            );
+        }
         self.check_native(v);
+    }
+
+    /// Every capability the app asks the operator for: those its
+    /// `capabilities` section declares, and [`Capability::Unconfined`] with
+    /// an `unconfined` section.
+    #[must_use]
+    pub fn declared(&self) -> Vec<Capability> {
+        let mut declared = self.capabilities.declared();
+        if self.unconfined.is_some() {
+            declared.push(Capability::Unconfined);
+        }
+        declared
     }
 
     /// Listeners on a native app: an executable's instances take the

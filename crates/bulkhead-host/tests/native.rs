@@ -176,6 +176,24 @@ async fn executable____init_fails____crashed_with_message() {
     );
 }
 
+/// An unconfined app runs only under the privileged helper (ROADMAP AP4):
+/// without one its instance does not start, whatever the node decided.
+#[tokio::test]
+async fn executable____unconfined_without_the_helper____not_started() {
+    let rt = runtime(|_| {});
+    let app = executable(&rt);
+    let mut unconfined = spec("");
+    unconfined.granted.insert(Capability::Unconfined);
+
+    let instance = rt.spawn(&app, unconfined).unwrap();
+    let reason = instance.wait().await;
+
+    let ExitReason::Crashed(why) = &reason else {
+        panic!("{reason:?}");
+    };
+    assert!(why.contains("needs the privileged helper"), "{why}");
+}
+
 #[rstest::rstest]
 #[case("panic", "panic: asked to")]
 #[case("abort", "killed by signal 6")]

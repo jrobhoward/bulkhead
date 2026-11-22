@@ -31,6 +31,18 @@ fn effective_grant____declared_and_granted____granted() {
 }
 
 #[test]
+fn effective_grant____unconfined____granted_or_denied_as_a_capability() {
+    let spec =
+        AppSpec::from_json_value(&json!({ "unconfined": { "reason": "a library" } })).unwrap();
+
+    let granted = effective_grant(&spec, &grants(&[Capability::Unconfined]));
+    let denied = effective_grant(&spec, &grants(&[]));
+
+    assert_eq!(granted.granted, BTreeSet::from([Capability::Unconfined]));
+    assert_eq!(denied.denied, BTreeSet::from([Capability::Unconfined]));
+}
+
+#[test]
 fn effective_grant____declared_not_granted____denied() {
     let spec = spec(json!({ "bulkhead:keyvalue": {} }));
 
