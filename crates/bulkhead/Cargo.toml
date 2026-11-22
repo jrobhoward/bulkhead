@@ -107,6 +107,10 @@ name = "examples"
 required-features = ["node"]
 
 [[test]]
+name = "app_tutorial"
+required-features = ["node"]
+
+[[test]]
 name = "exit_criteria"
 required-features = ["node"]
 
