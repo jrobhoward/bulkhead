@@ -28,7 +28,7 @@ showb log-level room debug
 # The new level reaches the instance as a host event, soon after.
 debug_logged() {
   b call room recent >/dev/null
-  b logs room -n 1 | grep -q "recent: 2 posts"
+  [[ "$(b logs room -n 1)" == *"recent: 2 posts"* ]]
 }
 until_ok 20 debug_logged
 showb logs room -n 1

@@ -457,7 +457,14 @@ async fn cgroup____allocates_over_memory_max____memory_limit_and_cgroup_removed(
 async fn executable____holding_memory____resident_set_reported() {
     let rt = runtime(|_| {});
     let app = executable(&rt);
-    let instance = start(&rt, &app).await;
+    // Room for the 32 MiB it holds: on FreeBSD `memory_max` is the whole
+    // address space (RLIMIT_AS), where the allocator's arenas, one per CPU,
+    // take more on a machine of more CPUs (CI's runner aborted at 64 MiB).
+    let roomy = InstanceSpec {
+        memory_max: 256 << 20,
+        ..spec("")
+    };
+    let instance = rt.spawn(&app, roomy).unwrap();
     ask(&instance, "echo up").await;
 
     let before = instance.memory_bytes();

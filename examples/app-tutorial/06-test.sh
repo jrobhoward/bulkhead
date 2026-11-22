@@ -13,7 +13,7 @@ out=$(cargo test "${flags[@]}" -p tut-room-5 -p tut-history-5 2>&1)
 echo "$out" | grep -E "^test |test result"
 expect_has "room's tests" "$out" "describe____a_new_post____its_key_and_text ... ok"
 expect_has "history's tests" "$out" "key____consecutive_numbers____sort_in_order ... ok"
-if echo "$out" | grep -q "FAILED"; then
+if [[ "$out" == *FAILED* ]]; then
   echo "a test failed" >&2
   exit 1
 fi

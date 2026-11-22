@@ -100,7 +100,14 @@ deploy() {
   b deploy "$name.rbp"
 }
 
-pid_of() { b ps | awk -v app="$1" '$2 == app { print $1; exit }'; }
+# The CLI's whole output is taken first: a reader that stops at its first
+# match (`awk ... exit`, `grep -q`, `head`) would close the pipe while the
+# CLI still writes, and the CLI fails on the broken pipe.
+pid_of() {
+  local out
+  out=$(b ps)
+  awk -v app="$1" '$2 == app { print $1; exit }' <<< "$out"
+}
 running() {
   local pid
   pid=$(pid_of "$1")

@@ -34,18 +34,19 @@ for n in 1 2; do
   deploy_n "$n" "$TUT/07-pair/room.toml" "$ROOM"
 done
 until_ok 30 chatting 1
-holds_apps() { bn 3 --json dr | grep -q '"apps": 2'; }
+holds_apps() { [[ "$(bn 3 --json dr)" == *'"apps": 2'* ]]; }
 until_ok 60 holds_apps
 
 pause "chat at site 1; node 3 keeps a copy, a poll behind"
 showbn 1 call room "post hello"
 bn 1 call room "post again" >/dev/null
 until_ok 20 seen_n 1 2
-commit_of() { grep -o '"commit": [0-9]*' | head -n 1 | grep -o '[0-9]*$'; }
+# The first "commit" in JSON text $1.
+commit_of() { [[ "$1" =~ \"commit\":\ ([0-9]+) ]] && echo "${BASH_REMATCH[1]}"; }
 dr_caught_up() {
   local primary copy
-  primary=$(bn 1 --json failover | commit_of)
-  copy=$(bn 3 --json dr | commit_of)
+  primary=$(commit_of "$(bn 1 --json failover)")
+  copy=$(commit_of "$(bn 3 --json dr)")
   [ -n "$primary" ] && [ -n "$copy" ] && [ "$copy" -ge "$primary" ]
 }
 until_ok 30 dr_caught_up

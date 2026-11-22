@@ -63,7 +63,7 @@ showbn 2 logs room -n 1
 pause "node 1 comes back, catches up as the standby, and takes over again"
 start_node_n 1
 until_ok 60 role 1 standby
-caught_up() { ! bn 2 failover | grep -q 'committing alone'; }
+caught_up() { [[ "$(bn 2 failover)" != *"committing alone"* ]]; }
 until_ok 60 caught_up
 # Refused (and nothing changed) until node 2 hears node 1 as a standby
 # that confirms; asked again until it is accepted.

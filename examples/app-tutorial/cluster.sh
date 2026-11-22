@@ -112,7 +112,7 @@ cleanup() {
   echo "nodes stopped; their configs, data and logs are in $DEMO_DIR"
 }
 
-role() { bn "$1" --json failover 2>/dev/null | grep -q "\"role\": \"$2\""; }
+role() { [[ "$(bn "$1" --json failover 2>/dev/null)" == *"\"role\": \"$2\""* ]]; }
 
 deploy_n() {
   local n=$1 manifest=$2 program=$3 name
