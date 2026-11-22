@@ -98,19 +98,28 @@ fn read_file(path: &str, what: &str) -> Result<Vec<u8>, String> {
 impl App for Sql {
     fn init(_ctx: &mut Ctx, args: &[u8]) -> Result<Self, String> {
         let config = Config::from_args(args)?;
-        let password = match &config.password {
-            None => None,
+        let secret = match &config.password {
+            None => pool::Secret::None,
+            // Read now, so a missing file refuses the start, and again for
+            // each new connection (ROADMAP DA3b).
             Some(Password::File(path)) => {
-                Some(trim_password(&read_file(path, "password file")?).to_vec())
+                let first = trim_password(&read_file(path, "password file")?).to_vec();
+                let path = path.clone();
+                pool::Secret::File {
+                    read: Box::new(move || {
+                        bulkhead_sdk::files::read(&path).map(|b| trim_password(&b).to_vec())
+                    }),
+                    last: std::sync::Mutex::new(first),
+                }
             }
-            Some(Password::Value(value)) => Some(value.clone().into_bytes()),
+            Some(Password::Value(value)) => pool::Secret::Fixed(value.clone().into_bytes()),
         };
         let ca = match &config.tls {
             Tls::Disable => None,
             Tls::Require { ca_file } => Some(read_file(ca_file, "CA file")?),
         };
         let (connector, connects) = mpsc::unbounded_channel();
-        let pool = pool::build(&config, password, ca.as_deref(), connector)
+        let pool = pool::build(&config, secret, ca.as_deref(), connector)
             .map_err(|e| format!("datasource {}: {e}", config.datasource))?;
         let mut sender = bulkhead_native::app::Ctx::current()
             .sender()

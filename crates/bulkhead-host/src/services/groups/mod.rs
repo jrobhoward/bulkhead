@@ -399,8 +399,11 @@ impl Service for Groups {
 impl Instance {
     /// Join `group`.
     pub(crate) fn join_group(&self, group: &str) -> Result<(), GroupsError> {
-        self.may_join(group)
-            .and_then(|()| self.shared.join(&self.me, group, self.max))
+        let joined = self
+            .may_join(group)
+            .and_then(|()| self.shared.join(&self.me, group, self.max));
+        crate::probe::group_join(self.me.pid(), group, &joined);
+        joined
     }
 
     /// Leave `group`.
@@ -420,6 +423,14 @@ impl Instance {
 
     /// Cast `msg` to every member of `group`: how many it reached.
     pub(crate) fn publish_to(&self, group: &str, msg: &Envelope) -> Result<u32, GroupsError> {
+        let published = self.publish(group, msg);
+        if let Ok(reached) = published {
+            crate::probe::group_publish(self.me.pid(), group, reached);
+        }
+        published
+    }
+
+    fn publish(&self, group: &str, msg: &Envelope) -> Result<u32, GroupsError> {
         if !self.granted || !self.scope.may_publish(group) {
             return Err(GroupsError::AccessDenied);
         }

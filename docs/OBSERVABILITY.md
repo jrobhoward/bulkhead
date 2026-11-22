@@ -129,6 +129,8 @@ An instance is identified by its pid's whole `id` (and `incarnation` where shown
 | `mailbox__drop` | instance id, kind (`cast`, `timer`) |
 | `connection__open` | handler instance id, listener name; its end is `instance__exit` |
 | `node__down` | node, the session number that follows; the session with that node ended (links and monitors with it got `noconnection`) |
+| `group__join` | instance id, group, outcome (`ok`, `access-denied`, `limit-reached`) |
+| `group__publish` | sender id, group, members reached; an allowed publish only (a refused one counts against the misbehaviour policy) |
 
 The call id pairs `call__start` with `call__done`; it is 0 if no tracer was attached when the call started. Probe names and arguments are an interface: scripts depend on them, so they change only with a CHANGELOG entry.
 

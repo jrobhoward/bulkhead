@@ -95,6 +95,7 @@ enum Job {
     /// A `std` channel: [`PrivHelper::bind`] blocks its caller.
     Bind(String, std::sync::mpsc::Sender<Result<OwnedFd, String>>),
     Volume(VolumeRequest, oneshot::Sender<Result<Reply, String>>),
+    Alive,
 }
 
 /// What the task waits for, in the order the helper answers.
@@ -104,6 +105,7 @@ enum Pending {
     Share(oneshot::Sender<Result<(), String>>),
     Bind(std::sync::mpsc::Sender<Result<OwnedFd, String>>),
     Volume(oneshot::Sender<Result<Reply, String>>),
+    Alive,
 }
 
 impl PrivHelper {
@@ -266,6 +268,13 @@ impl PrivHelper {
             .unwrap_or_else(|_| Err("the privileged helper has gone".into()))
     }
 
+    /// Tell the helper this node is alive (ROADMAP B6), as a task on the
+    /// node's runtime does every `bulkhead_priv_wire::ALIVE_EVERY_S`; a
+    /// helper that hears none for its `node_watchdog_s` kills the node.
+    pub fn alive(&self) {
+        let _ = self.0.jobs.send(Job::Alive);
+    }
+
     /// Ask the helper to send `signal` to instance `id`; its refusal is
     /// logged.
     pub(crate) fn signal(&self, id: u64, signal: i32) {
@@ -320,6 +329,7 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                     Job::Volume(request, tx) => {
                         (Request::Volume(request).encode(), Vec::new(), Pending::Volume(tx))
                     }
+                    Job::Alive => (Request::Alive.encode(), Vec::new(), Pending::Alive),
                 };
                 match send(&sock, &bytes, &fds).await {
                     Ok(()) => pending.push_back(waiting),
@@ -336,7 +346,7 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                         Pending::Volume(tx) => {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
-                        Pending::Signal(_) => {}
+                        Pending::Signal(_) | Pending::Alive => {}
                     },
                 }
             }
@@ -414,7 +424,7 @@ fn deliver(
         (Some(Pending::Spawn(tx)), Reply::Refused { reason }) => {
             let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
         }
-        (Some(Pending::Signal(_)), Reply::Done) => {}
+        (Some(Pending::Signal(_) | Pending::Alive), Reply::Done) => {}
         (Some(Pending::Share(tx)), Reply::Done) => {
             let _ = tx.send(Ok(()));
         }
@@ -488,7 +498,7 @@ fn gone(
             Pending::Volume(tx) => {
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
-            Pending::Signal(_) => {}
+            Pending::Signal(_) | Pending::Alive => {}
         }
     }
     for (_, tx) in exits.drain() {

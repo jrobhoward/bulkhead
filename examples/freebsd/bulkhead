@@ -28,14 +28,23 @@ load_rc_config $name
 : ${bulkhead_config:="/usr/local/etc/bulkhead/priv.conf"}
 : ${bulkhead_log:="/var/log/bulkhead.log"}
 
+helper="/usr/local/sbin/bulkhead-priv"
+# The supervisor's pid, which stop and status use: daemon(8) restarts the
+# helper when it exits (-r, after 2 s), as when it kills a wedged node
+# (node_watchdog_s, ROADMAP B6), and on SIGTERM ends it and exits.
 pidfile="/var/run/${name}.pid"
-procname="/usr/local/sbin/bulkhead-priv"
+# The helper's own pid, which reload signals: it passes SIGHUP to the
+# node; it passes SIGTERM on too, so the node stops its apps and exits.
+helper_pidfile="/var/run/${name}-priv.pid"
 command="/usr/sbin/daemon"
-# -p: the helper's own pid, so stop and reload signal it; it passes
-# SIGTERM and SIGHUP to the node, which stops its apps and exits.
-command_args="-f -p ${pidfile} -o ${bulkhead_log} ${procname} ${bulkhead_config}"
+command_args="-f -r -R 2 -P ${pidfile} -p ${helper_pidfile} -o ${bulkhead_log} ${helper} ${bulkhead_config}"
 extra_commands="reload"
-sig_reload="HUP"
+reload_cmd="${name}_reload"
 sig_stop="TERM"
+
+bulkhead_reload()
+{
+	kill -HUP "$(cat "${helper_pidfile}")"
+}
 
 run_rc_command "$1"

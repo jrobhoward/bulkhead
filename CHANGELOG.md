@@ -8,6 +8,21 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- A wedged node is restarted (ROADMAP B6): under the privileged helper the
+  node tells the helper it is alive every 5 s, and the helper kills one
+  silent past its `node_watchdog_s` (30 s by default, `0` never) and
+  exits for the service manager to start it again; under systemd the
+  helper also sends `WATCHDOG=1` (the unit sets `WatchdogSec=60`,
+  `NotifyAccess=main`), and a node without the helper sends it itself.
+  The FreeBSD rc script runs the helper under `daemon -r` (restarted 2 s
+  after it exits), the supervisor's pid in `/var/run/bulkhead.pid` and
+  the helper's in `/var/run/bulkhead-priv.pid`.
+- A datasource's password file rewritten in place is read again for each
+  new connection (ROADMAP DA3b): new connections log in with the new
+  password, the driver still running, and those already open stay; a
+  read that fails keeps the last password.
+- Probes `group__join` (instance, group, outcome) and `group__publish`
+  (sender, group, members reached) for process groups (OBSERVABILITY.md).
 - HTTP egress refuses a host name that resolves into a private range
   (ROADMAP DA4b): node config's `[egress] deny`, by default 10.0.0.0/8,
   172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 and fc00::/7, answered

@@ -34,6 +34,10 @@ ExecReload=/bin/kill -HUP $MAINPID
 TimeoutStopSec=30
 Restart=on-failure
 RestartSec=2
+# The node says WATCHDOG=1 twice a period while its runtime runs (ROADMAP
+# B6); a wedged node is killed and started again.
+WatchdogSec=60
+NotifyAccess=main
 
 # data_dir, owned by the service user.
 StateDirectory=bulkhead

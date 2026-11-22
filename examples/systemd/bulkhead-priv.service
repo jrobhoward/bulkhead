@@ -37,6 +37,11 @@ KillMode=mixed
 TimeoutStopSec=60
 Restart=on-failure
 RestartSec=2
+# The helper says WATCHDOG=1 each time the node tells it it is alive; it
+# kills a node silent past node_watchdog_s itself (ROADMAP B6), and systemd
+# restarts the service when the helper falls silent.
+WatchdogSec=60
+NotifyAccess=main
 # The helper makes a cgroup per instance under this service's own (its
 # configuration's `cgroup` is /sys/fs/cgroup/system.slice/bulkhead.service).
 Delegate=yes

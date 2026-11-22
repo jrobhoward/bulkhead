@@ -30,6 +30,7 @@ pub mod bindings;
 pub mod check;
 mod child;
 pub mod config;
+pub mod notify;
 #[cfg(target_os = "freebsd")]
 #[path = "freebsd.rs"]
 mod platform;

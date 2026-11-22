@@ -60,6 +60,12 @@ anyprobe::probes! {
     /// The session with another node ended (`nodedown`): the node, the
     /// session number that follows.
     pub fn node__down(node: u32, session: u64);
+    /// An instance asked to join a process group: instance id, group,
+    /// outcome (`ok`, `access-denied`, `limit-reached`).
+    pub fn group__join(pid: u64, group: &str, outcome: &str);
+    /// An instance published to a process group, as allowed: sender id,
+    /// group, the members it reached. A refused publish does not fire.
+    pub fn group__publish(from: u64, group: &str, reached: u64);
 }
 
 /// The outcome name a probe reports for a call or cast.
@@ -225,4 +231,36 @@ pub(crate) fn mailbox_drop(pid: Pid, kind: &str) {
 pub(crate) fn node_down(node: u32, session: u64) {
     #[cfg(feature = "probes")]
     anyprobe::fire!(node__down(node, session));
+}
+
+/// The outcome name a group probe reports.
+#[cfg_attr(not(feature = "probes"), allow(dead_code))]
+fn group_outcome<T>(result: &Result<T, bulkhead_native::protocol::GroupsError>) -> &'static str {
+    use bulkhead_native::protocol::GroupsError;
+    match result {
+        Ok(_) => "ok",
+        Err(GroupsError::AccessDenied) => "access-denied",
+        Err(GroupsError::LimitReached) => "limit-reached",
+    }
+}
+
+/// An instance asked to join a process group.
+#[inline]
+#[allow(unused_variables)]
+pub(crate) fn group_join(
+    pid: Pid,
+    group: &str,
+    result: &Result<(), bulkhead_native::protocol::GroupsError>,
+) {
+    #[cfg(feature = "probes")]
+    anyprobe::fire!(group__join(pid.id, group, group_outcome(result)));
+}
+
+/// An instance published to a process group, as allowed: how many
+/// members it reached.
+#[inline]
+#[allow(unused_variables)]
+pub(crate) fn group_publish(from: Pid, group: &str, reached: u32) {
+    #[cfg(feature = "probes")]
+    anyprobe::fire!(group__publish(from.id, group, u64::from(reached)));
 }

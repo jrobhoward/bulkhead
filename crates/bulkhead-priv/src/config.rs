@@ -22,6 +22,7 @@
 //! zfs_parent = tank/bulkhead/volumes                # ZFS volumes (ROADMAP ZV1): their parent dataset
 //! zfs_max_quota = 50GiB                             # the largest quota a volume may have
 //! zfs = /usr/sbin/zfs                               # the zfs command (default /usr/sbin/zfs, /sbin/zfs on FreeBSD)
+//! node_watchdog_s = 30                              # kill a node silent this long (ROADMAP B6); 0: never
 //! ```
 
 use std::ops::RangeInclusive;
@@ -68,6 +69,12 @@ pub struct Config {
     pub unconfined: Vec<String>,
     /// ZFS volumes (ROADMAP ZV1), with `zfs_parent`; none without it.
     pub zfs: Option<ZfsConfig>,
+    /// How long the node may go without telling the helper it is alive
+    /// (`Request::Alive`) before the helper kills it, which ends its
+    /// instances, and exits for the service manager to start again
+    /// (ROADMAP B6). `None` (`node_watchdog_s = 0`): never. 30 s by
+    /// default; at least twice `bulkhead_priv_wire::ALIVE_EVERY_S`.
+    pub node_watchdog: Option<std::time::Duration>,
 }
 
 /// Where the helper makes apps' ZFS volumes, and their ceiling.
@@ -209,6 +216,20 @@ impl Config {
             }
             None => None,
         };
+        let node_watchdog = match kv.get("node_watchdog_s") {
+            None => Some(30),
+            Some(v) => match v.parse::<u64>() {
+                Ok(0) => None,
+                Ok(s) if s >= 2 * bulkhead_priv_wire::ALIVE_EVERY_S => Some(s),
+                _ => {
+                    return Err(format!(
+                        "node_watchdog_s is not 0 or a number of seconds of at least {}",
+                        2 * bulkhead_priv_wire::ALIVE_EVERY_S
+                    ));
+                }
+            },
+        }
+        .map(std::time::Duration::from_secs);
         let pids_max = num("pids_max")?;
         let memory_max = size(get("memory_max")?).ok_or("memory_max is not a size")?;
         if pids_max == 0 || memory_max == 0 {
@@ -245,6 +266,7 @@ impl Config {
             },
             unconfined,
             zfs,
+            node_watchdog,
         })
     }
 
@@ -270,7 +292,7 @@ impl Config {
     }
 }
 
-const KEYS: [&str; 18] = [
+const KEYS: [&str; 19] = [
     "node",
     "node_args",
     "node_uid",
@@ -289,6 +311,7 @@ const KEYS: [&str; 18] = [
     "zfs_parent",
     "zfs_max_quota",
     "zfs",
+    "node_watchdog_s",
 ];
 
 fn list(v: &str) -> impl Iterator<Item = &str> {

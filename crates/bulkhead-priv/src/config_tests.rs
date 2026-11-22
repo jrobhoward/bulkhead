@@ -182,3 +182,23 @@ fn load____writable_by_others____refused() {
 
     assert!(err.contains("owned by root"), "{err}");
 }
+
+#[rstest]
+#[case("", Some(30))]
+#[case("node_watchdog_s = 0\n", None)]
+#[case("node_watchdog_s = 60\n", Some(60))]
+fn parse____node_watchdog_s____the_default_off_or_given(
+    #[case] line: &str,
+    #[case] secs: Option<u64>,
+) {
+    let c = Config::parse(&format!("{GOOD}{line}")).unwrap();
+
+    assert_eq!(c.node_watchdog, secs.map(std::time::Duration::from_secs));
+}
+
+#[test]
+fn parse____node_watchdog_s_shorter_than_two_pings____refused() {
+    let err = Config::parse(&format!("{GOOD}node_watchdog_s = 5\n")).unwrap_err();
+
+    assert!(err.contains("at least 10"), "{err}");
+}

@@ -79,6 +79,11 @@ impl Started {
     pub fn pid(&self) -> u32 {
         self.child.id()
     }
+
+    /// Whether the helper has exited.
+    pub fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
 }
 
 impl Drop for Started {
@@ -129,7 +134,11 @@ pub fn zfs_parent() -> Option<String> {
 pub fn start_zfs(runner: &Path, base: &str) -> Started {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    start_with(runner, Some(&format!("{base}-{}-{n}", std::process::id())))
+    start_with(
+        runner,
+        Some(&format!("{base}-{}-{n}", std::process::id())),
+        0,
+    )
 }
 
 /// Remove a cgroup tree, leaves first.
@@ -166,10 +175,16 @@ pub fn dir_owned(path: &Path, uid: u32, mode: u32) -> PathBuf {
 /// Start the helper, on the current tokio runtime; `runner` is the
 /// `bulkhead-runner` to copy for it.
 pub fn start(runner: &Path) -> Started {
-    start_with(runner, None)
+    start_with(runner, None, 0)
 }
 
-fn start_with(runner: &Path, zfs: Option<&str>) -> Started {
+/// [`start`], the helper killing a node silent for `secs` (ROADMAP B6);
+/// the test process is the node.
+pub fn start_watchdog(runner: &Path, secs: u64) -> Started {
+    start_with(runner, None, secs)
+}
+
+fn start_with(runner: &Path, zfs: Option<&str>, watchdog_s: u64) -> Started {
     let node_uid = std::fs::metadata(super::workspace_root().join("target"))
         .unwrap()
         .uid();
@@ -202,7 +217,7 @@ fn start_with(runner: &Path, zfs: Option<&str>) -> Started {
         "node = /bin/false\nnode_args = \nnode_uid = {node_uid}\nnode_gid = {node_uid}\n\
          runner = {}\nuids = {first_uid}-{}\nstate = {}\nbinds = {}\n\
          memory_max = 1GiB\npids_max = 256\nports = 81\nunconfined = loose\n\
-         devfs_ruleset = {}\n",
+         devfs_ruleset = {}\nnode_watchdog_s = {watchdog_s}\n",
         runner.display(),
         first_uid + 99,
         state.display(),

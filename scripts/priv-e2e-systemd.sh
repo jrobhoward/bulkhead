@@ -220,6 +220,7 @@ memory_max = 2GiB
 pids_max = 1024
 ports = 80
 cgroup = /sys/fs/cgroup/system.slice/bulkhead.service
+node_watchdog_s = 10
 $ZFS_PRIV
 CONF
 chmod 0600 /etc/bulkhead/priv.conf
@@ -359,6 +360,13 @@ if [ -n "$ZFS_PARENT" ]; then
     if zfs list "$ZFS_PARENT/keeper" >/dev/null 2>&1; then echo "FAILED: the app's dataset is left"; exit 1; fi
     echo "the app's datasets are gone"
 fi
+echo "== a wedged node killed by its helper and started again (ROADMAP B6)"
+OLD=$(pgrep -x bulkhead | head -1); kill -STOP "$OLD"
+for i in $(seq 300); do NEW=$(pgrep -x bulkhead | head -1); [ -n "$NEW" ] && [ "$NEW" != "$OLD" ] && break; sleep 0.1; done
+[ -n "$NEW" ] && [ "$NEW" != "$OLD" ] || { echo "FAILED: the stopped node was not replaced"; exit 1; }
+for i in $(seq 150); do curl -sf http://127.0.0.1:8080/board >/dev/null && cli list >/dev/null 2>&1 && break; sleep 0.2; done
+echo "node $OLD stopped; $NEW runs, board: $(curl -s http://127.0.0.1:8080/board)"
+journalctl -u bulkhead --no-pager | grep "said nothing" | tail -1
 echo "== status"; cli status board
 # The board's process, by its cgroup: the node's drivers start first, so
 # its user is not the first of the range.

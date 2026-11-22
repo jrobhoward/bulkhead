@@ -57,6 +57,13 @@ struct Helper {
     apps: BTreeMap<u64, String>,
     /// A stop signal came, and there is no node to pass it to.
     stopping: bool,
+    /// When the node last said it was alive (ROADMAP B6).
+    alive_at: Instant,
+    /// The watchdog has fired: the node was killed, or (with no node of
+    /// the helper's) the helper is ending.
+    watchdog_fired: bool,
+    /// systemd's notification socket, if the unit gave one.
+    notify: Option<crate::notify::Notify>,
 }
 
 /// Run the helper; its exit status (the node's).
@@ -96,6 +103,8 @@ pub fn run(config: Config, mode: Mode) -> Result<i32, String> {
             (mine, Some(node))
         }
     };
+    // Before the fence, which would refuse making the socket.
+    let notify = crate::notify::Notify::from_env();
     platform::fence_self()?;
     let mut helper = Helper {
         config,
@@ -105,6 +114,9 @@ pub fn run(config: Config, mode: Mode) -> Result<i32, String> {
         insts: BTreeMap::new(),
         apps: BTreeMap::new(),
         stopping: false,
+        alive_at: Instant::now(),
+        watchdog_fired: false,
+        notify,
     };
     Ok(helper.serve(node.as_ref(), &signals))
 }
@@ -178,12 +190,15 @@ impl Helper {
                 PollFd::new(signals, PollFlags::IN),
             ];
             fds.extend(exit_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
-            // Roots a dying jail still held (FreeBSD) are retried soon.
-            let retry = platform::retry_pending(&self.st).and_then(|d| {
-                Some(rustix::event::Timespec {
-                    tv_sec: 0,
-                    tv_nsec: i64::try_from(d.as_nanos()).ok()?,
-                })
+            // Roots a dying jail still held (FreeBSD) are retried soon; the
+            // node's watchdog is checked when it would fire.
+            let wait = [platform::retry_pending(&self.st), self.watchdog_left()]
+                .into_iter()
+                .flatten()
+                .min();
+            let retry = wait.map(|d| rustix::event::Timespec {
+                tv_sec: i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+                tv_nsec: i64::from(d.subsec_nanos()),
             });
             if let Err(e) = rustix::event::poll(&mut fds, retry.as_ref())
                 && e != rustix::io::Errno::INTR
@@ -218,6 +233,22 @@ impl Helper {
                 eprintln!("bulkhead-priv: the node's socket closed");
                 break;
             }
+            if self.watchdog_left() == Some(Duration::ZERO) {
+                self.watchdog_fired = true;
+                let silent = self.alive_at.elapsed().as_secs();
+                eprintln!(
+                    "bulkhead-priv: the node said nothing for {silent} s (node_watchdog_s); it is killed"
+                );
+                match node {
+                    Some(node) => {
+                        if let Err(e) = platform::signal_node(node, libc::SIGKILL) {
+                            eprintln!("bulkhead-priv: killing the node: {e}");
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
         }
         self.drain();
         platform::unmount_all(&self.st);
@@ -226,6 +257,16 @@ impl Helper {
             Some((_, Some(signal))) => 128 + signal,
             _ => 0,
         }
+    }
+
+    /// How long until the node's watchdog fires (zero once it should);
+    /// `None` when it is off or has fired.
+    fn watchdog_left(&self) -> Option<Duration> {
+        let limit = self.config.node_watchdog?;
+        if self.watchdog_fired {
+            return None;
+        }
+        Some(limit.saturating_sub(self.alive_at.elapsed()))
     }
 
     fn on_signals(&mut self, node: Option<&Node>, signals: &OwnedFd) {
@@ -309,6 +350,13 @@ impl Helper {
                 Ok(reply) => (reply, None),
                 Err(reason) => (Reply::Refused { reason }, None),
             },
+            Request::Alive => {
+                self.alive_at = Instant::now();
+                if let Some(notify) = &self.notify {
+                    notify.send("WATCHDOG=1");
+                }
+                (Reply::Done, None)
+            }
             Request::Bind { address } => {
                 match check::bind_address(&self.config, &address).and_then(|addr| {
                     std::net::TcpListener::bind(addr).map_err(|e| format!("bind {addr}: {e}"))

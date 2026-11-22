@@ -1477,3 +1477,34 @@ async fn zfs____an_upgrade_snapshot____replaced_then_rolled_back_once_the_app_en
     );
     rt.destroy_volume("delta", "data").await.unwrap();
 }
+
+/// The node's watchdog (ROADMAP B6): a helper whose node (here the test)
+/// says nothing for `node_watchdog_s` ends; one told every second that the
+/// node is alive goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn watchdog____node_silent____its_helper_ends_and_one_told_it_lives_goes_on() {
+    if !privhelper::enabled() {
+        privhelper::skip("watchdog____node_silent");
+        return;
+    }
+    let mut silent = privhelper::start_watchdog(&native_fixtures().0, 10);
+    let mut told = privhelper::start_watchdog(&native_fixtures().0, 10);
+    let alive = told.helper.clone();
+    let pings = tokio::spawn(async move {
+        loop {
+            alive.alive();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    tokio::time::sleep(Duration::from_secs(14)).await;
+    let silent_ended = silent.exited();
+    let told_lives = !told.exited();
+    pings.abort();
+
+    assert!(
+        silent_ended,
+        "a silent node's helper ends after node_watchdog_s"
+    );
+    assert!(told_lives, "a node that says it is alive is left alone");
+}

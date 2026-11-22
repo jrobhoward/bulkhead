@@ -179,6 +179,8 @@ impl Node {
         }
         let creation = store.next_creation()?;
         let native = native_config(&config)?;
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let helper = native.helper.clone();
         let (drivers, ingress_args, modbus) = builtin_drivers(&config, &native)?;
         #[cfg(not(feature = "sql"))]
         if let Some(name) = config.datasources.keys().next() {
@@ -278,6 +280,8 @@ impl Node {
         volumes::check_parent(&config, &rt).await?;
         let apps = rt.start_apps(Vec::new()).await.map_err(internal)?;
         let stop = tokio::sync::watch::channel(false).0;
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        super::watchdog::start(helper, stop.subscribe());
         // Under the helper a driver is a user of its own: its files are
         // given to it before it starts (ROADMAP DA2).
         for e in rt.share_driver_files().await {

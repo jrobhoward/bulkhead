@@ -21,6 +21,8 @@ pub mod serial_path;
 mod server;
 mod state_view;
 mod store;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod watchdog;
 
 pub use config::{
     ArbiterKind, BucketConfig, BucketScope, ClusterConfig, ClusterRole, EgressBinding,

@@ -16,7 +16,6 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use bulkhead_native::lease::{KILLED_EXIT, LEASE_FD, NO_DEADLINE, now_ns};
-use rstest::rstest;
 
 /// The runner with `--lease`, its lease pipe's write end, and `cat`'s
 /// stdin's write end.
@@ -28,8 +27,15 @@ struct Leased {
 
 impl Leased {
     fn start(first: u64) -> Self {
+        Self::start_with(first, false)
+    }
+
+    /// The runner with `first` in its lease pipe, the node's end closed
+    /// before it starts when `node_gone`.
+    fn start_with(first: u64, node_gone: bool) -> Self {
         let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
         rustix::io::write(&write, &first.to_le_bytes()).unwrap();
+        let write = (!node_gone).then_some(write);
         let raw = read.as_raw_fd();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_bulkhead-runner"));
         cmd.args(["--executable", "/bin/cat", "--lease"])
@@ -54,7 +60,7 @@ impl Leased {
         let stdin = runner.stdin.take();
         Self {
             runner,
-            lease: Some(write),
+            lease: write,
             stdin,
         }
     }
@@ -134,18 +140,38 @@ fn lease____renewed_then_not____app_runs_then_is_killed_at_the_deadline() {
     assert!(leased.stderr().contains("the lease ended"));
 }
 
-#[rstest]
-#[case::node_still_there(false)]
-#[case::node_gone(true)]
-fn lease____not_renewed____killed_at_the_last_deadline(#[case] node_gone: bool) {
-    let mut leased = Leased::start(now_ns() + ms(200));
-    if node_gone {
-        leased.lease = None;
-    }
+#[test]
+fn lease____not_renewed____killed_at_the_last_deadline() {
+    let start = Instant::now();
+    let mut leased = Leased::start(now_ns() + ms(500));
 
-    let (status, _) = leased.exit_within(Duration::from_secs(5)).unwrap();
+    let (status, at) = leased.exit_within(Duration::from_secs(5)).unwrap();
 
     assert_eq!(status.code(), Some(i32::from(KILLED_EXIT)));
+    assert!(
+        at >= start + Duration::from_millis(500),
+        "killed {:?} after the start, before its deadline",
+        at - start
+    );
+}
+
+/// The node gone before the watchdog read its one deadline (its end closed
+/// before the runner starts, so the deadline and the closed end are read
+/// in one call): the closed end wins, and the app is killed at once, the
+/// early side (`watchdog.rs`, `drain`).
+#[test]
+fn lease____node_gone_with_its_deadline_unread____killed_at_once() {
+    let start = Instant::now();
+    let mut leased = Leased::start_with(now_ns() + ms(2_000), true);
+
+    let (status, at) = leased.exit_within(Duration::from_secs(5)).unwrap();
+
+    assert_eq!(status.code(), Some(i32::from(KILLED_EXIT)));
+    assert!(
+        at < start + Duration::from_millis(1_500),
+        "killed {:?} after the start: it waited for the deadline",
+        at - start
+    );
 }
 
 #[test]

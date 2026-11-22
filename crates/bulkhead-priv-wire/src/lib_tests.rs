@@ -38,6 +38,7 @@ fn spawn() -> Spawn {
 #[case(Request::Volume(VolumeRequest::Destroy { app: "orders".into(), volume: "data".into() }))]
 #[case(Request::Volume(VolumeRequest::Snapshot { app: "orders".into(), volume: "data".into() }))]
 #[case(Request::Volume(VolumeRequest::Rollback { app: "orders".into(), volume: "data".into() }))]
+#[case(Request::Alive)]
 fn Request____encoded____decodes_the_same(#[case] request: Request) {
     let bytes = request.encode();
 

@@ -8,11 +8,17 @@
 //! reset with `ROLLBACK`, then `DISCARD ALL` ([`RESET`]), so a transaction left open, or a
 //! session setting, never carries over to the next statement, which may
 //! be another app's.
+//!
+//! A password from a file ([`Secret::File`]) is read again for each new
+//! connection (ROADMAP DA3b), so a password rewritten in place is used
+//! from the next connection on, the driver still running; connections
+//! already open stay, as the server keeps a session across a change of
+//! password.
 
 use std::io;
 use std::os::fd::OwnedFd;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
 use bulkhead_native::protocol::SqlError;
@@ -118,10 +124,64 @@ pub type Pool = managed::Pool<Manager>;
 /// A connection from the pool.
 pub type Conn = managed::Object<Manager>;
 
+/// Where a connection's password comes from.
+pub enum Secret {
+    /// None: the server asks for none.
+    None,
+    /// Given once, at the driver's start (a node secret from its
+    /// environment).
+    Fixed(Vec<u8>),
+    /// A file, read again for each new connection; a failed read keeps the
+    /// last password read, logged.
+    File {
+        /// Reads the file, its trailing newline trimmed.
+        read: Box<dyn Fn() -> io::Result<Vec<u8>> + Send + Sync>,
+        /// The last password read.
+        last: Mutex<Vec<u8>>,
+    },
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "Secret::None",
+            Self::Fixed(_) => "Secret::Fixed",
+            Self::File { .. } => "Secret::File",
+        })
+    }
+}
+
+impl Secret {
+    /// The password for a new connection, if any.
+    pub fn current(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::None => None,
+            Self::Fixed(p) => Some(p.clone()),
+            Self::File { read, last } => {
+                let mut last = last.lock().unwrap_or_else(PoisonError::into_inner);
+                match read() {
+                    Ok(now) if now != *last => {
+                        bulkhead_sdk::info!("the password file changed: new connections use it");
+                        *last = now;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        bulkhead_sdk::warn!(
+                            "the password file was not read ({e}); the last password is used"
+                        );
+                    }
+                }
+                Some(last.clone())
+            }
+        }
+    }
+}
+
 /// Opens and resets the pool's connections.
 pub struct Manager {
     connector: Connector,
     pg: tokio_postgres::Config,
+    secret: Secret,
     transport: Transport,
     tls: Option<MakeRustlsConnect>,
     host: String,
@@ -158,10 +218,13 @@ impl managed::Manager for Manager {
 
     async fn create(&self) -> Result<Client, SqlError> {
         let stream = self.stream().await?;
+        let mut pg = self.pg.clone();
+        if let Some(password) = self.secret.current() {
+            pg.password(password);
+        }
         let client = match &self.tls {
             None => {
-                let (client, connection) = self
-                    .pg
+                let (client, connection) = pg
                     .connect_raw(stream, NoTls)
                     .await
                     .map_err(|e| sql_error(&e))?;
@@ -171,8 +234,7 @@ impl managed::Manager for Manager {
             Some(make) => {
                 let tls = MakeTlsConnect::<Stream>::make_tls_connect(&mut make.clone(), &self.host)
                     .map_err(|e| SqlError::Unavailable(format!("TLS: {e}")))?;
-                let (client, connection) = self
-                    .pg
+                let (client, connection) = pg
                     .connect_raw(stream, tls)
                     .await
                     .map_err(|e| sql_error(&e))?;
@@ -200,15 +262,16 @@ impl managed::Manager for Manager {
     }
 }
 
-/// The pool for `config`, `password` given to the server if it asks, TLS
-/// checked against `ca` (PEM) when required, streams asked of `connector`.
+/// The pool for `config`, the password from `secret` given to the server
+/// if it asks, TLS checked against `ca` (PEM) when required, streams asked
+/// of `connector`.
 ///
 /// # Errors
 ///
 /// The CA certificates cannot be read, or the pool cannot be built.
 pub fn build(
     config: &Config,
-    password: Option<Vec<u8>>,
+    secret: Secret,
     ca: Option<&[u8]>,
     connector: Connector,
 ) -> Result<Pool, String> {
@@ -220,9 +283,6 @@ pub fn build(
             "-c statement_timeout={}",
             config.statement_timeout_ms
         ));
-    if let Some(password) = password {
-        pg.password(password);
-    }
     let tls = match ca {
         None => {
             pg.ssl_mode(SslMode::Disable);
@@ -236,6 +296,7 @@ pub fn build(
     let manager = Manager {
         connector,
         pg,
+        secret,
         transport: config.transport,
         tls,
         host: config.host.clone(),
@@ -292,3 +353,7 @@ pub fn tls_config(pem: &[u8]) -> Result<rustls::ClientConfig, String> {
     .with_root_certificates(roots)
     .with_no_client_auth())
 }
+
+#[cfg(test)]
+#[path = "pool_tests.rs"]
+mod pool_tests;

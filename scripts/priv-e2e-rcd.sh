@@ -111,6 +111,7 @@ binds = /var/db/bulkhead, $K$ZFS_BINDS
 memory_max = 2GiB
 pids_max = 1024
 ports = 80
+node_watchdog_s = 10
 $ZFS_PRIV
 CONF
 chmod 0600 /usr/local/etc/bulkhead/priv.conf
@@ -152,6 +153,13 @@ if [ -n "$ZFS_PARENT" ]; then
         echo "FAILED: destroyed a volume that does not exist"; exit 1
     fi
 fi
+echo "== a wedged node killed by its helper, and daemon(8) starting it again (ROADMAP B6)"
+OLD=$(pgrep -x bulkhead | head -1); kill -STOP "$OLD"
+for i in $(seq 300); do NEW=$(pgrep -x bulkhead | head -1); [ -n "$NEW" ] && [ "$NEW" != "$OLD" ] && break; sleep 0.1; done
+[ -n "$NEW" ] && [ "$NEW" != "$OLD" ] || { echo "FAILED: the stopped node was not replaced"; exit 1; }
+for i in $(seq 150); do [ -S /var/db/bulkhead/admin.sock ] && su -m bulkhead -c "/usr/local/bin/bulkhead --socket /var/db/bulkhead/admin.sock list" >/dev/null 2>&1 && break; sleep 0.2; done
+echo "node $OLD stopped; $NEW runs"
+grep "said nothing" /var/log/bulkhead.log | tail -1
 echo "== reload"; service bulkhead reload; sleep 1
 echo "== stop"; service bulkhead stop; sleep 1
 echo "left: $(pgrep -x bulkhead | wc -l | tr -d ' ') nodes, $(pgrep -x bulkhead-priv | wc -l | tr -d ' ') helpers"

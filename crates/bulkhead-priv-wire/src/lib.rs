@@ -145,7 +145,14 @@ pub enum Request {
     /// A ZFS volume (ROADMAP ZV1), under the parent dataset the helper's
     /// own configuration names.
     Volume(VolumeRequest),
+    /// The node is alive (ROADMAP B6): sent by a task on its runtime every
+    /// [`ALIVE_EVERY_S`] seconds. A helper that hears none for its
+    /// `node_watchdog_s` kills the node. Answered [`Reply::Done`].
+    Alive,
 }
+
+/// How often a node tells its helper it is alive ([`Request::Alive`]).
+pub const ALIVE_EVERY_S: u64 = 5;
 
 /// What the node asks of an app's ZFS volume (ROADMAP ZV1). The node
 /// names an app and a volume, never a dataset: the helper puts it at
@@ -278,6 +285,7 @@ const T_VOLUME_LIST: u8 = 6;
 const T_VOLUME_DESTROY: u8 = 7;
 const T_VOLUME_SNAPSHOT: u8 = 8;
 const T_VOLUME_ROLLBACK: u8 = 9;
+const T_ALIVE: u8 = 10;
 const T_SPAWNED: u8 = 0x81;
 const T_DONE: u8 = 0x82;
 const T_BOUND: u8 = 0x83;
@@ -462,6 +470,7 @@ impl Request {
                 w.str(app);
                 w.str(volume);
             }
+            Self::Alive => w.u8(T_ALIVE),
         }
         w.0
     }
@@ -540,6 +549,7 @@ impl Request {
                 app: r.str()?,
                 volume: r.str()?,
             }),
+            T_ALIVE => Self::Alive,
             _ => return None,
         };
         r.end()?;

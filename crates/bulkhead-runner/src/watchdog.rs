@@ -128,6 +128,11 @@ enum Drained {
     Closed,
 }
 
+/// Read what the lease pipe holds. The node's end closed wins over a
+/// deadline read in the same call: that deadline is dropped, and with none
+/// read before the watchdog kills at once. The early side is the safe one
+/// for a node that is gone (ROADMAP, decided 2026-11-08); a deadline read
+/// in an earlier call still stands.
 fn drain(lease: BorrowedFd<'_>) -> Drained {
     let mut buf = [0u8; 512];
     let mut found = Drained::Nothing;

@@ -83,6 +83,44 @@ async fn sql____tcp_by_name_with_a_password_file____logged_in() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sql____password_file_rewritten_in_place____new_connections_log_in_with_it() {
+    let Some(pg) = Scratch::start_with(&Options {
+        tcp: true,
+        password: Some("s3cret"),
+        ..Options::default()
+    }) else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("main.password");
+    std::fs::write(&file, "s3cret\n").unwrap();
+    let s = common::serve(
+        &common::args(
+            "tcp",
+            json!({"password": {"file": "/driver/main.password"}}),
+        ),
+        Some(common::tcp(&pg)),
+        &[&file],
+    )
+    .await;
+    s.query("SELECT 1", vec![]).await.unwrap();
+
+    // The role's password changed, and the file rewritten in place (its
+    // inode kept, as the driver's access is to it).
+    s.query("ALTER ROLE bulkhead PASSWORD 'n3w'", vec![])
+        .await
+        .unwrap();
+    std::fs::write(&file, "n3w\n").unwrap();
+    // Its one connection ended, so the next statement needs a new one.
+    let _ = s
+        .query("SELECT pg_terminate_backend(pg_backend_pid())", vec![])
+        .await;
+    let rows = s.query("SELECT current_user::text", vec![]).await;
+
+    assert_eq!(rows.unwrap(), vec![vec![text("bulkhead")]]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sql____a_wrong_password____refused_by_the_server() {
     let Some(pg) = Scratch::start_with(&Options {
         tcp: true,
