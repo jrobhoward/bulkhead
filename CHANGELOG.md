@@ -8,6 +8,18 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Worker threads in the SQL and egress drivers (ROADMAP DA3b, DA4b):
+  `[datasources.<name>] threads` and `[egress] threads`, each thread with
+  a runtime, a sender channel and a pool of its own (SQL's a share of
+  `pool_size`), a request going to the one with the fewest in flight.
+  The default is a quarter of the machine's cores, 1 to 4: on 16 cores
+  four threads gave 31% more SQL statements and 2 to 19% more egress
+  requests from 16 instances at once, while on a Raspberry Pi 5 more than
+  one cost more than they gained (BASELINE.md, 2026-11-23). Each is a
+  sender channel under `[limits] senders_max`, which node config checks.
+  The SQL driver's counters reach the metrics once a second.
+- `scripts/overnight.sh`: baselines in rounds on an idle machine and a
+  test machine at once (BASELINE.md, 2026-11-23).
 - HTTP/2 in the ingress driver (ROADMAP DA2b): offered by ALPN on every
   TLS listener (`h2`, then `http/1.1`), `http2 = false` in
   `[http.<name>]` to turn it off; plain listeners stay HTTP/1.1. Each

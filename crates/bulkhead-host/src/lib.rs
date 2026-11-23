@@ -74,7 +74,7 @@ pub use config::{
     Blobs, DEFAULT_EGRESS_DENY, DriverEndpoint, DriverListener, DriverProfile,
     EGRESS_DRIVER_PREFIX, Egress, EgressIdentity, HostObjectRequest, HostObjects, ModbusDrivers,
     NativeConfig, RuntimeConfig, SQL_DRIVER_PREFIX, SecretSource, SharedBucket, SqlDatasource,
-    SqlTls, egress_driver_app,
+    SqlTls, default_driver_threads, egress_driver_app,
 };
 pub use error::HostError;
 pub use formats::{FIRST_FORMATS, FinalizeRefused, Finalized};

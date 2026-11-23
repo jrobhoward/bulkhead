@@ -66,6 +66,25 @@ fn from_args____a_pool_of_none____refused() {
     assert!(got.contains("pool_size is 0"), "{got}");
 }
 
+#[rstest]
+#[case::default("", 4)]
+#[case::fewer(r#", "threads": 2"#, 2)]
+#[case::no_more_than_the_pool(r#", "threads": 8"#, 4)]
+fn workers____threads_and_pool____the_smaller(#[case] extra: &str, #[case] want: usize) {
+    let config = Config::from_args(&args(extra)).unwrap();
+
+    assert_eq!(config.workers(), want);
+}
+
+#[rstest]
+#[case::none(r#", "threads": 0"#)]
+#[case::too_many(r#", "threads": 17"#)]
+fn from_args____threads_out_of_range____refused(#[case] extra: &str) {
+    let got = Config::from_args(&args(extra)).unwrap_err();
+
+    assert!(got.contains("threads must be 1 to 16"), "{got}");
+}
+
 #[test]
 fn from_args____tls_over_a_unix_socket____refused() {
     let text = String::from_utf8(args(

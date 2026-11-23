@@ -379,6 +379,8 @@ connect_timeout_ms = 5000
 acquire_timeout_ms = 5000              # a call waiting longer for a connection gets limit-reached
 statement_timeout_ms = 30000           # the server cancels longer statements (timeout)
 max_result_bytes = "16MiB"             # larger results are refused (too-large)
+threads = 4                            # the driver's worker threads, 1 to 16, each a share of pool_size; no more than pool_size run, and no more than [limits] senders_max;
+                                       # default a quarter of the cores, 1 to 4 (one on a 4-core machine)
 
 [egress]                               # HTTP requests from apps (bulkhead:http-egress); every key optional
 allow = ["*.internal", "https://api.example.com"]  # the most any app may reach (manifest syntax); unset: no ceiling
@@ -395,10 +397,11 @@ connect_timeout_ms = 10000
 first_byte_timeout_ms = 30000          # to the response headers; an app's own timeout may only be shorter
 between_bytes_timeout_ms = 30000       # between chunks of a response body
 pool_idle_timeout_ms = 90000           # idle pooled connections are closed after this
-pool_max_idle_per_host = 32
+pool_max_idle_per_host = 32            # per driver thread
 max_concurrent = 64                    # requests in flight per app, unless its manifest says
 max_response_body = "16MiB"            # larger response bodies fail the request; at most 16 MiB
 traceparent = true                     # a traced request carries the W3C traceparent header (ROADMAP O1); false keeps trace ids in
+threads = 4                            # each app's driver's worker threads, 1 to 16, no more than [limits] senders_max; default a quarter of the cores, 1 to 4
 
 [tracing]                              # where traces start (ROADMAP O1; OBSERVABILITY.md, "Traces"); every key optional
 sample_rate = 0.0                      # the share of HTTP requests without a client's sampled traceparent that start a trace, 0 to 1

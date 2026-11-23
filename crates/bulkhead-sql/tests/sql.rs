@@ -52,7 +52,7 @@ async fn sql____over_the_unix_socket____statements_with_parameters_run() {
 
     assert_eq!(changed, 2);
     assert_eq!(rows, vec![vec![int(1), text("a")], vec![int(2), text("b")]]);
-    assert!(s.counter("connections_total") >= 1);
+    assert!(s.counter("connections_total").await >= 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -308,7 +308,7 @@ async fn sql____a_connection_back_in_the_pool____its_session_reset() {
     assert_ne!(first, second);
     // Reset, not replaced: a reset that fails makes the pool open a new
     // connection for each statement.
-    assert_eq!(s.counter("connections_total"), 1);
+    assert_eq!(s.counter("connections_total").await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -339,7 +339,7 @@ async fn sql____limits____timeout_too_large_and_unsupported() {
         matches!(&bad, Err(SqlError::Query { code, .. }) if code == "42P01"),
         "{bad:?}"
     );
-    assert!(s.counter("requests_failed_total") >= 4);
+    assert!(s.counter("requests_failed_total").await >= 4);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

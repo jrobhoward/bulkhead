@@ -97,8 +97,17 @@ wait_idle() {
 
 build() {
   note "building (release)"
-  cargo build --release -q -p bulkhead-runner -p bulkhead-fixture-native -p bulkhead-fixture-sdk \
-    -p bulkhead-egress -p bulkhead-sql -p bulkhead-ingress 2>&1 | tee -a "$log" | tail -3 || return 1
+  # The examples' own builds, package for package: cargo unifies features
+  # per invocation, so one build of them all leaves each example a
+  # rebuild of its own inside its first measured run.
+  local step
+  for step in "-p bulkhead-runner -p bulkhead-fixture-native -p bulkhead-sql" \
+    "-p bulkhead-runner -p bulkhead-egress" \
+    "-p bulkhead-fixture-sdk --bin bulkhead-fixture-sdk" \
+    "-p bulkhead-runner" "-p bulkhead-ingress"; do
+    # shellcheck disable=SC2086 # $step is words on purpose.
+    cargo build --release -q $step 2>&1 | tee -a "$log" | tail -3 || return 1
+  done
   cargo build --release -q -p bulkhead-host --examples 2>&1 | tee -a "$log" | tail -3 || return 1
   (cd spikes/s37 && cargo build --release -q -p s37-bench -p s37-app) 2>&1 | tee -a "$log" | tail -3 || return 1
 }

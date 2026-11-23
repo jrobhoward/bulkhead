@@ -192,12 +192,16 @@ pub struct SqlDatasource {
     pub statement_timeout: Duration,
     /// Largest result a call returns, in bytes (`too-large` above it).
     pub max_result_bytes: u64,
+    /// Its driver's worker threads, each with a sender channel (ROADMAP
+    /// DA3b), [`default_driver_threads`] by default; no more than
+    /// `pool_size` run.
+    pub threads: usize,
 }
 
 impl SqlDatasource {
     /// A datasource at `host` with the defaults: port 5432, no password,
     /// no TLS, 10 connections, 5 s to connect and to acquire, statements
-    /// cancelled after 30 s, results up to 16 MiB.
+    /// cancelled after 30 s, results up to 16 MiB, [`default_driver_threads`].
     #[must_use]
     pub fn new(
         host: impl Into<String>,
@@ -211,6 +215,7 @@ impl SqlDatasource {
             user: user.into(),
             password: None,
             tls: SqlTls::Disable,
+            threads: default_driver_threads(),
             pool_size: 10,
             connect_timeout: Duration::from_secs(5),
             acquire_timeout: Duration::from_secs(5),
@@ -262,6 +267,12 @@ impl SqlDatasource {
             connect: Some(self.endpoint()),
             ..DriverProfile::default()
         }
+    }
+
+    /// The sender channels its driver opens: one per worker thread.
+    #[must_use]
+    pub fn driver_senders(&self) -> usize {
+        self.threads.min(self.pool_size).max(1)
     }
 
     /// How long the node waits for the driver's answer: longer than the
@@ -324,8 +335,21 @@ impl SqlDatasource {
             "acquire_timeout_ms": ms(self.acquire_timeout),
             "statement_timeout_ms": ms(self.statement_timeout),
             "max_result_bytes": self.max_result_bytes,
+            "threads": self.threads.max(1),
         }))
     }
+}
+
+/// A driver's worker threads unless node config sets them (ROADMAP DA3b,
+/// DA4b): a quarter of this machine's cores, 1 to 4. On a Raspberry Pi 5's
+/// four cores more than one cost more than they gained, the apps, the node
+/// and the database filling the machine; on 16 they gained a third
+/// (BASELINE.md, 2026-11-23).
+#[must_use]
+pub fn default_driver_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get() / 4)
+        .clamp(1, 4)
 }
 
 /// The prefix of a datasource's driver app (`bulkhead-sql-<datasource>`),
@@ -683,6 +707,9 @@ pub struct Egress {
     /// Whether a traced request carries a W3C `traceparent` header to the
     /// server (ROADMAP O1); true by default.
     pub traceparent: bool,
+    /// Each driver's worker threads, each with a sender channel (ROADMAP
+    /// DA4b), [`default_driver_threads`] by default.
+    pub threads: usize,
 }
 
 /// An app's client certificate for its egress driver ([`Egress::identities`]).
@@ -723,6 +750,7 @@ impl Default for Egress {
             proxy: None,
             identities: std::collections::BTreeMap::new(),
             traceparent: true,
+            threads: default_driver_threads(),
         }
     }
 }

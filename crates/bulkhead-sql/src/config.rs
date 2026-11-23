@@ -6,7 +6,8 @@
 //!  "password": {"file": "/driver/main.password"},
 //!  "tls": {"require": {"ca_file": "/driver/main-ca.pem"}},
 //!  "pool_size": 10, "connect_timeout_ms": 5000, "acquire_timeout_ms": 5000,
-//!  "statement_timeout_ms": 30000, "max_result_bytes": 16777216}
+//!  "statement_timeout_ms": 30000, "max_result_bytes": 16777216,
+//!  "threads": 4}
 //! ```
 //!
 //! The node connects each stream itself (`Request::Connect`) to the
@@ -92,6 +93,17 @@ pub struct Config {
     pub statement_timeout_ms: u64,
     /// The largest result answered, in bytes.
     pub max_result_bytes: u64,
+    /// Worker threads, each with a runtime and a sender channel of its
+    /// own (ROADMAP DA3b), 4 by default; no more than `pool_size` run.
+    #[serde(default = "default_threads")]
+    pub threads: usize,
+}
+
+/// Most worker threads.
+pub const MAX_THREADS: usize = 16;
+
+fn default_threads() -> usize {
+    4
 }
 
 impl Config {
@@ -99,13 +111,19 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Not this format, a pool of no connections, or TLS over a Unix
-    /// socket (Postgres serves none there).
+    /// Not this format, a pool of no connections, threads outside 1 to
+    /// [`MAX_THREADS`], or TLS over a Unix socket (Postgres serves none
+    /// there).
     pub fn from_args(args: &[u8]) -> Result<Self, String> {
         let config: Self =
             serde_json::from_slice(args).map_err(|e| format!("init arguments: {e}"))?;
         if config.pool_size == 0 {
             return Err("init arguments: pool_size is 0".into());
+        }
+        if !(1..=MAX_THREADS).contains(&config.threads) {
+            return Err(format!(
+                "init arguments: threads must be 1 to {MAX_THREADS}"
+            ));
         }
         if config.transport == Transport::Unix && config.tls != Tls::Disable {
             return Err("init arguments: TLS over a Unix socket".into());
@@ -117,6 +135,13 @@ impl Config {
     #[must_use]
     pub fn connect_timeout(&self) -> Duration {
         Duration::from_millis(self.connect_timeout_ms)
+    }
+
+    /// The worker threads that run: [`Config::threads`], no more than the
+    /// pool's connections.
+    #[must_use]
+    pub fn workers(&self) -> usize {
+        self.threads.min(self.pool_size).max(1)
     }
 
     /// [`Config::acquire_timeout_ms`].

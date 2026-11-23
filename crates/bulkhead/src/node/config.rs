@@ -534,6 +534,11 @@ pub struct DatasourceBinding {
     /// Largest result a call returns.
     #[serde(default = "default_max_result")]
     pub max_result_bytes: ByteSize,
+    /// Its driver's worker threads (ROADMAP DA3b), each a sender channel
+    /// under `[limits] senders_max`; no more than `pool_size` run. A
+    /// quarter of the machine's cores, 1 to 4, by default.
+    #[serde(default = "default_sql_threads")]
+    pub threads: usize,
 }
 
 /// TLS to a datasource.
@@ -553,6 +558,10 @@ fn default_pg_port() -> u16 {
 
 fn default_pool_size() -> usize {
     10
+}
+
+fn default_sql_threads() -> usize {
+    bulkhead_host::default_driver_threads()
 }
 
 fn default_sql_wait_ms() -> u64 {
@@ -1051,6 +1060,11 @@ pub struct EgressBinding {
     /// larger one fails the request. At most 16 MiB, a frame's body.
     #[serde(default = "default_egress_max_body")]
     pub max_response_body: ByteSize,
+    /// Each egress driver's worker threads (ROADMAP DA4b), 1 to 16, each a
+    /// sender channel under `[limits] senders_max`; a quarter of the
+    /// machine's cores, 1 to 4, by default.
+    #[serde(default = "default_egress_threads")]
+    pub threads: usize,
 }
 
 impl Default for EgressBinding {
@@ -1071,6 +1085,7 @@ impl Default for EgressBinding {
             proxy: None,
             identities: BTreeMap::new(),
             traceparent: true,
+            threads: default_egress_threads(),
         }
     }
 }
@@ -1144,6 +1159,7 @@ impl EgressBinding {
         e.deny.clone_from(&self.deny);
         e.proxy.clone_from(&self.proxy);
         e.traceparent = self.traceparent;
+        e.threads = self.threads;
         e.identities = self
             .identities
             .iter()
@@ -1438,6 +1454,10 @@ fn default_egress_idle_per_host() -> usize {
 
 fn default_egress_max_body() -> ByteSize {
     ByteSize::mib(16)
+}
+
+fn default_egress_threads() -> usize {
+    bulkhead_host::default_driver_threads()
 }
 
 fn default_egress_concurrent() -> u32 {
@@ -1904,6 +1924,15 @@ impl NodeConfig {
 
     fn check_egress(&self) -> Result<(), NodeError> {
         let e = &self.egress;
+        if !(1..=16).contains(&e.threads)
+            || u32::try_from(e.threads).is_ok_and(|n| n > self.limits.senders_max)
+        {
+            return Err(NodeError::Invalid(format!(
+                "node config: egress.threads must be 1 to 16, and no more than [limits] \
+                 senders_max ({})",
+                self.limits.senders_max
+            )));
+        }
         if let Some(allow) = &e.allow {
             bulkhead_host::services::egress::within(allow, None)
                 .map_err(|m| NodeError::Invalid(format!("node config: egress.{m}")))?;
@@ -2145,6 +2174,16 @@ impl NodeConfig {
                 || ds.max_result_bytes.bytes() == 0
             {
                 return invalid("pool_size, the timeouts and max_result_bytes must be more than 0");
+            }
+            let senders = ds.threads.min(ds.pool_size);
+            if !(1..=16).contains(&ds.threads)
+                || u32::try_from(senders).is_ok_and(|n| n > self.limits.senders_max)
+            {
+                return invalid(&format!(
+                    "threads must be 1 to 16, and its driver's threads (no more than \
+                     pool_size) no more than [limits] senders_max ({})",
+                    self.limits.senders_max
+                ));
             }
         }
         Ok(())

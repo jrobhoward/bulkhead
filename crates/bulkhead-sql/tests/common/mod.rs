@@ -243,8 +243,10 @@ impl Served {
         }
     }
 
-    /// The driver's counter `bulkhead_sql_<name>`, once reported, else 0.
-    pub fn counter(&self, name: &str) -> u64 {
+    /// The driver's counter `bulkhead_sql_<name>` after its next flush
+    /// (worker 0 adds the counts once a second); 0 if never reported.
+    pub async fn counter(&self, name: &str) -> u64 {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         let wanted = format!("bulkhead_sql_{name}{{");
         self.rt
             .render_metrics()

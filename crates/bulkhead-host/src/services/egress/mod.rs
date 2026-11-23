@@ -178,6 +178,7 @@ impl Shared {
                 "max_response_body": self.config.max_response_body,
                 "roots_pem": roots_pem,
                 "traceparent": self.config.traceparent,
+                "threads": self.config.threads.max(1),
             });
             // The files' paths in the driver's root, never their contents.
             if let Some(identity) = self.config.identities.get(app) {

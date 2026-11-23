@@ -22,15 +22,16 @@ use crate::node::error::NodeError;
 /// A datasource driver's manifest: one instance; messages from itself
 /// alone, so no app can reach its database but through the node's checks
 /// and caps; restarts that never give up; its counters as
-/// `bulkhead_sql_*`, labelled with the datasource.
-fn manifest(app: &str, args: serde_json::Value) -> Result<AppManifest, NodeError> {
+/// `bulkhead_sql_*`, labelled with the datasource; a sender channel for
+/// each of its `senders` threads.
+fn manifest(app: &str, args: serde_json::Value, senders: usize) -> Result<AppManifest, NodeError> {
     let spec = serde_json::json!({
         "kind": "native-process",
         "native": { "program": "executable" },
         "instances": { "count": 1 },
         "lifecycle": { "start_args": args },
         "supervision": builtin::supervision(),
-        "limits": { "memory_max": "256MiB" },
+        "limits": { "memory_max": "256MiB", "senders_max": senders },
         "messaging_acl": { "accept_from": [app], "may_call": [app] },
         "capabilities": {
             "bulkhead:metrics": { "prefix": "bulkhead_sql" },
@@ -78,7 +79,7 @@ pub(super) async fn start(
         builtin::start(
             rt,
             apps,
-            AppDeployment::new(manifest(&app, args)?, code.clone()),
+            AppDeployment::new(manifest(&app, args, ds.driver_senders())?, code.clone()),
         )
         .await?;
         tracing::info!(datasource = %name, "datasource driver started");

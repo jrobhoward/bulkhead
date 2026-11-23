@@ -23,15 +23,20 @@ use crate::node::error::NodeError;
 
 /// A driver's manifest: one instance; messages from itself alone, so no
 /// app reaches it but through the node's checks; restarts that never give
-/// up; its counters as `bulkhead_egress_*`.
-fn manifest(driver: &str, args: serde_json::Value) -> Result<AppManifest, NodeError> {
+/// up; its counters as `bulkhead_egress_*`; a sender channel for each of
+/// its `threads`.
+fn manifest(
+    driver: &str,
+    args: serde_json::Value,
+    threads: usize,
+) -> Result<AppManifest, NodeError> {
     let spec = serde_json::json!({
         "kind": "native-process",
         "native": { "program": "executable" },
         "instances": { "count": 1 },
         "lifecycle": { "start_args": args },
         "supervision": builtin::supervision(),
-        "limits": { "memory_max": "256MiB" },
+        "limits": { "memory_max": "256MiB", "senders_max": threads },
         "messaging_acl": { "accept_from": [driver], "may_call": [driver] },
         "capabilities": {
             "bulkhead:metrics": { "prefix": "bulkhead_egress" },
@@ -101,7 +106,7 @@ impl Node {
         builtin::start(
             &self.rt,
             &self.apps,
-            AppDeployment::new(manifest(&driver, args)?, code),
+            AppDeployment::new(manifest(&driver, args, self.config.egress.threads)?, code),
         )
         .await?;
         tracing::info!(app = %name, "egress driver started");

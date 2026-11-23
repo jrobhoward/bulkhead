@@ -613,6 +613,8 @@ fn NodeConfig____bad_datasource____refused() {
             "ca_file is only for tls \"require\"",
         ),
         ("pool_size = 0\n", "must be more than 0"),
+        ("threads = 0\n", "threads must be 1 to 16"),
+        ("threads = 17\n", "threads must be 1 to 16"),
         (
             "tls = \"require\"\nca_file = \"ca.pem\"\n",
             "ca_file must be an absolute path",
@@ -739,6 +741,8 @@ max_concurrent = 4
 #[case::zero_timeout("connect_timeout_ms = 0", "egress.connect_timeout_ms")]
 #[case::zero_concurrent("max_concurrent = 0", "egress.max_concurrent")]
 #[case::unknown("allow_lopback = true", "allow_lopback")]
+#[case::no_threads("threads = 0", "egress.threads must be 1 to 16")]
+#[case::too_many_threads("threads = 17", "egress.threads must be 1 to 16")]
 fn egress____invalid____refused(#[case] line: &str, #[case] expected: &str) {
     let err = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n[egress]\n{line}\n"))
         .unwrap_err()
@@ -1245,4 +1249,37 @@ fn NodeConfig____http2_and_max_streams____on_and_100_by_default() {
     assert_eq!(plain.http["main"].max_streams, 100);
     assert!(!set.http["main"].http2);
     assert_eq!(set.http["main"].max_streams, 8);
+}
+
+#[test]
+fn driver_threads____more_than_senders_max____refused() {
+    let head = "data_dir = \"/d\"\n[limits]\nsenders_max = 2\n";
+    let ds = "[datasources.main]\nhost = \"db\"\ndbname = \"app\"\nuser = \"app\"\n";
+    let sql = NodeConfig::from_toml_str(&format!("{head}[egress]\nthreads = 1\n{ds}threads = 3\n"))
+        .unwrap_err()
+        .to_string();
+    let capped_by_pool = NodeConfig::from_toml_str(&format!(
+        "{head}[egress]\nthreads = 2\n{ds}threads = 3\npool_size = 2\n"
+    ));
+    let egress = NodeConfig::from_toml_str(&format!("{head}[egress]\nthreads = 3\n"))
+        .unwrap_err()
+        .to_string();
+
+    assert!(sql.contains("datasources.main"), "{sql}");
+    assert!(sql.contains("senders_max (2)"), "{sql}");
+    assert!(capped_by_pool.is_ok(), "{capped_by_pool:?}");
+    assert!(egress.contains("senders_max (2)"), "{egress}");
+}
+
+#[test]
+fn driver_threads____unset____a_quarter_of_the_cores_1_to_4() {
+    let config = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[datasources.main]\nhost = \"db\"\ndbname = \"app\"\nuser = \"app\"\n",
+    )
+    .unwrap();
+
+    let want = bulkhead_host::default_driver_threads();
+    assert!((1..=4).contains(&want));
+    assert_eq!(config.datasources["main"].threads, want);
+    assert_eq!(config.egress.threads, want);
 }

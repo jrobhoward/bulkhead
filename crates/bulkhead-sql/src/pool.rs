@@ -181,7 +181,7 @@ impl Secret {
 pub struct Manager {
     connector: Connector,
     pg: tokio_postgres::Config,
-    secret: Secret,
+    secret: Arc<Secret>,
     transport: Transport,
     tls: Option<MakeRustlsConnect>,
     host: String,
@@ -262,16 +262,18 @@ impl managed::Manager for Manager {
     }
 }
 
-/// The pool for `config`, the password from `secret` given to the server
-/// if it asks, TLS checked against `ca` (PEM) when required, streams asked
-/// of `connector`.
+/// A pool of `size` connections for `config`, the password from `secret`
+/// given to the server if it asks, TLS checked against `ca` (PEM) when
+/// required, streams asked of `connector`. Each worker has one, a share of
+/// `pool_size` (ROADMAP DA3b).
 ///
 /// # Errors
 ///
 /// The CA certificates cannot be read, or the pool cannot be built.
 pub fn build(
     config: &Config,
-    secret: Secret,
+    size: usize,
+    secret: Arc<Secret>,
     ca: Option<&[u8]>,
     connector: Connector,
 ) -> Result<Pool, String> {
@@ -307,7 +309,7 @@ pub fn build(
         recycle: Some(config.connect_timeout()),
     };
     Pool::builder(manager)
-        .max_size(config.pool_size)
+        .max_size(size)
         .timeouts(timeouts)
         .runtime(deadpool::Runtime::Tokio1)
         .build()

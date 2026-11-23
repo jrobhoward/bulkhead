@@ -19,6 +19,16 @@ fn from_args____the_required_fields____no_roots() {
     assert_eq!(config.connect_timeout(), Duration::from_secs(1));
     assert_eq!(config.pool_idle_timeout(), Duration::from_secs(2));
     assert!(config.roots().unwrap().is_empty());
+    assert_eq!(config.threads, 4);
+}
+
+#[test]
+fn from_args____threads_out_of_range____refused() {
+    for extra in [r#", "threads": 0"#, r#", "threads": 17"#] {
+        let err = Config::from_args(args(extra).as_bytes()).unwrap_err();
+
+        assert!(err.contains("threads must be 1 to 16"), "{err}");
+    }
 }
 
 #[test]

@@ -3274,10 +3274,97 @@ Between two node processes on the Pi (`cluster-pair`'s two-node rows): a native 
 - **A traced message costs much more:** a call from the host 2.5 times as long (44.8 µs), one between instances 2.4 times (104 µs), casts 45% fewer a second, calls in flight 29 to 30% fewer, with about 50% more CPU per call. Traced messages travel as CBOR frames, not hot ones.
 - **The two gaps do not match:** a traced cast costs about 1.9 µs more to handle (from the rates), but a traced call one at a time about 27 µs more to answer, more than encoding and decoding a frame explain. Not found yet (ROADMAP O1b).
 
+## 2026-11-23: overnight baselines, and driver threads (DA3b, DA4b)
+
+`scripts/overnight.sh` on both machines at once: the 16-core machine (Threadripper 1950X, Linux 6.8) and the Raspberry Pi 5 (Linux 7.0), from commit 4c587f8, three rounds of each benchmark. Every run waited for a 1-minute load under 1.5 (it started at 0.8 to 1.4); no VM or TLC job was running, and no run was marked contended. Round 1 of `sql` and `egress` built some crates of its own before measuring (fixed in the script since). Then the driver-thread change in three versions, `sql` and `egress` only, three rounds each, from the same commit with local changes. The script's own reports are in `target/overnight/` on the 16-core machine, not tracked.
+
+### Native instances (AP1b, O1b)
+
+`native_cost 4`, 100 instances; three rounds each. "800 idle senders": `NATIVE_COST_SENDERS=8`, every instance holding 8 sender channels it does not use, with `ulimit -n 65536`. "Traced": `NATIVE_COST_TRACED=1`.
+
+| | call from the host (p50, µs) | call between instances (p50, µs) | casts to one instance (per second) | 64 calls in flight (per second, CPU per call) |
+| --- | --- | --- | --- | --- |
+| 16 cores | 20.3, 20.4, 20.7 | 50.3, 47.0, 50.7 | 285,998, 306,901, 259,388 | 337,650, 340,783, 328,417 (28.4 to 28.9 µs) |
+| 16 cores, 800 idle senders | 18.5, 21.3, 20.8 | 48.4, 50.1, 50.1 | 230,162, 326,051, 326,869 | 331,366, 330,001, 318,702 (28.5 to 29.4 µs) |
+| 16 cores, traced | 34.7, 38.1, 37.5 | 89.7, 99.8, 107.0 | 193,612, 176,752, 187,147 | 283,809, 352,629, 283,672 (31.9 to 34.9 µs) |
+| Pi | 18.0, 18.1, 18.3 | 44.8, 44.7, 45.7 | 420,892, 422,845, 419,825 | 117,004, 115,051, 113,931 (31.3 to 32.2 µs) |
+| Pi, 800 idle senders | 18.4, 18.3, 18.3 | 45.0, 44.6, 45.0 | 416,039, 420,024, 424,157 | 115,889, 115,558, 115,860 (31.6 to 31.9 µs) |
+| Pi, traced | 45.5, 44.5, 44.0 | 104.7, 103.9, 105.8 | 236,570, 232,622, 231,788 | 82,988, 83,202, 82,943 (44.7 to 45.1 µs) |
+
+- **800 idle senders cost nothing measurable on 16 cores either** (AP1b, measured on the Pi alone before): every row within the plain runs' spread. A request from a sender thread takes what a callback's does, 3.4 to 4.3 µs against 3.8 to 4.4 µs (2.9 to 3.0 µs on the Pi, both).
+- **A traced call costs less on 16 cores than on the Pi, but much more than an untraced one** (O1b): from the host 14 to 18 µs more (1.7 to 1.9 times), between instances 1.8 to 2.3 times, casts 25 to 42% fewer a second, 10 to 23% more CPU per call in flight. The Pi repeats O1's numbers (2026-11-22): 26 µs more, 2.5 times. The cause is still unknown.
+
+### SQL datasources (DA3b)
+
+`sql_cost`, against Postgres on loopback over its Unix socket. Each request is a `SELECT 1`: one at a time, then 16 instances at once, 5,000 each.
+- **Before:** the driver of 2026-11-15, one worker thread.
+- **One pool:** 4 worker threads sharing one pool.
+- **Own pools:** 4 worker threads, each with a pool of its own (a share of `pool_size`). A request goes to the worker with the fewest in flight, among those with room.
+- **Default:** own pools, with threads at the new default, a quarter of the cores, 1 to 4. That is 4 on the 16-core machine, so the same as own pools there, and 1 on the Pi.
+
+| | one at a time (p50, µs) | 16 instances at once (per second) | CPU per statement, 16 at once (µs) |
+| --- | --- | --- | --- |
+| 16 cores, before | 218, 297, 243 | 20,958, 21,222, 21,408 | 204, 196, 200 |
+| 16 cores, one pool | 388, 426, 394 | 25,552, 25,150, 25,015 | 242, 244, 245 |
+| 16 cores, own pools | 202, 213, 282 | 27,987, 27,625, 27,831 | 216, 216, 218 |
+| 16 cores, default (4) | 227, 200, 219 | 28,295, 28,027, 27,522 | 218, 216, 218 |
+| Pi, before | 259, 266, 265 | 5,865, 5,732, 5,669 | 311, 320, 321 |
+| Pi, one pool | 326, 323, 327 | 5,332, 5,379, 5,299 | 430, 427, 434 |
+| Pi, own pools (4) | 260, 262, 275 | 5,331, 5,300, 5,328 | 409, 409, 406 |
+| Pi, default (1) | 259, 266, 262 | 5,844, 5,747, 5,720 | 312, 314, 313 |
+
+- **One pool for every worker cost more than one thread.** A connection is driven by the runtime of the worker that opened it, so most statements crossed threads twice. One at a time took 130 to 170 µs longer on 16 cores, round for round, and 57 to 67 µs on the Pi.
+- **A pool per worker gains 31% on 16 cores, with nothing lost one at a time.** That's 27,500 to 28,300 statements a second against 21,000 to 21,400, at 8% more CPU per statement.
+- **On the Pi's four cores, more than one thread loses.** The 16 instances, the node and Postgres already fill the machine, and four driver threads gave 8% fewer statements at 30% more CPU each. Hence the default of one thread there.
+
+### HTTP egress (DA4b, PF1)
+
+`egress_cost`: requests to a server on loopback through the app's egress driver, 2-byte and 1 MiB bodies, 16 instances at once. The rows have the same meanings as for SQL, with no transactions; egress was measured only before, with own pools, and with the default.
+
+| | 16 at once, HTTP (per second, CPU per request) | 16 at once, HTTPS (per second) | one HTTP request, 1 MiB (p50, ms) |
+| --- | --- | --- | --- |
+| 16 cores, before | 42,154, 42,375, 41,844 (169 to 175 µs) | 39,142, 39,094, 38,682 | 6.1, 6.4, 4.5 |
+| 16 cores, own pools (4) | 45,074, 45,255, 49,870 (181 to 187 µs) | 42,147, 39,624, 40,135 | 6.0, 6.7, 4.5 |
+| 16 cores, default (4) | 44,276, 43,829, 43,060 (183 to 186 µs) | 43,446, 40,809, 41,615 | 6.5, 4.8, 6.2 |
+| Pi, before | 14,361, 14,121, 14,849 (207 to 215 µs) | 12,935, 12,775, 13,283 | 7.3, 7.4, 7.7 |
+| Pi, own pools (4) | 12,532, 12,105, 12,155 (252 to 258 µs) | 11,161, 10,887, 10,838 | 7.2, 7.4, 7.2 |
+| Pi, default (1) | 15,653, 15,318, 16,251 (194 to 202 µs) | 14,225, 14,019, 15,110 | 7.0, 7.1, 6.7 |
+
+- **On 16 cores, four threads gain 2 to 19% over HTTP and 1 to 12% over HTTPS.** That's less than SQL gained: one thread was already at four fifths of the node's former rate (2026-11-15), so the rest of the path limits it.
+- **On the Pi, four threads lose 12 to 18%, as with SQL.** The default of one thread reads 3 to 15% above the before rows (9% by the medians). It is the same path, a request at a time on one worker, and the difference is unexplained: the before rows ran an hour earlier.
+- **A 1 MiB body is unchanged by threads:** PF1's cost, crossing the node's channel twice.
+
+### HTTP ingress, and HTTP/2 (PF2, DA2b)
+
+S37's harness (`spikes/s37/scripts/run.sh` with `DRIVER=target/release/bulkhead-ingress S37_DRIVER=da1 S37_INGRESS=1`), three rounds.
+- **"Node ingress"** is the node's former built-in ingress; **"driver"** is the ingress driver, with 4 threads.
+- **HTTP/2** runs over TLS: one connection, with 1 to 256 streams, each stream sending its requests one after another.
+- Each cell gives requests a second, the p50 in µs, and the node's and instances' CPU per request in µs.
+
+| | 16 cores | Pi |
+| --- | --- | --- |
+| GET, 1 connection, node ingress | 9,595 to 10,436, 90 to 104, 106 to 111 | 14,828 to 15,116, 65 to 66, 78 to 80 |
+| GET, 1 connection, driver | 8,851 to 9,030, 107 to 114, 188 to 195 | 10,778 to 10,814, 92 to 93, 177 to 178 |
+| GET over TLS, 1 connection, driver | 7,728 to 8,104, 118 to 128, 201 to 206 | 9,971 to 10,141, 97 to 100, 178 to 182 |
+| GET over TLS, 32 connections, node ingress | 72,396 to 73,408, 366 to 375, 71 to 73 | 45,815 to 46,905, 434 to 482, 57 to 58 |
+| GET over TLS, 32 connections, driver | 96,074 to 97,746, 265 to 269, 80 to 81 | 32,045 to 32,755, 788 to 816, 91 to 92 |
+| GET over HTTP/2, 1 stream, driver | 5,458 to 5,632, 176 to 181, 225 to 230 | 5,710 to 5,750, 170 to 171, 234 to 235 |
+| GET over HTTP/2, 32 streams, driver | 46,399 to 46,893, 654 to 661, 66 to 67 | 26,844 to 27,053, 1,123 to 1,133, 81 to 82 |
+| GET over HTTP/2, 256 streams, driver | 74,349 to 76,041, 3,193 to 3,302, 50 to 52 | 30,517 to 32,085, 7,781 to 8,210, 70 to 73 |
+| POST 1 MiB, 1 connection, node ingress | 138 to 143, 6,996 to 7,222 | 123 to 127, 7,854 to 8,153 |
+| POST 1 MiB, 1 connection, driver | 119 to 121, 8,378 to 8,549 | 82 to 86, 11,668 to 12,145 |
+| POST 1 MiB over HTTP/2, 1 stream, driver | 110 to 111, 9,083 to 9,228 | 75 to 85, 11,768 to 13,404 |
+
+- **PF2's gap holds.** On 16 cores the driver beats the node's former ingress with many connections (33% more over TLS with 32). On the Pi it gets 70% of its requests at 1.6 times its CPU, and one connection's p50 is 27 to 28 µs above it, as on 2026-11-14.
+- **One HTTP/2 stream at a time is 50 to 75 µs slower than an HTTP/1.1 connection over TLS,** at 10 to 32% more CPU per request (225 to 235 µs against 178 to 206). Not attributed: the load client's own HTTP/2 side, a multi-thread runtime, is in the latency but not in the CPU.
+- **Many streams on one connection cost less CPU per request than as many connections, but are bounded by one thread.** 32 streams use 66 to 82 µs per request against 80 to 92 µs for 32 HTTP/1.1 connections over TLS. One HTTP/2 connection is served by one worker thread, so on 16 cores 32 streams get half of what 32 connections do (46,900 against 96,000). On the Pi, four cores already fill, and they get 83%.
+- **A 1 MiB body over HTTP/2 costs about what it does over HTTP/1.1,** 9.1 against 8.4 ms on 16 cores (PF1).
+
 ## Not measured yet
 
-- HTTP/2 through the ingress driver against HTTP/1.1 (ROADMAP DA2b, 2026-11-22): requests per second and CPU per request on one connection with many streams, and against many HTTP/1.1 connections, on both machines.
-- Why a traced call one at a time takes about 27 µs longer on the Pi, where a traced cast costs about 1.9 µs more (O1, 2026-11-22; ROADMAP O1b). Traced messages on the 16-core machine.
+- Where one HTTP/2 stream's 50 to 75 µs over an HTTP/1.1 connection goes: the driver or the load client (2026-11-23).
+- Why a traced call one at a time takes about 27 µs longer on the Pi (14 to 18 µs on 16 cores), where a traced cast costs about 1.9 µs more (O1, 2026-11-22; ROADMAP O1b).
+- Why the egress driver on one thread read 3 to 15% above its own rows of an hour before on the Pi (2026-11-23).
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 

@@ -1,15 +1,27 @@
 //! The driver app: the callback thread, which takes the node's requests,
-//! and one worker thread, which runs them.
+//! and worker threads, which run them (`threads`, 4 by default, no more
+//! than the pool's connections; ROADMAP DA3b).
 //!
 //! - The node calls with [`SQL_SCHEMA`], the body the protocol's
 //!   `SqlRequest` in CBOR; the callback thread leaves the call waiting and
-//!   hands the request to the worker. A cast with that schema is run with
-//!   no answer: the node's rollback of a transaction whose instance
-//!   exited.
-//! - The worker runs the pool on a tokio current-thread runtime with a
-//!   sender channel of its own. It asks the node for each new connection's
-//!   stream there (`Request::Connect`) and answers each call itself
-//!   (`Request::Reply`), with `Result<SqlAnswer, SqlError>` in CBOR.
+//!   hands the request to a worker: of those whose pool has a connection
+//!   free or room for one (all, if none has), the one with the fewest
+//!   requests in flight, the first of those, so one at a time every
+//!   request goes to worker 0 and under load they spread; a
+//!   transaction's statements to the worker that began it, which holds its
+//!   connection (a transaction's number names its worker, [`tx_worker`]). A cast
+//!   with that schema is run with no answer: the node's rollback of a
+//!   transaction whose instance exited.
+//! - Each worker runs on a tokio current-thread runtime with a sender
+//!   channel of its own, and answers each of its calls itself
+//!   (`Request::Reply`), with `Result<SqlAnswer, SqlError>` in CBOR. Each
+//!   worker has a pool of its own, a share of `pool_size`, so a connection
+//!   is used on the runtime that drives it: one pool shared by the workers
+//!   made most statements cross threads twice, and cost more than one
+//!   thread did (BASELINE.md, 2026-11-23). Worker 0 asks the node for each
+//!   new connection's stream (`Request::Connect`) and adds the workers'
+//!   counts to the app's metrics once a second, as the metrics a sender
+//!   registers are its own.
 //!
 //! The node has checked the app's grant and holds its permit; the driver
 //! is told no app, and ignores the request's datasource, being one
@@ -19,6 +31,9 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use bulkhead_native::protocol::{self as p, MetricKind, SqlAnswer, SqlError, SqlRequest};
 use bulkhead_native::sender::Sender;
@@ -43,13 +58,71 @@ struct Job {
     request: SqlRequest,
 }
 
-/// The SQL driver's callback side.
+/// The SQL driver's callback side: each worker's queue, pool and requests
+/// in flight.
 #[derive(Debug)]
 pub struct Sql {
-    jobs: mpsc::UnboundedSender<Job>,
+    workers: Vec<Handle>,
 }
 
-/// The counters, registered before the sender became async.
+/// A worker, as the callback thread sees it.
+#[derive(Debug)]
+struct Handle {
+    jobs: mpsc::UnboundedSender<Job>,
+    pool: Pool,
+    in_flight: Arc<AtomicUsize>,
+}
+
+/// Worker `i`'s share of `pool_size` connections among `workers`.
+#[must_use]
+pub fn pool_share(pool_size: usize, workers: usize, i: usize) -> usize {
+    let workers = workers.max(1);
+    pool_size / workers + usize::from(i < pool_size % workers)
+}
+
+/// The first of the workers with the fewest requests in flight, by their
+/// counts; 0 for none.
+pub fn least_busy(in_flight: impl IntoIterator<Item = usize>) -> usize {
+    in_flight
+        .into_iter()
+        .enumerate()
+        .min_by_key(|&(i, n)| (n, i))
+        .map_or(0, |(i, _)| i)
+}
+
+/// Whether `pool` has a connection free, or room to open one.
+fn has_room(pool: &Pool) -> bool {
+    let s = pool.status();
+    s.available > 0 || s.size < s.max_size
+}
+
+/// How often worker 0 adds the counts to the app's metrics.
+const METRICS_EVERY: Duration = Duration::from_secs(1);
+
+/// The worker that began transaction `tx`, of `workers`: its number is
+/// `n * workers + worker`.
+#[must_use]
+pub fn tx_worker(tx: u32, workers: usize) -> usize {
+    usize::try_from(tx).unwrap_or(0) % workers.max(1)
+}
+
+/// Transaction number `n` of `worker`, of `workers`, and the `n` after it:
+/// numbers stay below `u32::MAX`, so [`tx_worker`] holds when `n` wraps.
+fn tx_number(n: u32, worker: u32, workers: u32) -> (u32, u32) {
+    let span = u32::MAX / workers.max(1);
+    let n = n % span;
+    (n * workers + worker, (n + 1) % span)
+}
+
+/// What the workers counted since worker 0 last added it to the metrics.
+#[derive(Debug, Default)]
+struct Counts {
+    statements: AtomicU64,
+    failed: AtomicU64,
+    connections: AtomicU64,
+}
+
+/// The counters, registered on worker 0's sender before it became async.
 #[derive(Debug, Clone, Copy)]
 struct Metrics {
     statements: u32,
@@ -80,13 +153,22 @@ impl Metrics {
     }
 }
 
-/// What the worker thread starts with.
+/// What a worker thread starts with.
 struct Start {
+    worker: u32,
+    workers: u32,
     sender: Sender,
     jobs: mpsc::UnboundedReceiver<Job>,
-    connects: mpsc::UnboundedReceiver<oneshot::Sender<Opened>>,
+    in_flight: Arc<AtomicUsize>,
     pool: Pool,
     max_result_bytes: u64,
+    counts: Arc<Counts>,
+    first: Option<First>,
+}
+
+/// What worker 0 does besides its requests.
+struct First {
+    connects: mpsc::UnboundedReceiver<oneshot::Sender<Opened>>,
     metrics: Option<Metrics>,
 }
 
@@ -119,26 +201,56 @@ impl App for Sql {
             Tls::Require { ca_file } => Some(read_file(ca_file, "CA file")?),
         };
         let (connector, connects) = mpsc::unbounded_channel();
-        let pool = pool::build(&config, secret, ca.as_deref(), connector)
+        let secret = Arc::new(secret);
+        let n = config.workers();
+        let workers_u32 = u32::try_from(n).map_err(|e| e.to_string())?;
+        let counts = Arc::new(Counts::default());
+        let mut connects = Some(connects);
+        let mut queues = Vec::with_capacity(n);
+        let mut starts = Vec::with_capacity(n);
+        for worker in 0..workers_u32 {
+            let size = pool_share(config.pool_size, n, worker as usize);
+            let pool = pool::build(
+                &config,
+                size,
+                secret.clone(),
+                ca.as_deref(),
+                connector.clone(),
+            )
             .map_err(|e| format!("datasource {}: {e}", config.datasource))?;
-        let mut sender = bulkhead_native::app::Ctx::current()
-            .sender()
-            .map_err(|e| format!("sender channel: {e:?}"))?;
-        let metrics = Metrics::register(&mut sender, &config.datasource);
-        let (jobs, jobs_rx) = mpsc::unbounded_channel();
-        let start = Start {
-            sender,
-            jobs: jobs_rx,
-            connects,
-            pool,
-            max_result_bytes: config.max_result_bytes,
-            metrics,
-        };
-        std::thread::Builder::new()
-            .name("sql".into())
-            .spawn(move || worker(start))
-            .map_err(|e| format!("worker thread: {e}"))?;
-        Ok(Self { jobs })
+            let mut sender = bulkhead_native::app::Ctx::current()
+                .sender()
+                .map_err(|e| format!("sender channel: {e:?}"))?;
+            let first = connects.take().map(|connects| First {
+                connects,
+                metrics: Metrics::register(&mut sender, &config.datasource),
+            });
+            let (jobs, jobs_rx) = mpsc::unbounded_channel();
+            let in_flight = Arc::new(AtomicUsize::new(0));
+            queues.push(Handle {
+                jobs,
+                pool: pool.clone(),
+                in_flight: in_flight.clone(),
+            });
+            starts.push(Start {
+                worker,
+                workers: workers_u32,
+                sender,
+                jobs: jobs_rx,
+                in_flight,
+                pool,
+                max_result_bytes: config.max_result_bytes,
+                counts: counts.clone(),
+                first,
+            });
+        }
+        for start in starts {
+            std::thread::Builder::new()
+                .name("sql".into())
+                .spawn(move || worker(start))
+                .map_err(|e| format!("worker thread: {e}"))?;
+        }
+        Ok(Self { workers: queues })
     }
 
     fn handle_call(&mut self, _ctx: &mut Ctx, call: CallRef, msg: Envelope) -> Reply {
@@ -147,14 +259,7 @@ impl App for Sql {
         }
         let answer = match msg.decode::<SqlRequest>() {
             Ok(request) => {
-                if self
-                    .jobs
-                    .send(Job {
-                        call: Some(call.0),
-                        request,
-                    })
-                    .is_ok()
-                {
+                if self.hand(Some(call.0), request) {
                     return Reply::Later;
                 }
                 Err(SqlError::Unavailable("the driver's worker stopped".into()))
@@ -169,11 +274,43 @@ impl App for Sql {
             return;
         }
         if let Ok(request) = msg.decode::<SqlRequest>() {
-            let _ = self.jobs.send(Job {
-                call: None,
-                request,
-            });
+            self.hand(None, request);
         }
+    }
+}
+
+impl Sql {
+    /// Hand `request` to its worker: a transaction's to the worker that
+    /// began it; the rest to the least busy of the workers whose pool has
+    /// room, or of all if none has (it waits there, up to the acquire
+    /// timeout). False if that worker stopped.
+    fn hand(&mut self, call: Option<u64>, request: SqlRequest) -> bool {
+        let n = self.workers.len();
+        let worker = match &request {
+            SqlRequest::TxQuery { tx, .. }
+            | SqlRequest::TxExecute { tx, .. }
+            | SqlRequest::TxEnd { tx, .. } => tx_worker(*tx, n),
+            _ => {
+                let busy = |room: bool| {
+                    self.workers.iter().map(move |w| {
+                        if room && !has_room(&w.pool) {
+                            usize::MAX
+                        } else {
+                            w.in_flight.load(Ordering::Relaxed)
+                        }
+                    })
+                };
+                let with_room = least_busy(busy(true));
+                if has_room(&self.workers[with_room].pool) {
+                    with_room
+                } else {
+                    least_busy(busy(false))
+                }
+            }
+        };
+        let w = &self.workers[worker];
+        w.in_flight.fetch_add(1, Ordering::Relaxed);
+        w.jobs.send(Job { call, request }).is_ok()
     }
 }
 
@@ -186,8 +323,8 @@ pub fn answer_envelope(answer: &Answer) -> Envelope {
     }
 }
 
-/// The worker thread: the pool on its own runtime. A sender that cannot
-/// become async ends the process, and the node restarts it.
+/// A worker thread: its share of the requests on its own runtime. A sender
+/// that cannot become async ends the process, and the node restarts it.
 fn worker(start: Start) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -203,12 +340,14 @@ fn worker(start: Start) {
     local.block_on(&runtime, run(start));
 }
 
-/// The open transactions, by number.
+/// A worker's open transactions, by number.
 struct State {
     pool: Pool,
     max_result_bytes: u64,
     txs: RefCell<HashMap<u32, Rc<Conn>>>,
     next_tx: Cell<u32>,
+    worker: u32,
+    workers: u32,
 }
 
 fn ended() -> SqlError {
@@ -242,11 +381,15 @@ impl State {
                 let conn = pool::get(&self.pool).await?;
                 statements::simple(&conn, "BEGIN").await?;
                 let mut txs = self.txs.borrow_mut();
-                let mut id = self.next_tx.get();
-                while txs.contains_key(&id) {
-                    id = id.wrapping_add(1);
-                }
-                self.next_tx.set(id.wrapping_add(1));
+                let mut n = self.next_tx.get();
+                let id = loop {
+                    let (id, after) = tx_number(n, self.worker, self.workers);
+                    n = after;
+                    if !txs.contains_key(&id) {
+                        break id;
+                    }
+                };
+                self.next_tx.set(n);
                 txs.insert(id, Rc::new(conn));
                 Ok(SqlAnswer::Begun(id))
             }
@@ -283,12 +426,15 @@ impl State {
 
 async fn run(start: Start) {
     let Start {
+        worker,
+        workers,
         sender,
         mut jobs,
-        mut connects,
+        in_flight,
         pool,
         max_result_bytes,
-        metrics,
+        counts,
+        first,
     } = start;
     let sender = match AsyncSender::new(sender) {
         Ok(s) => s,
@@ -298,42 +444,79 @@ async fn run(start: Start) {
         }
     };
     tokio::task::spawn_local(sender.clone().pump());
-    {
-        // Streams the pool wants, asked of the node.
-        let sender = sender.clone();
-        tokio::task::spawn_local(async move {
-            while let Some(reply) = connects.recv().await {
-                let sender = sender.clone();
-                tokio::task::spawn_local(async move {
-                    let got = sender.connect().await.map_err(|e| net_error(&e));
-                    if let (Ok(_), Some(m)) = (&got, metrics) {
-                        sender.metric_add(m.connections, 1.0);
-                    }
-                    let _ = reply.send(got);
-                });
-            }
-        });
+    if let Some(first) = first {
+        start_first(first, &sender, &counts);
     }
     let state = Rc::new(State {
         pool,
         max_result_bytes,
         txs: RefCell::default(),
         next_tx: Cell::new(0),
+        worker,
+        workers,
     });
     while let Some(job) = jobs.recv().await {
-        let (sender, state) = (sender.clone(), state.clone());
+        let (sender, state, counts) = (sender.clone(), state.clone(), counts.clone());
+        let in_flight = in_flight.clone();
         tokio::task::spawn_local(async move {
             let answer = state.run(job.request).await;
-            if let Some(m) = metrics {
-                sender.metric_add(m.statements, 1.0);
-                if answer.is_err() {
-                    sender.metric_add(m.failed, 1.0);
-                }
+            // Before the answer, so the node's next request sees it.
+            in_flight.fetch_sub(1, Ordering::Relaxed);
+            counts.statements.fetch_add(1, Ordering::Relaxed);
+            if answer.is_err() {
+                counts.failed.fetch_add(1, Ordering::Relaxed);
             }
             if let Some(call) = job.call {
                 sender.reply(call, answer_envelope(&answer).into()).await;
             }
         });
+    }
+}
+
+/// Worker 0's tasks beside its requests: the streams the pool wants, asked
+/// of the node, and the counts added to the metrics.
+fn start_first(first: First, sender: &AsyncSender, counts: &Arc<Counts>) {
+    let First {
+        mut connects,
+        metrics,
+    } = first;
+    {
+        let (sender, counts) = (sender.clone(), counts.clone());
+        tokio::task::spawn_local(async move {
+            while let Some(reply) = connects.recv().await {
+                let (sender, counts) = (sender.clone(), counts.clone());
+                tokio::task::spawn_local(async move {
+                    let got = sender.connect().await.map_err(|e| net_error(&e));
+                    if got.is_ok() {
+                        counts.connections.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let _ = reply.send(got);
+                });
+            }
+        });
+    }
+    if let Some(m) = metrics {
+        tokio::task::spawn_local(flush_metrics(m, counts.clone(), sender.clone()));
+    }
+}
+
+/// Add what the workers counted to the app's metrics, once a second.
+async fn flush_metrics(ids: Metrics, counts: Arc<Counts>, sender: AsyncSender) {
+    let pairs = [
+        (&counts.statements, ids.statements),
+        (&counts.failed, ids.failed),
+        (&counts.connections, ids.connections),
+    ];
+    let mut every = tokio::time::interval(METRICS_EVERY);
+    loop {
+        every.tick().await;
+        for (count, id) in pairs {
+            let delta = count.swap(0, Ordering::Relaxed);
+            if delta > 0 {
+                #[allow(clippy::cast_precision_loss)] // Counts in a second.
+                sender.metric_add(id, delta as f64);
+            }
+        }
     }
 }
 
@@ -345,3 +528,7 @@ fn net_error(e: &p::NetError) -> String {
         other => format!("{other:?}"),
     }
 }
+
+#[cfg(test)]
+#[path = "driver_tests.rs"]
+mod tests;

@@ -800,6 +800,7 @@ fn runtime_datasource(
     ds.acquire_timeout = Duration::from_millis(d.acquire_timeout_ms);
     ds.statement_timeout = Duration::from_millis(d.statement_timeout_ms);
     ds.max_result_bytes = d.max_result_bytes.bytes();
+    ds.threads = d.threads;
     ds
 }
 

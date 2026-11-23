@@ -3,7 +3,7 @@
 //! ```json
 //! {"app": "shop", "connect_timeout_ms": 10000,
 //!  "pool_idle_timeout_ms": 90000, "pool_max_idle_per_host": 32,
-//!  "max_response_body": 16777216,
+//!  "max_response_body": 16777216, "threads": 4,
 //!  "roots_pem": "-----BEGIN CERTIFICATE-----\n..."}
 //! ```
 //!
@@ -50,10 +50,21 @@ pub struct Config {
     /// node config's `[egress] traceparent`, true by default).
     #[serde(default = "yes")]
     pub traceparent: bool,
+    /// Worker threads, each with a runtime and a sender channel of its
+    /// own (ROADMAP DA4b), 4 by default.
+    #[serde(default = "default_threads")]
+    pub threads: usize,
 }
+
+/// Most worker threads.
+pub const MAX_THREADS: usize = 16;
 
 fn yes() -> bool {
     true
+}
+
+fn default_threads() -> usize {
+    4
 }
 
 /// A client certificate chain and its key.
@@ -64,9 +75,17 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// They are not this JSON object.
+    /// They are not this JSON object, or threads are outside 1 to
+    /// [`MAX_THREADS`].
     pub fn from_args(args: &[u8]) -> Result<Self, String> {
-        serde_json::from_slice(args).map_err(|e| format!("init arguments: {e}"))
+        let config: Self =
+            serde_json::from_slice(args).map_err(|e| format!("init arguments: {e}"))?;
+        if !(1..=MAX_THREADS).contains(&config.threads) {
+            return Err(format!(
+                "init arguments: threads must be 1 to {MAX_THREADS}"
+            ));
+        }
+        Ok(config)
     }
 
     /// The connect timeout.
