@@ -412,9 +412,12 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   check (its tests hold sample lines).
 - `scripts/`: `check.sh` (every check; `--help`), `check-secrets.sh` (run
   before pushing; `--help`), `soak.sh` (hours of fault injection, not in
-  CI; `--help`) and `vm-pair.sh` (a pair across a Linux and a FreeBSD VM
+  CI; `--help`), `vm-pair.sh` (a pair across a Linux and a FreeBSD VM
   with a serial line between them, the witness on the host; the test
-  machines only, `--help`).
+  machines only, `--help`) and `overnight.sh` (baselines in rounds on an
+  idle machine, each run waiting for the load to settle, here and on a
+  test machine by ssh at once; `--help`). `bench.sh` is the suite for a
+  dated BASELINE section.
 - `docs/`: design and plan. `docs/tla/`: TLA+ specifications of failover
   and disaster recovery, and their results (`VERIFICATION.md`); run with
   TLC, not in CI.

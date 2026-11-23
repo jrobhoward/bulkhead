@@ -11,7 +11,8 @@ bulkhead-host = { path = "../../../crates/bulkhead-host" }
 bytes = "1"
 ciborium = "0.2"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["http1", "server"] }
+# `http2` and `client`: the load's HTTP/2 mode (ROADMAP DA2b, 2026-11-22).
+hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rustls-pki-types = "1"
 tracing = "0.1"

@@ -120,8 +120,10 @@ At 32 connections, a GET through each path, and the driver answering `/local` it
 From the main checkout, on an idle machine:
 
 ```sh
-cargo build --release -p bulkhead-native --bin bulkhead-runner
-(cd spikes/s37 && cargo build --release)
+cargo build --release -p bulkhead-runner
+(cd spikes/s37 && cargo build --release -p s37-bench -p s37-app)
 sh spikes/s37/scripts/run.sh > report.txt      # ROUNDS, SECS, POOL, DRIVERS, WORKERS
 sh spikes/s37/scripts/split.sh > split.txt     # DRIVERS_WIDE (8)
 ```
+
+Since 2026-11-22 the load client has an `h2` mode (N streams on one HTTP/2 connection over TLS), and `run.sh` with `S37_INGRESS=1` adds HTTP/2 rows through the ingress driver (ROADMAP DA2b). The spike's own drivers (`s37-driver`, `-da1`, `-hyper`) no longer build against the current SDK; the ingress driver (`DRIVER=target/release/bulkhead-ingress S37_DRIVER=da1 S37_INGRESS=1`) is what `scripts/overnight.sh` runs.

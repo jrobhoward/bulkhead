@@ -256,7 +256,10 @@ fn load(args: &[String]) {
     let conns: usize = args[1].parse().unwrap();
     let secs: u64 = args[2].parse().unwrap();
     let body: usize = args[3].parse().unwrap();
+    // `plain`, `tls`, or `h2`: CONNS streams at once on one HTTP/2
+    // connection over TLS (ROADMAP DA2b).
     let tls = args[4] == "tls";
+    let h2 = args[4] == "h2";
     let node_pid: u32 = args[5].parse().unwrap();
     let workers: usize = args[6].parse().unwrap();
     let path = args.get(7).cloned().unwrap_or_else(|| "/x".into());
@@ -265,7 +268,13 @@ fn load(args: &[String]) {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(run_load(addr, conns, secs, body, tls, node_pid, path));
+        .block_on(async move {
+            if h2 {
+                run_h2(addr, conns, secs, body, node_pid, path).await;
+            } else {
+                run_load(addr, conns, secs, body, tls, node_pid, path).await;
+            }
+        });
 }
 
 #[derive(Debug)]
@@ -358,6 +367,93 @@ async fn run_load(addr: SocketAddr, conns: usize, secs: u64, body: usize, tls: b
     println!(
         "conns={conns} body={body} tls={tls}: {:.0} req/s, p50 {:.1} µs, p99 {:.1} µs, {:.1} µs CPU/req (node+instances), errors {errors}",
         n / elapsed,
+        pct(0.5) as f64 / 1e3,
+        pct(0.99) as f64 / 1e3,
+        if n > 0.0 { cpu / n * 1e6 } else { 0.0 },
+    );
+}
+
+/// `streams` requests at once on one HTTP/2 connection over TLS (ALPN
+/// `h2`), each stream one request after another, as `run_load`'s
+/// connections are; reported as `run_load` reports.
+async fn run_h2(addr: SocketAddr, streams: usize, secs: u64, body: usize, node_pid: u32, path: String) {
+    use http_body_util::{BodyExt, Full};
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AnyCert))
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tcp.set_nodelay(true).unwrap();
+    let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await.unwrap();
+    assert_eq!(tls.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()), "the server did not choose HTTP/2");
+    let (sender, conn) = hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+        .initial_stream_window_size(1 << 20)
+        .initial_connection_window_size(4 << 20)
+        .handshake(hyper_util::rt::TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(conn);
+    let payload = bytes::Bytes::from(vec![b'a'; body]);
+    let start = Instant::now() + Duration::from_secs(1);
+    let end = start + Duration::from_secs(secs);
+    let mut tasks = Vec::new();
+    for _ in 0..streams {
+        let mut sender = sender.clone();
+        let (path, payload) = (path.clone(), payload.clone());
+        tasks.push(tokio::spawn(async move {
+            let (mut lat, mut errors) = (Vec::new(), 0u64);
+            loop {
+                let t = Instant::now();
+                if t >= end {
+                    break;
+                }
+                let req = hyper::Request::builder()
+                    .method(if body == 0 { "GET" } else { "POST" })
+                    .uri(format!("https://localhost{path}"))
+                    .body(Full::new(payload.clone()))
+                    .unwrap();
+                let ok = async {
+                    sender.ready().await.ok()?;
+                    let res = sender.send_request(req).await.ok()?;
+                    let good = res.status() == 200;
+                    res.into_body().collect().await.ok()?;
+                    Some(good)
+                }
+                .await;
+                match ok {
+                    Some(true) => {}
+                    Some(false) => errors += 1,
+                    None => {
+                        errors += 1;
+                        break;
+                    }
+                }
+                if t >= start {
+                    lat.push(t.elapsed().as_nanos() as u64);
+                }
+            }
+            (lat, errors)
+        }));
+    }
+    tokio::time::sleep_until(start.into()).await;
+    let cpu0 = cpu_seconds(node_pid);
+    let (mut lat, mut errors) = (Vec::new(), 0u64);
+    for t in tasks {
+        let (l, e) = t.await.unwrap();
+        lat.extend(l);
+        errors += e;
+    }
+    let cpu = cpu_seconds(node_pid) - cpu0;
+    lat.sort_unstable();
+    let pct = |q: f64| lat.get(((lat.len().saturating_sub(1)) as f64 * q) as usize).copied().unwrap_or(0);
+    let n = lat.len() as f64;
+    println!(
+        "streams={streams} body={body} h2: {:.0} req/s, p50 {:.1} µs, p99 {:.1} µs, {:.1} µs CPU/req (node+instances), errors {errors}",
+        n / secs as f64,
         pct(0.5) as f64 / 1e3,
         pct(0.99) as f64 / 1e3,
         if n > 0.0 { cpu / n * 1e6 } else { 0.0 },

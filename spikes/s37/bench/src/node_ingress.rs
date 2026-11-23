@@ -616,6 +616,7 @@ fn request_envelope(request: &RequestEnvelope<'_>) -> Envelope {
         content_type: "application/cbor".into(),
         schema: Some(REQUEST_SCHEMA.into()),
         body: out,
+        trace: None,
     }
 }
 
