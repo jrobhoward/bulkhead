@@ -75,6 +75,7 @@ async fn udp____through_the_node____destinations_and_sources_on_the_rules() {
                 bind: vec![rule("127.0.0.1/32", None)],
                 listen: false,
                 max_sockets: 4,
+                own: false,
             },
         ),
     );
@@ -121,6 +122,7 @@ async fn stream____closed_at_the_node____peer_sees_the_end_even_if_kept() {
                 bind: vec![],
                 listen: false,
                 max_sockets: 4,
+                own: false,
             },
         ),
     );
@@ -164,6 +166,7 @@ async fn stream____passed_to_the_app____used_but_not_moved() {
                 bind: vec![],
                 listen: false,
                 max_sockets: 4,
+                own: false,
             },
         ),
     );

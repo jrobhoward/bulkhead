@@ -204,3 +204,99 @@ fn config____allow_unconfined_without_priv____refused() {
 
     assert!(err.contains("allow_unconfined needs [priv]"), "{err}");
 }
+
+fn own_sockets_manifest(listen: bool) -> bulkhead_bundle::manifest::AppManifest {
+    let mut m = unconfined_manifest();
+    m.spec = bulkhead_bundle::manifest::AppSpec::from_json_value(&serde_json::json!({
+        "capabilities": { "bulkhead:sockets": {
+            "own": true,
+            "listen": listen,
+            "connect": [{ "cidr": "10.20.1.0/16", "ports": "1883" }, { "cidr": "::1/128" }],
+            "bind": [{ "cidr": "0.0.0.0/0", "ports": "9000-9009" }]
+        } }
+    }))
+    .unwrap();
+    m
+}
+
+#[rstest::rstest]
+#[case(&["10.20.0.0/16:1883", "::1/128"], &["0.0.0.0/0:9000-9009"], false, None)]
+#[case(&["::1/128", "10.20.0.0/16:1883"], &["0.0.0.0/0:9000-9009"], false, None)]
+#[case(&["10.20.0.0/16:1883"], &["0.0.0.0/0:9000-9009"], false, Some("connect"))]
+#[case(&["10.20.0.0/16:1883", "::1/128"], &[], false, Some("bind"))]
+#[case(&["10.20.0.0/16:1883", "::1/128"], &["0.0.0.0/0:9000-9009"], true, Some("listen"))]
+fn rules_differ____helper_rules____same_sets_or_what_differs(
+    #[case] connect: &[&str],
+    #[case] bind: &[&str],
+    #[case] listen: bool,
+    #[case] says: Option<&str>,
+) {
+    let manifest = own_sockets_manifest(false);
+    let scope = manifest.spec.capabilities.sockets.as_ref().unwrap();
+    let text = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+
+    let differ = deploy::rules_differ(scope, &text(connect), &text(bind), listen);
+
+    match says {
+        Some(says) => assert!(
+            differ.as_deref().is_some_and(|d| d.contains(says)),
+            "{differ:?}"
+        ),
+        None => assert_eq!(differ, None),
+    }
+}
+
+#[rstest::rstest]
+#[case("", true, "no privileged helper")]
+#[case("[priv]\n", true, "[native] allow_own_sockets")]
+#[case(
+    "[priv]\n[native]\nallow_own_sockets = true\n",
+    false,
+    "does not grant bulkhead:own-sockets to bridge"
+)]
+#[case(
+    "[priv]\n[native]\nallow_own_sockets = true\n",
+    true,
+    "has no rules for it"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn own_sockets_refusal____each_consent____refused_until_the_helper_agrees(
+    #[case] config: &str,
+    #[case] granted: bool,
+    #[case] says: &str,
+) {
+    use bulkhead_bundle::manifest::Capability;
+    let config = NodeConfig::from_toml_str(&format!("data_dir = \"/d\"\n{config}")).unwrap();
+    let manifest = own_sockets_manifest(false);
+    let policy = if granted {
+        "[apps.bridge]\ngrant = [\"bulkhead:sockets\", \"bulkhead:own-sockets\"]\n"
+    } else {
+        "[apps.bridge]\ngrant = [\"bulkhead:sockets\"]\n"
+    };
+    let grant = bulkhead_bundle::effective_grant(
+        &manifest.spec,
+        &bulkhead_bundle::OperatorPolicy::from_toml_str(policy)
+            .unwrap()
+            .granted("bridge", "RWQ"),
+    );
+    // No helper here: with every other consent given, the node asks it,
+    // and is refused.
+    let rt = bulkhead_host::Runtime::new(bulkhead_host::RuntimeConfig::default()).unwrap();
+
+    let refusal = deploy::own_sockets_refusal(&manifest, &grant, &config, &rt).await;
+
+    assert_eq!(grant.granted.contains(&Capability::OwnSockets), granted);
+    assert!(
+        refusal.as_deref().is_some_and(|r| r.contains(says)),
+        "{refusal:?}"
+    );
+}
+
+#[test]
+fn config____allow_own_sockets_without_priv____refused() {
+    let err = NodeConfig::from_toml_str("data_dir = \"/d\"\n[native]\nallow_own_sockets = true\n")
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("allow_own_sockets needs [priv]"), "{err}");
+}

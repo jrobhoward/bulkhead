@@ -94,7 +94,9 @@ enum Job {
     ),
     /// A `std` channel: [`PrivHelper::bind`] blocks its caller.
     Bind(String, std::sync::mpsc::Sender<Result<OwnedFd, String>>),
-    Volume(VolumeRequest, oneshot::Sender<Result<Reply, String>>),
+    /// A request answered by a reply passed back as it is (volumes, own
+    /// sockets' rules).
+    Query(Request, oneshot::Sender<Result<Reply, String>>),
     Alive,
 }
 
@@ -104,7 +106,7 @@ enum Pending {
     Signal(u64),
     Share(oneshot::Sender<Result<(), String>>),
     Bind(std::sync::mpsc::Sender<Result<OwnedFd, String>>),
-    Volume(oneshot::Sender<Result<Reply, String>>),
+    Query(oneshot::Sender<Result<Reply, String>>),
     Alive,
 }
 
@@ -259,10 +261,33 @@ impl PrivHelper {
     /// Ask the helper about a ZFS volume (ROADMAP ZV1); its answer
     /// (`Volume`, `Volumes` or `Done`), or its refusal as the error.
     pub(crate) async fn volume(&self, request: VolumeRequest) -> Result<Reply, String> {
+        self.query(Request::Volume(request)).await
+    }
+
+    /// The rules the helper's configuration holds an own-sockets app to
+    /// (ROADMAP AP2): its `connect` and `bind` rules as `cidr[:ports]`, and
+    /// whether it may listen; its refusal (the app is not listed) as the
+    /// error.
+    ///
+    /// # Errors
+    ///
+    /// The helper refused, or has gone.
+    pub async fn own_sockets(&self, app: &str) -> Result<(Vec<String>, Vec<String>, bool), String> {
+        match self.query(Request::OwnSockets { app: app.into() }).await? {
+            Reply::OwnSockets {
+                connect,
+                bind,
+                listen,
+            } => Ok((connect, bind, listen)),
+            other => Err(format!("the privileged helper answered {other:?}")),
+        }
+    }
+
+    async fn query(&self, request: Request) -> Result<Reply, String> {
         let (tx, rx) = oneshot::channel();
         self.0
             .jobs
-            .send(Job::Volume(request, tx))
+            .send(Job::Query(request, tx))
             .map_err(|_| "the privileged helper has gone".to_string())?;
         rx.await
             .unwrap_or_else(|_| Err("the privileged helper has gone".into()))
@@ -326,9 +351,7 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                     Job::Bind(address, tx) => {
                         (Request::Bind { address }.encode(), Vec::new(), Pending::Bind(tx))
                     }
-                    Job::Volume(request, tx) => {
-                        (Request::Volume(request).encode(), Vec::new(), Pending::Volume(tx))
-                    }
+                    Job::Query(request, tx) => (request.encode(), Vec::new(), Pending::Query(tx)),
                     Job::Alive => (Request::Alive.encode(), Vec::new(), Pending::Alive),
                 };
                 match send(&sock, &bytes, &fds).await {
@@ -343,7 +366,7 @@ async fn serve(sock: AsyncFd<OwnedFd>, mut jobs: mpsc::UnboundedReceiver<Job>) {
                         Pending::Bind(tx) => {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
-                        Pending::Volume(tx) => {
+                        Pending::Query(tx) => {
                             let _ = tx.send(Err(format!("the privileged helper: {e}")));
                         }
                         Pending::Signal(_) | Pending::Alive => {}
@@ -441,12 +464,15 @@ fn deliver(
         (Some(Pending::Bind(tx)), Reply::Refused { reason }) => {
             let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
         }
-        (Some(Pending::Volume(tx)), Reply::Refused { reason }) => {
+        (Some(Pending::Query(tx)), Reply::Refused { reason }) => {
             let _ = tx.send(Err(format!("the privileged helper refused: {reason}")));
         }
         (
-            Some(Pending::Volume(tx)),
-            reply @ (Reply::Volume { .. } | Reply::Volumes { .. } | Reply::Done),
+            Some(Pending::Query(tx)),
+            reply @ (Reply::Volume { .. }
+            | Reply::Volumes { .. }
+            | Reply::OwnSockets { .. }
+            | Reply::Done),
         ) => {
             let _ = tx.send(Ok(reply));
         }
@@ -469,7 +495,7 @@ fn deliver(
                 Some(Pending::Bind(tx)) => {
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
-                Some(Pending::Volume(tx)) => {
+                Some(Pending::Query(tx)) => {
                     let _ = tx.send(Err("the privileged helper answered out of order".into()));
                 }
                 _ => {}
@@ -495,7 +521,7 @@ fn gone(
             Pending::Bind(tx) => {
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
-            Pending::Volume(tx) => {
+            Pending::Query(tx) => {
                 let _ = tx.send(Err("the privileged helper has gone".into()));
             }
             Pending::Signal(_) | Pending::Alive => {}

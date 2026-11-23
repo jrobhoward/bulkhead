@@ -1,5 +1,6 @@
 //! Landlock for a native app: what it may read, write and execute, and no
-//! TCP.
+//! TCP; for an app with its own sockets (ROADMAP AP2), TCP to and from
+//! the ports it lists.
 
 use std::path::PathBuf;
 
@@ -18,6 +19,10 @@ const ABI_TARGET: ABI = ABI::V6;
 /// System directories every program reads its libraries from.
 const SYSTEM: &[&str] = &["/usr", "/lib", "/lib64", "/etc/ld.so.cache"];
 
+/// What an app with its own sockets reads for name lookups (the helper
+/// puts them in its root).
+const NAMES: &[&str] = &["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"];
+
 /// The directories and files the program may read.
 #[must_use]
 pub fn readable(args: &Args) -> Vec<PathBuf> {
@@ -30,7 +35,42 @@ pub fn readable(args: &Args) -> Vec<PathBuf> {
         out.push(dir.to_path_buf());
     }
     out.extend(args.read.iter().cloned());
+    if args.own_sockets.is_some() {
+        out.extend(NAMES.iter().map(PathBuf::from).filter(|p| p.exists()));
+    }
     out
+}
+
+/// The TCP rights Landlock handles, and the ports it allows for each:
+/// every right with no ports (no TCP) for an app the node makes sockets
+/// for; for one with its own sockets (ROADMAP AP2), connect and bind each
+/// to the ports listed, or left unhandled for any port (or too many to
+/// list: the helper's fence holds them).
+#[must_use]
+pub fn tcp(args: &Args) -> (landlock::BitFlags<AccessNet>, Vec<u16>, Vec<u16>) {
+    let Some(own) = &args.own_sockets else {
+        return (AccessNet::from_all(ABI_TARGET), Vec::new(), Vec::new());
+    };
+    let connect = crate::landlock_ports(own.connect.as_deref());
+    // Port 0 too: Landlock cannot name the unspecified address, whose bind
+    // with port 0 (before a connect) needs no rule; the helper's programs
+    // hold the address.
+    let bind = crate::landlock_ports(own.bind.as_deref()).map(|mut p| {
+        p.insert(0, 0);
+        p
+    });
+    let mut handled = landlock::BitFlags::<AccessNet>::EMPTY;
+    if connect.is_some() {
+        handled |= AccessNet::ConnectTcp;
+    }
+    if bind.is_some() {
+        handled |= AccessNet::BindTcp;
+    }
+    (
+        handled,
+        connect.unwrap_or_default(),
+        bind.unwrap_or_default(),
+    )
 }
 
 /// What a read-write volume allows: reading, writing and truncating
@@ -63,9 +103,16 @@ pub fn writable_access() -> landlock::BitFlags<AccessFs> {
 pub fn restrict(args: &Args) -> Result<(), String> {
     let abi = ABI_TARGET;
     let read = AccessFs::ReadFile | AccessFs::ReadDir;
+    let (net, connect, bind) = tcp(args);
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
-        .and_then(|r| r.handle_access(AccessNet::from_all(abi)))
+        .and_then(|r| {
+            if net.is_empty() {
+                Ok(r)
+            } else {
+                r.handle_access(net)
+            }
+        })
         .and_then(|r| r.scope(Scope::from_all(abi)))
         .and_then(Ruleset::create)
         .and_then(|r| r.add_rules(path_beneath_rules(readable(args), read)))
@@ -81,6 +128,13 @@ pub fn restrict(args: &Args) -> Result<(), String> {
                     PathFd::new(&file).map_err(|e| format!("{}: {e}", file.display()))?,
                     AccessFs::Execute | AccessFs::ReadFile,
                 ))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    for (ports, access) in [(connect, AccessNet::ConnectTcp), (bind, AccessNet::BindTcp)] {
+        for port in ports {
+            ruleset = ruleset
+                .add_rule(landlock::NetPort::new(port, access))
                 .map_err(|e| e.to_string())?;
         }
     }

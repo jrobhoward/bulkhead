@@ -129,6 +129,8 @@ struct DeployInfo {
     /// Its manifest's reason for running unconfined (ROADMAP AP4); a
     /// build refuses one this node may not run so.
     unconfined: Option<String>,
+    /// Whether it opens its own sockets (ROADMAP AP2).
+    own_sockets: bool,
 }
 
 impl Node {
@@ -638,6 +640,12 @@ fn warn_config(config: &NodeConfig) {
              and the helper's configuration lists, run without the runner's fences"
         );
     }
+    if config.native.allow_own_sockets {
+        tracing::warn!(
+            "[native] allow_own_sockets: apps that policy grants bulkhead:own-sockets by name \
+             open their own sockets, held to the helper's rules for them"
+        );
+    }
 }
 
 /// The apps the node runs without the runner's fences (ROADMAP AP4).
@@ -648,9 +656,17 @@ fn unconfined_metrics(apps: &Apps) -> String {
         .filter_map(|n| apps.app(n))
         .filter(|a| a.deployment().manifest.spec.unconfined.is_some())
         .count();
+    let own = apps
+        .names()
+        .iter()
+        .filter_map(|n| apps.app(n))
+        .filter(|a| a.deployment().manifest.spec.own_sockets())
+        .count();
     format!(
         "# HELP bulkhead_unconfined_apps Apps this node runs unconfined, without the runner's \
-         fences.\n# TYPE bulkhead_unconfined_apps gauge\nbulkhead_unconfined_apps {n}\n"
+         fences.\n# TYPE bulkhead_unconfined_apps gauge\nbulkhead_unconfined_apps {n}\n\
+         # HELP bulkhead_own_sockets_apps Apps this node runs with their own sockets (ROADMAP \
+         AP2).\n# TYPE bulkhead_own_sockets_apps gauge\nbulkhead_own_sockets_apps {own}\n"
     )
 }
 

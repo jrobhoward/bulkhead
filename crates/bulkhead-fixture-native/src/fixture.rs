@@ -512,6 +512,19 @@ impl Fixture {
             "write" => outcome(std::fs::write(rest, b"x")),
             "fill" => fill_dir(rest),
             "connect" => outcome(std::net::TcpStream::connect(rest)),
+            // Own sockets (ROADMAP AP2): a UDP datagram from a socket of
+            // the app's own, a bind (UDP: std's TCP bind listens too), a
+            // TCP bind and listen at an address, a raw socket.
+            "udp-own" => {
+                outcome(std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.send_to(b"x", rest)))
+            }
+            "bind" => outcome(std::net::UdpSocket::bind(rest)),
+            "listen" => outcome(std::net::TcpListener::bind(rest)),
+            "raw" => outcome(rustix::net::socket(
+                rustix::net::AddressFamily::INET,
+                rustix::net::SocketType::RAW,
+                Some(rustix::net::ipproto::ICMP),
+            )),
             "exec" => outcome(std::process::Command::new("/bin/true").status()),
             #[cfg(target_os = "linux")]
             "io-uring" => {

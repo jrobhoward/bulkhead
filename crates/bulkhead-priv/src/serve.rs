@@ -303,7 +303,7 @@ impl Helper {
         let _ = socket::send(self.sock.as_fd(), &reply.encode(), &[]);
         self.apps.remove(&id);
         if let Some(inst) = self.insts.remove(&id) {
-            platform::finish(&self.st, inst);
+            platform::finish(&self.config, &self.st, inst);
         }
     }
 
@@ -342,6 +342,27 @@ impl Helper {
                     Err(e) => (refused(&format!("signal: {e}")), None),
                 }
             }
+            Request::OwnSockets { app } => match self.config.own_sockets.get(&app) {
+                Some(own) => {
+                    let text = |rules: &[crate::sockets::Rule]| {
+                        rules.iter().map(ToString::to_string).collect()
+                    };
+                    (
+                        Reply::OwnSockets {
+                            connect: text(&own.connect),
+                            bind: text(&own.bind),
+                            listen: own.listen,
+                        },
+                        None,
+                    )
+                }
+                None => (
+                    refused(&format!(
+                        "{app} does not open its own sockets in the helper's configuration"
+                    )),
+                    None,
+                ),
+            },
             Request::Share { app, bind } => match self.share(&app, &bind) {
                 Ok(reply) => (reply, None),
                 Err(reason) => (Reply::Refused { reason }, None),

@@ -79,6 +79,10 @@ pub struct AppSummary {
     /// AP4): its manifest's reason. Absent for a fenced app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unconfined: Option<String>,
+    /// Whether the app opens its own sockets, held to the privileged
+    /// helper's rules for it (ROADMAP AP2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_sockets: bool,
 }
 
 /// One app in detail, as `GET /v1/apps/{app}` returns it.

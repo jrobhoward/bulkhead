@@ -1,8 +1,19 @@
 //! `bulkhead-runner`: the launcher a node runs every native app through.
 //!
 //! ```text
-//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]... [--profile app|ingress] [--unconfined]
+//! bulkhead-runner (--library PATH | --executable PATH) [--read DIR]... [--write DIR]... [--landlock required|best-effort] [--lease] [--accept-fd N]... [--profile app|ingress] [--unconfined | --own-sockets [--listen] [--connect-ports any|LIST] [--bind-ports any|LIST]]
 //! ```
+//!
+//! `--own-sockets` (ROADMAP AP2) lets the app open its own TCP and UDP
+//! sockets: steps 2 and 3 stay, with Landlock's TCP connect and bind
+//! limited to the ports listed (`443,8000-8100`; `any` leaves that half to
+//! the helper's fence alone), seccomp allowing `socket` for Unix, IPv4 and
+//! IPv6 and refusing raw and packet types, `connect`, `accept`, `bind`,
+//! and `listen` only with `--listen`; on FreeBSD capability mode stays
+//! off, since it refuses `connect` and `bind`. Where the sockets may go is
+//! the helper's fence (cgroup BPF programs, ipfw rules), from its own
+//! configuration; the node passes the flags only with the operator's
+//! consent on every side, and the helper refuses them otherwise.
 //!
 //! `--unconfined` (ROADMAP AP4) leaves out steps 2 and 3 and, on FreeBSD,
 //! capability mode: the app runs as the helper started it, under its own
@@ -105,6 +116,65 @@ pub struct Args {
     /// `--unconfined`: no Landlock, seccomp filter or capability mode for
     /// the app (ROADMAP AP4).
     pub unconfined: bool,
+    /// `--own-sockets`: the app opens its own sockets (ROADMAP AP2).
+    pub own_sockets: Option<OwnSockets>,
+}
+
+/// What an own-sockets app may do with its sockets, beside the helper's
+/// fence (the runner's `--own-sockets`, ROADMAP AP2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OwnSockets {
+    /// `--listen`: whether `listen` is allowed. It binds an unbound socket
+    /// to an ephemeral port without the bind hooks, so seccomp is its
+    /// fence.
+    pub listen: bool,
+    /// `--connect-ports`: the TCP ports Landlock lets it connect to;
+    /// `None` for any.
+    pub connect: Option<Vec<(u16, u16)>>,
+    /// `--bind-ports`: the TCP ports Landlock lets it bind; `None` for any.
+    pub bind: Option<Vec<(u16, u16)>>,
+}
+
+/// The most ports a list may name before Landlock leaves that half to
+/// the helper's fence: Landlock takes one rule per port.
+pub const MAX_LANDLOCK_PORTS: usize = 1024;
+
+/// Parse `any`, `none`, or a list of ports and ranges (`443,8000-8100`).
+///
+/// # Errors
+///
+/// A part that is not a port or an ordered range.
+pub fn parse_ports(v: &str) -> Result<Option<Vec<(u16, u16)>>, String> {
+    match v {
+        "any" => return Ok(None),
+        "none" => return Ok(Some(Vec::new())),
+        _ => {}
+    }
+    v.split(',')
+        .map(|part| {
+            let bad = || format!("{part}: not a port or a range like 8000-8100");
+            let (lo, hi) = part.split_once('-').unwrap_or((part, part));
+            let lo: u16 = lo.trim().parse().map_err(|_| bad())?;
+            let hi: u16 = hi.trim().parse().map_err(|_| bad())?;
+            if lo > hi { Err(bad()) } else { Ok((lo, hi)) }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The ports Landlock is given for `ports`, or `None` (leave that half
+/// unhandled) for any, or for more than [`MAX_LANDLOCK_PORTS`].
+#[must_use]
+pub fn landlock_ports(ports: Option<&[(u16, u16)]>) -> Option<Vec<u16>> {
+    let ports = ports?;
+    let count: usize = ports.iter().map(|(lo, hi)| usize::from(hi - lo) + 1).sum();
+    if count > MAX_LANDLOCK_PORTS {
+        return None;
+    }
+    let mut out: Vec<u16> = ports.iter().flat_map(|(lo, hi)| *lo..=*hi).collect();
+    out.sort_unstable();
+    out.dedup();
+    Some(out)
 }
 
 /// Which system calls a process gets (the runner's `--profile`, ROADMAP
@@ -148,14 +218,29 @@ impl Args {
         let mut accept_fds = Vec::new();
         let mut profile = Profile::App;
         let mut unconfined = false;
+        let mut own = false;
+        let mut own_sockets = OwnSockets::default();
+        let mut port_lists = false;
         while let Some(flag) = it.next() {
-            if flag == bulkhead_native::lease::FLAG {
-                lease = true;
-                continue;
-            }
-            if flag == "--unconfined" {
-                unconfined = true;
-                continue;
+            match flag.as_str() {
+                f if f == bulkhead_native::lease::FLAG => {
+                    lease = true;
+                    continue;
+                }
+                "--unconfined" => {
+                    unconfined = true;
+                    continue;
+                }
+                "--own-sockets" => {
+                    own = true;
+                    continue;
+                }
+                "--listen" => {
+                    own_sockets.listen = true;
+                    port_lists = true;
+                    continue;
+                }
+                _ => {}
             }
             let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
             match flag.as_str() {
@@ -167,6 +252,14 @@ impl Args {
                     let v = value()?;
                     profile = Profile::parse(&v)
                         .ok_or_else(|| format!("--profile {v}: app or ingress"))?;
+                }
+                "--connect-ports" => {
+                    own_sockets.connect = parse_ports(&value()?)?;
+                    port_lists = true;
+                }
+                "--bind-ports" => {
+                    own_sockets.bind = parse_ports(&value()?)?;
+                    port_lists = true;
                 }
                 "--accept-fd" => {
                     let v = value()?;
@@ -188,8 +281,16 @@ impl Args {
             }
         }
         let program = program.ok_or("--library or --executable is required")?;
-        if unconfined && (profile != Profile::App || !accept_fds.is_empty()) {
-            return Err("--unconfined is for apps; a driver keeps its fences".into());
+        if (unconfined || own) && (profile != Profile::App || !accept_fds.is_empty()) {
+            return Err(
+                "--unconfined and --own-sockets are for apps; a driver keeps its fences".into(),
+            );
+        }
+        if unconfined && own {
+            return Err("--unconfined or --own-sockets, not both".into());
+        }
+        if port_lists && !own {
+            return Err("--listen, --connect-ports and --bind-ports go with --own-sockets".into());
         }
         Ok(Self {
             program,
@@ -200,6 +301,7 @@ impl Args {
             accept_fds,
             profile,
             unconfined,
+            own_sockets: own.then_some(own_sockets),
         })
     }
 }
@@ -232,7 +334,8 @@ pub fn main() -> ExitCode {
     }
     #[cfg(target_os = "linux")]
     if !args.unconfined
-        && let Err(e) = seccomp::install(&args.accept_fds, args.profile)
+        && let Err(e) =
+            seccomp::install_with(&args.accept_fds, args.profile, args.own_sockets.as_ref())
     {
         eprintln!("bulkhead-runner: seccomp: {e}");
         return ExitCode::from(2);
@@ -264,11 +367,12 @@ pub fn main() -> ExitCode {
             .filter_map(|var| std::env::var(var).ok().map(|v| (var.to_string(), v)))
             .collect();
             #[cfg(target_os = "freebsd")]
-            if !args.unconfined {
+            if !args.unconfined && args.own_sockets.is_none() {
                 return capsicum::exec(&args, path, env);
             }
-            // Unconfined, the app opens its preopens by path, as without
-            // the descriptors capability mode needs.
+            // Unconfined or with its own sockets, the app opens its
+            // preopens by path, as without the descriptors capability
+            // mode needs.
             {
                 let mut cmd = std::process::Command::new(path);
                 cmd.env_clear().envs(env);

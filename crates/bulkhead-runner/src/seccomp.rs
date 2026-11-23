@@ -53,7 +53,7 @@
 
 use std::collections::BTreeMap;
 
-pub use crate::Profile;
+pub use crate::{OwnSockets, Profile};
 use seccompiler::{
     BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
     SeccompRule, TargetArch,
@@ -327,6 +327,19 @@ pub fn allowed_for(profile: Profile) -> Vec<i64> {
     calls
 }
 
+/// [`allowed_for`], and for an app with its own sockets (ROADMAP AP2)
+/// `bind` and `listen`: filter 1 lists them for no other process. Filter
+/// 2 refuses `listen` with `EPERM` unless the app may listen, so a library
+/// that tries gets an error rather than `SIGSYS`.
+#[must_use]
+pub fn allowed_with(profile: Profile, own: Option<&OwnSockets>) -> Vec<i64> {
+    let mut calls = allowed_for(profile);
+    if own.is_some() {
+        calls.extend([libc::SYS_bind, libc::SYS_listen]);
+    }
+    calls
+}
+
 fn condition(
     arg: u8,
     op: SeccompCmpOp,
@@ -362,6 +375,24 @@ pub fn rules(
     pids: &[u32],
     accept_fds: &[i32],
 ) -> Result<BTreeMap<i64, Vec<SeccompRule>>, seccompiler::Error> {
+    rules_with(pids, accept_fds, None)
+}
+
+/// [`rules`], and for an app with its own sockets (`own`, ROADMAP AP2):
+/// `connect`, `accept` and `accept4` not refused, `socket` refused only
+/// for domains other than Unix, IPv4 and IPv6 and for raw,
+/// reliable-datagram and packet types, and `listen` refused unless it may
+/// listen. Where its sockets go is the helper's fence.
+///
+/// # Errors
+///
+/// A seccompiler error (none for valid input).
+pub fn rules_with(
+    pids: &[u32],
+    accept_fds: &[i32],
+    own_sockets: Option<&OwnSockets>,
+) -> Result<BTreeMap<i64, Vec<SeccompRule>>, seccompiler::Error> {
+    let own = own_sockets.is_some();
     let other = || {
         pids.iter()
             .map(|pid| condition(0, SeccompCmpOp::Ne, u64::from(*pid)))
@@ -385,28 +416,37 @@ pub fn rules(
         libc::SYS_ptrace,
         libc::SYS_process_vm_readv,
         libc::SYS_process_vm_writev,
-        libc::SYS_socket,
-        libc::SYS_connect,
-        libc::SYS_accept,
         libc::SYS_io_uring_setup,
         libc::SYS_io_uring_enter,
         libc::SYS_io_uring_register,
     ] {
         rules.insert(call, Vec::new());
     }
+    if let Some(o) = own_sockets {
+        rules.insert(libc::SYS_socket, own_socket_rules()?);
+        if !o.listen {
+            rules.insert(libc::SYS_listen, Vec::new());
+        }
+    } else {
+        for call in [libc::SYS_socket, libc::SYS_connect, libc::SYS_accept] {
+            rules.insert(call, Vec::new());
+        }
+    }
     // `accept4` only on the listening sockets a driver app was passed
     // (ROADMAP DA1): refused unless its descriptor is one of them; with
-    // none, always.
-    let accept4 = if accept_fds.is_empty() {
-        Vec::new()
-    } else {
-        let not_passed = accept_fds
-            .iter()
-            .map(|fd| condition(0, SeccompCmpOp::Ne, u64::from(fd.unsigned_abs())))
-            .collect::<Result<Vec<_>, _>>()?;
-        vec![SeccompRule::new(not_passed)?]
-    };
-    rules.insert(libc::SYS_accept4, accept4);
+    // none, always. An own-sockets app accepts on its own.
+    if !own {
+        let accept4 = if accept_fds.is_empty() {
+            Vec::new()
+        } else {
+            let not_passed = accept_fds
+                .iter()
+                .map(|fd| condition(0, SeccompCmpOp::Ne, u64::from(fd.unsigned_abs())))
+                .collect::<Result<Vec<_>, _>>()?;
+            vec![SeccompRule::new(not_passed)?]
+        };
+        rules.insert(libc::SYS_accept4, accept4);
+    }
     // One rule per namespace flag: a rule's conditions are joined by
     // "and", the rules of a call by "or".
     let namespaces = NAMESPACE_FLAGS
@@ -439,9 +479,36 @@ pub fn rules(
     Ok(rules)
 }
 
+/// `socket` refused, for an own-sockets app, for domains other than Unix,
+/// IPv4 and IPv6, and for raw, reliable-datagram and packet types: the
+/// helper's fence sees only IPv4 and IPv6 addresses (spike S40).
+fn own_socket_rules() -> Result<Vec<SeccompRule>, seccompiler::Error> {
+    // The obsolete packet type; `libc` deprecates its constant.
+    const SOCK_PACKET: i32 = 10;
+    let domain = SeccompRule::new(vec![
+        condition(0, SeccompCmpOp::Ne, dword(libc::AF_UNIX))?,
+        condition(0, SeccompCmpOp::Ne, dword(libc::AF_INET))?,
+        condition(0, SeccompCmpOp::Ne, dword(libc::AF_INET6))?,
+    ])?;
+    let mut out = vec![domain];
+    for ty in [libc::SOCK_RAW, libc::SOCK_RDM, SOCK_PACKET] {
+        out.push(SeccompRule::new(vec![condition(
+            1,
+            SeccompCmpOp::MaskedEq(0xf),
+            dword(ty),
+        )?])?);
+    }
+    Ok(out)
+}
+
 /// The three filters, in the order they are installed (the module's
 /// docs number them by what they do).
-fn programs(pids: &[u32], accept_fds: &[i32], profile: Profile) -> Result<Vec<BpfProgram>, String> {
+fn programs(
+    pids: &[u32],
+    accept_fds: &[i32],
+    profile: Profile,
+    own: Option<&OwnSockets>,
+) -> Result<Vec<BpfProgram>, String> {
     let arch = TargetArch::try_from(std::env::consts::ARCH).map_err(|e| e.to_string())?;
     let compile = |rules, mismatch, matched| -> Result<BpfProgram, String> {
         SeccompFilter::new(rules, mismatch, matched, arch)
@@ -451,7 +518,7 @@ fn programs(pids: &[u32], accept_fds: &[i32], profile: Profile) -> Result<Vec<Bp
     };
     let eperm = SeccompAction::Errno(libc::EPERM.unsigned_abs());
     let enosys = SeccompAction::Errno(libc::ENOSYS.unsigned_abs());
-    let listed = allowed_for(profile)
+    let listed = allowed_with(profile, own)
         .into_iter()
         .map(|call| (call, Vec::new()))
         .collect();
@@ -461,7 +528,7 @@ fn programs(pids: &[u32], accept_fds: &[i32], profile: Profile) -> Result<Vec<Bp
     Ok(vec![
         compile(clone3, SeccompAction::Allow, enosys)?,
         compile(
-            rules(pids, accept_fds).map_err(|e| e.to_string())?,
+            rules_with(pids, accept_fds, own).map_err(|e| e.to_string())?,
             SeccompAction::Allow,
             eperm,
         )?,
@@ -477,7 +544,20 @@ fn programs(pids: &[u32], accept_fds: &[i32], profile: Profile) -> Result<Vec<Bp
 ///
 /// A filter could not be built or installed.
 pub fn install(accept_fds: &[i32], profile: Profile) -> Result<(), String> {
-    install_programs(programs(&[std::process::id()], accept_fds, profile)?)
+    install_with(accept_fds, profile, None)
+}
+
+/// [`install`], for an app with its own sockets if `own` (ROADMAP AP2).
+///
+/// # Errors
+///
+/// A filter could not be built or installed.
+pub fn install_with(
+    accept_fds: &[i32],
+    profile: Profile,
+    own: Option<&OwnSockets>,
+) -> Result<(), String> {
+    install_programs(programs(&[std::process::id()], accept_fds, profile, own)?)
 }
 
 /// [`install`], with signals allowed to the processes `pids` (the lease
@@ -487,7 +567,7 @@ pub fn install(accept_fds: &[i32], profile: Profile) -> Result<(), String> {
 ///
 /// A filter could not be built or installed.
 pub fn install_for(pids: &[u32], accept_fds: &[i32]) -> Result<(), String> {
-    install_programs(programs(pids, accept_fds, Profile::App)?)
+    install_programs(programs(pids, accept_fds, Profile::App, None)?)
 }
 
 fn install_programs(programs: Vec<BpfProgram>) -> Result<(), String> {

@@ -266,3 +266,98 @@ fn ingress_profile____the_apps_list_without_process_and_file_changes____and_buil
     }
     assert!(installed.is_ok());
 }
+
+#[test]
+fn parse____own_sockets____listen_and_port_lists_kept() {
+    let found = args("--executable /b/app --own-sockets --listen --connect-ports 1883,8000-8100 --bind-ports any").unwrap();
+
+    let own = found.own_sockets.unwrap();
+    assert!(own.listen);
+    assert_eq!(own.connect, Some(vec![(1883, 1883), (8000, 8100)]));
+    assert_eq!(own.bind, None);
+    assert!(!found.unconfined);
+}
+
+#[rstest::rstest]
+#[case("--executable /b/app --own-sockets --unconfined", "not both")]
+#[case(
+    "--executable /b/app --own-sockets --profile ingress",
+    "driver keeps its fences"
+)]
+#[case("--executable /b/app --listen", "go with --own-sockets")]
+#[case("--executable /b/app --connect-ports 80", "go with --own-sockets")]
+#[case(
+    "--executable /b/app --own-sockets --connect-ports 9-1",
+    "not a port or a range"
+)]
+fn parse____bad_own_sockets____refused(#[case] s: &str, #[case] message: &str) {
+    let found = args(s).unwrap_err();
+
+    assert!(found.contains(message), "{found}");
+}
+
+#[test]
+fn landlock_ports____ranges_any_or_too_many____listed_or_none() {
+    assert_eq!(
+        super::landlock_ports(Some(&[(80, 80), (8000, 8002), (8001, 8001)])),
+        Some(vec![80, 8000, 8001, 8002])
+    );
+    assert_eq!(super::landlock_ports(None), None);
+    assert_eq!(super::landlock_ports(Some(&[(1, 2000)])), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tcp____node_or_own_sockets____every_port_refused_or_the_listed_only() {
+    use landlock::AccessNet;
+
+    let node = args("--executable /b/app").unwrap();
+    let own =
+        args("--executable /b/app --own-sockets --connect-ports 1883 --bind-ports any").unwrap();
+    let binds =
+        args("--executable /b/app --own-sockets --connect-ports any --bind-ports 9000").unwrap();
+
+    let (handled, connect, bind) = super::sandbox::tcp(&node);
+    assert!(handled.contains(AccessNet::ConnectTcp | AccessNet::BindTcp));
+    assert!(connect.is_empty() && bind.is_empty());
+    let (handled, connect, bind) = super::sandbox::tcp(&own);
+    assert_eq!(handled, AccessNet::ConnectTcp);
+    assert_eq!(connect, [1883]);
+    assert!(bind.is_empty());
+    let (handled, _, bind) = super::sandbox::tcp(&binds);
+    assert_eq!(handled, AccessNet::BindTcp);
+    assert_eq!(bind, [0, 9000], "port 0: the bind before a connect");
+    assert!(
+        super::sandbox::readable(&own)
+            .iter()
+            .any(|p| p.ends_with("hosts"))
+            || !std::path::Path::new("/etc/hosts").exists()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rules_with____own_sockets____connect_allowed_socket_domains_and_listen_refused() {
+    let quiet = crate::OwnSockets::default();
+    let listening = crate::OwnSockets {
+        listen: true,
+        ..crate::OwnSockets::default()
+    };
+
+    let found = super::seccomp::rules_with(&[1234], &[], Some(&quiet)).unwrap();
+    let may_listen = super::seccomp::rules_with(&[1234], &[], Some(&listening)).unwrap();
+    let calls = super::seccomp::allowed_with(crate::Profile::App, Some(&quiet));
+
+    assert_eq!(
+        found[&libc::SYS_socket].len(),
+        4,
+        "domains, raw, rdm, packet"
+    );
+    for call in [libc::SYS_connect, libc::SYS_accept, libc::SYS_accept4] {
+        assert!(!found.contains_key(&call), "{call}");
+    }
+    assert!(found[&libc::SYS_listen].is_empty());
+    assert!(!may_listen.contains_key(&libc::SYS_listen));
+    assert!(calls.contains(&libc::SYS_bind) && calls.contains(&libc::SYS_listen));
+    assert!(!super::seccomp::allowed_for(crate::Profile::App).contains(&libc::SYS_bind));
+}

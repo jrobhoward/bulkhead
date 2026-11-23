@@ -246,6 +246,30 @@ fn AppSpec____unconfined____declares_the_capability_beside_the_section() {
 }
 
 #[test]
+fn AppSpec____own_sockets____declares_the_capability_and_round_trips() {
+    let value = json!({
+        "capabilities": { "bulkhead:sockets": {
+            "own": true,
+            "connect": [{ "cidr": "10.20.0.0/16", "ports": "1883" }]
+        } }
+    });
+
+    let spec = AppSpec::from_json_value(&value).unwrap();
+    let plain =
+        AppSpec::from_json_value(&json!({ "capabilities": { "bulkhead:sockets": {} } })).unwrap();
+
+    assert!(spec.own_sockets());
+    assert_eq!(spec.capabilities.declared(), vec![Capability::Sockets]);
+    assert_eq!(
+        spec.declared(),
+        vec![Capability::Sockets, Capability::OwnSockets]
+    );
+    assert!(!plain.own_sockets());
+    let written = serde_json::to_value(&plain.capabilities).unwrap();
+    assert!(written.to_string().find("own").is_none(), "{written}");
+}
+
+#[test]
 fn AppSpec____memory_max_above_4_gib____accepted() {
     let spec: AppSpec =
         serde_json::from_value(json!({ "limits": { "memory_max": "64GiB" } })).unwrap();
@@ -306,6 +330,8 @@ fn AppSpec____a_volume_with_a_quota____accepted_for_the_node_to_judge() {
 #[case(json!({ "capabilities": { "bulkhead:files": { "preopens": { "/data": { "volume": "v", "mode": "rw", "quota": "0" } } } } }), "capabilities.bulkhead:files.preopens./data.quota")]
 #[case(json!({ "capabilities": { "bulkhead:sockets": { "connect": [{ "cidr": "10.0.0.0/33" }] } } }), "capabilities.bulkhead:sockets.connect[0].cidr")]
 #[case(json!({ "capabilities": { "bulkhead:sockets": { "max_sockets": 0 } } }), "capabilities.bulkhead:sockets.max_sockets")]
+#[case(json!({ "capabilities": { "bulkhead:sockets": { "own": true } } }), "capabilities.bulkhead:sockets.own")]
+#[case(json!({ "unconfined": { "reason": "r" }, "capabilities": { "bulkhead:sockets": { "own": true, "connect": [{ "cidr": "10.0.0.0/8" }] } } }), "capabilities.bulkhead:sockets.own")]
 #[case(json!({ "capabilities": { "bulkhead:http-egress": { "allow": ["x"], "methods": ["get"] } } }), "capabilities.bulkhead:http-egress.methods[0]")]
 #[case(json!({ "capabilities": { "bulkhead:http-routes": { "routes": [{ "path_prefix": "orders" }] } } }), "capabilities.bulkhead:http-routes.routes[0].path_prefix")]
 #[case(json!({ "capabilities": { "bulkhead:http-routes": { "routes": [] } } }), "capabilities.bulkhead:http-routes.routes")]

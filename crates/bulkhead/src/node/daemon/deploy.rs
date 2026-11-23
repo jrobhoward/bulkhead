@@ -51,6 +51,103 @@ pub(super) fn check_packages(manifest: &AppManifest) -> Result<(), NodeError> {
     }
 }
 
+/// Why `manifest`'s app may not open its own sockets on this node
+/// (ROADMAP AP2), or `None` if it does not ask to or may: the helper, node
+/// config's switch, policy's grant by name, and the helper's own rules for
+/// it, which must be the manifest's (it holds the app to its own copy).
+pub(super) async fn own_sockets_refusal(
+    manifest: &AppManifest,
+    grant: &bulkhead_bundle::EffectiveGrant,
+    config: &crate::node::config::NodeConfig,
+    rt: &bulkhead_host::Runtime,
+) -> Option<String> {
+    let scope = manifest
+        .spec
+        .capabilities
+        .sockets
+        .as_ref()
+        .filter(|s| s.own)?;
+    let name = &manifest.app.name;
+    let why = if config.privileges.is_none() {
+        "this node runs no privileged helper ([priv]), which holds own sockets to its rules"
+            .to_string()
+    } else if !config.native.allow_own_sockets {
+        "node config does not allow apps their own sockets ([native] allow_own_sockets)".to_string()
+    } else if !grant.granted.contains(&Capability::OwnSockets) {
+        format!("policy does not grant bulkhead:own-sockets to {name} ([apps.{name}])")
+    } else if config.drivers.contains_key(name) {
+        "a driver app keeps its fences".to_string()
+    } else {
+        match rt.own_sockets_rules(name).await {
+            Err(e) => format!("the privileged helper's configuration has no rules for it: {e}"),
+            Ok((connect, bind, listen)) => rules_differ(scope, &connect, &bind, listen)?,
+        }
+    };
+    Some(format!("{name} asks to open its own sockets: {why}"))
+}
+
+/// How the manifest's `scope` differs from the helper's rules for the app
+/// (`cidr[:port or lo-hi]`, as the helper prints them), or `None` if they
+/// are the same sets.
+pub(super) fn rules_differ(
+    scope: &bulkhead_bundle::manifest::SocketsScope,
+    connect: &[String],
+    bind: &[String],
+    listen: bool,
+) -> Option<String> {
+    use std::collections::BTreeSet;
+    let mut diffs = Vec::new();
+    for (what, ours, theirs) in [
+        ("connect", &scope.connect, connect),
+        ("bind", &scope.bind, bind),
+    ] {
+        let ours: BTreeSet<String> = ours.iter().filter_map(canonical_rule).collect();
+        let theirs: BTreeSet<String> = theirs.iter().cloned().collect();
+        if ours != theirs {
+            diffs.push(format!(
+                "{what}: the manifest has [{}], the helper's own_{what} has [{}]",
+                ours.into_iter().collect::<Vec<_>>().join(", "),
+                theirs.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    if scope.listen != listen {
+        diffs.push(format!(
+            "listen: the manifest says {}, the helper's own_listen {}",
+            scope.listen,
+            if listen { "lists it" } else { "does not" }
+        ));
+    }
+    (!diffs.is_empty()).then(|| {
+        format!(
+            "its rules differ from the privileged helper's for it, which hold its sockets: {}",
+            diffs.join("; ")
+        )
+    })
+}
+
+/// A manifest rule as the helper prints its own: the block with host bits
+/// cleared, then `:port` or `:lo-hi`.
+fn canonical_rule(rule: &bulkhead_bundle::manifest::SocketRule) -> Option<String> {
+    use std::net::IpAddr;
+    let (ip, prefix) = bulkhead_bundle::manifest::parse_cidr(&rule.cidr)?;
+    let net = match ip {
+        IpAddr::V4(a) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+            IpAddr::V4((u32::from(a) & mask).into())
+        }
+        IpAddr::V6(a) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+            IpAddr::V6((u128::from(a) & mask).into())
+        }
+    };
+    Some(match &rule.ports {
+        None => format!("{net}/{prefix}"),
+        Some(p) if p.start == p.end => format!("{net}/{prefix}:{}", p.start),
+        Some(p) => format!("{net}/{prefix}:{}-{}", p.start, p.end),
+    })
+}
+
 /// Why `manifest`'s app may not run without the runner's fences on this
 /// node (ROADMAP AP4), or `None` if it does not ask to or may. Checked at
 /// every build (deploy, upgrade, restore, start, a DR copy), since policy
@@ -265,6 +362,12 @@ impl Node {
         if let Some(why) = unconfined_refusal(&manifest, &grant, &self.config) {
             return Err(NodeError::Refused(why));
         }
+        if let Some(why) = own_sockets_refusal(&manifest, &grant, &self.config, &self.rt).await {
+            return Err(NodeError::Refused(why));
+        }
+        if manifest.spec.own_sockets() {
+            tracing::warn!(app = %name, %version, "own sockets: opens its own sockets, held to the privileged helper's rules for it");
+        }
         if let Some(u) = &manifest.spec.unconfined {
             tracing::warn!(app = %name, %version, reason = %u.reason, "unconfined: runs without the runner's fences");
         }
@@ -405,6 +508,7 @@ impl Node {
         };
         let info = DeployInfo {
             unconfined: manifest.spec.unconfined.as_ref().map(|u| u.reason.clone()),
+            own_sockets: manifest.spec.own_sockets(),
             names: manifest
                 .spec
                 .registered_names

@@ -84,24 +84,40 @@ impl Started {
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
+
+    /// Stop the helper (its instances end) and start another on its
+    /// configuration, changed by `edit`, and the same cgroup.
+    pub fn restart(&mut self, edit: impl FnOnce(String) -> String) {
+        stop(&mut self.child);
+        let conf = self.dir.path().join("priv.conf");
+        let text = edit(std::fs::read_to_string(&conf).unwrap());
+        std::fs::write(&conf, text).unwrap();
+        let (helper, child) = spawn_helper(&conf);
+        self.helper = helper;
+        self.child = child;
+    }
+}
+
+/// `SIGTERM`, then `SIGKILL` after 10 s: the helper ends its instances and
+/// removes what it made for them (on FreeBSD, their jails' mounts).
+fn stop(child: &mut Child) {
+    if let Some(pid) = rustix::process::Pid::from_raw(child.id() as i32) {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl Drop for Started {
     fn drop(&mut self) {
-        // `SIGTERM` first: the helper ends its instances and removes what
-        // it made for them (on FreeBSD, their jails' mounts).
-        if let Some(pid) = rustix::process::Pid::from_raw(self.child.id() as i32) {
-            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while std::time::Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        stop(&mut self.child);
         if let Some(cg) = &self.cgroup {
             remove_tree(cg);
         }
@@ -227,6 +243,18 @@ fn start_with(runner: &Path, zfs: Option<&str>, watchdog_s: u64) -> Started {
     if let Some(cg) = &cgroup {
         text.push_str(&format!("cgroup = {}\n", cg.display()));
     }
+    // An app with its own sockets (ROADMAP AP2): loopback, connect to
+    // ports 48880 to 48889, bind 48890 to 48899. On FreeBSD only with ipfw
+    // loaded, which the helper needs for it; each helper its own block of
+    // rule numbers, since a helper clears its block at start.
+    if own_sockets_here() {
+        text.push_str(OWN_SOCKETS);
+        if cfg!(target_os = "freebsd") {
+            static IPFW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let base = 30000 + 100 * (IPFW.fetch_add(1, Ordering::Relaxed) % 300);
+            text.push_str(&format!("ipfw_rules = {base}-{}\n", base + 99));
+        }
+    }
     if let Some(parent) = zfs {
         let mountpoint = dir.path().join("zfs");
         let ok = Command::new(ZFS)
@@ -244,6 +272,34 @@ fn start_with(runner: &Path, zfs: Option<&str>, watchdog_s: u64) -> Started {
     let conf = dir.path().join("priv.conf");
     std::fs::write(&conf, text).unwrap();
     std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let (helper, child) = spawn_helper(&conf);
+    Started {
+        helper,
+        runner,
+        dir,
+        node_uid,
+        first_uid,
+        child,
+        cgroup,
+        zfs_parent: zfs.map(String::from),
+    }
+}
+
+/// The own-sockets app `socks` in the test helper's configuration.
+pub const OWN_SOCKETS: &str = "own_sockets = socks\nown_connect.socks = 127.0.0.1/32:48880-48889\nown_bind.socks = 127.0.0.1/32:48890-48899\n";
+
+/// Whether the test helper lists `socks` (ROADMAP AP2): on Linux, and on
+/// FreeBSD with ipfw loaded.
+pub fn own_sockets_here() -> bool {
+    cfg!(target_os = "linux")
+        || Command::new("kldstat")
+            .args(["-q", "-m", "ipfw"])
+            .status()
+            .is_ok_and(|s| s.success())
+}
+
+/// Start the helper on `conf`, with a socket to it as its fd 3.
+fn spawn_helper(conf: &Path) -> (bulkhead_host::PrivHelper, Child) {
     let (mine, theirs) = rustix::net::socketpair(
         rustix::net::AddressFamily::UNIX,
         rustix::net::SocketType::SEQPACKET,
@@ -252,7 +308,7 @@ fn start_with(runner: &Path, zfs: Option<&str>, watchdog_s: u64) -> Started {
     )
     .unwrap();
     let mut cmd = Command::new(binary());
-    cmd.arg("--inherited-socket").arg(&conf);
+    cmd.arg("--inherited-socket").arg(conf);
     {
         use std::os::fd::AsRawFd;
         use std::os::unix::process::CommandExt;
@@ -270,17 +326,7 @@ fn start_with(runner: &Path, zfs: Option<&str>, watchdog_s: u64) -> Started {
     }
     let child = cmd.spawn().unwrap();
     drop(theirs);
-    let helper = bulkhead_host::PrivHelper::new(mine).unwrap();
-    Started {
-        helper,
-        runner,
-        dir,
-        node_uid,
-        first_uid,
-        child,
-        cgroup,
-        zfs_parent: zfs.map(String::from),
-    }
+    (bulkhead_host::PrivHelper::new(mine).unwrap(), child)
 }
 
 unsafe extern "C" {

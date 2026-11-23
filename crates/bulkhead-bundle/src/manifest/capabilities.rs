@@ -49,11 +49,17 @@ pub enum Capability {
     /// AP4). Declared by the manifest's `unconfined` section, not under
     /// `capabilities`, and granted only by policy's `[apps.<name>]`.
     Unconfined,
+    /// `bulkhead:own-sockets`: open its own sockets, held by the kernel
+    /// to its `bulkhead:sockets` rules (ROADMAP AP2). Declared by `own =
+    /// true` in that capability, and granted only by policy's
+    /// `[apps.<name>]`.
+    OwnSockets,
 }
 
 impl Capability {
     /// Every capability declared under the manifest's `capabilities`
-    /// (all but [`Capability::Unconfined`]).
+    /// (all but [`Capability::Unconfined`] and
+    /// [`Capability::OwnSockets`]).
     pub const ALL: &'static [Self] = &[
         Self::Logging,
         Self::Config,
@@ -87,6 +93,7 @@ impl Capability {
             Self::Groups => "bulkhead:groups",
             Self::Blobs => "bulkhead:blobs",
             Self::Unconfined => "bulkhead:unconfined",
+            Self::OwnSockets => "bulkhead:own-sockets",
         }
     }
 
@@ -96,7 +103,7 @@ impl Capability {
         Self::ALL
             .iter()
             .copied()
-            .chain([Self::Unconfined])
+            .chain([Self::Unconfined, Self::OwnSockets])
             .find(|c| c.key() == key)
     }
 }
@@ -295,7 +302,7 @@ impl Capabilities {
             Capability::Metrics => self.metrics.is_some(),
             Capability::Groups => self.groups.is_some(),
             Capability::Blobs => self.blobs.is_some(),
-            Capability::Unconfined => false,
+            Capability::Unconfined | Capability::OwnSockets => false,
         }
     }
 
@@ -709,6 +716,12 @@ pub struct SocketsScope {
     /// Most sockets the app's instances hold open at once, TCP and UDP,
     /// listening and accepted ones included.
     pub max_sockets: u32,
+    /// Whether the app opens its own sockets inside these rules, held to
+    /// them by the kernel, rather than asking the node for each (ROADMAP
+    /// AP2): declares `bulkhead:own-sockets`. `max_sockets` does not
+    /// count them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub own: bool,
 }
 
 /// [`SocketsScope::max_sockets`] when a manifest does not set it.
@@ -721,6 +734,7 @@ impl Default for SocketsScope {
             connect: Vec::new(),
             listen: false,
             max_sockets: DEFAULT_MAX_SOCKETS,
+            own: false,
         }
     }
 }
@@ -739,6 +753,9 @@ impl SocketsScope {
         }
         if self.max_sockets == 0 {
             v.error_at("max_sockets", "must be greater than zero");
+        }
+        if self.own && self.bind.is_empty() && self.connect.is_empty() {
+            v.error_at("own", "own sockets need a connect or bind rule");
         }
     }
 }

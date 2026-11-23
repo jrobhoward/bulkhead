@@ -49,6 +49,9 @@ pub const MAX_FD_TARGET: u8 = 15;
 /// The most rows a [`Reply::Volumes`] carries.
 pub const MAX_VOLUMES: usize = 256;
 
+/// The most rules in each list of a [`Reply::OwnSockets`].
+pub const MAX_RULES: usize = 256;
+
 /// Whether `name` is a volume name as manifests allow it (the same rule as
 /// [`is_app_name`]): the helper names a ZFS dataset after it (ROADMAP ZV1),
 /// so no name can be read as an option, a path component, a snapshot
@@ -109,6 +112,10 @@ pub struct Spawn {
     /// addresses, with `/etc` in its root (ROADMAP AP4): refused unless
     /// the helper's own configuration lists the app as unconfined.
     pub unconfined: bool,
+    /// Start the instance on the host's network, its own sockets held to
+    /// the rules the helper's configuration gives the app (ROADMAP AP2):
+    /// refused unless that configuration lists the app in `own_sockets`.
+    pub own_sockets: bool,
 }
 
 /// What the node asks.
@@ -149,6 +156,14 @@ pub enum Request {
     /// [`ALIVE_EVERY_S`] seconds. A helper that hears none for its
     /// `node_watchdog_s` kills the node. Answered [`Reply::Done`].
     Alive,
+    /// The rules the helper's configuration holds an own-sockets app to
+    /// (ROADMAP AP2), for the node to compare with the manifest's at
+    /// deploy; answered [`Reply::OwnSockets`], or [`Reply::Refused`] for
+    /// an app it does not list.
+    OwnSockets {
+        /// The app ([`is_app_name`]).
+        app: String,
+    },
 }
 
 /// How often a node tells its helper it is alive ([`Request::Alive`]).
@@ -262,6 +277,16 @@ pub enum Reply {
         /// Each app's volumes, at most [`MAX_VOLUMES`].
         rows: Vec<VolumeRow>,
     },
+    /// An own-sockets app's rules ([`Request::OwnSockets`]), each
+    /// `cidr`, `cidr:port` or `cidr:lo-hi`.
+    OwnSockets {
+        /// Where its sockets may connect and send.
+        connect: Vec<String>,
+        /// What they may bind.
+        bind: Vec<String>,
+        /// Whether it may listen.
+        listen: bool,
+    },
     /// Sent unasked: an instance's process ended. Before the helper
     /// removes what it made for it.
     Exited {
@@ -286,6 +311,7 @@ const T_VOLUME_DESTROY: u8 = 7;
 const T_VOLUME_SNAPSHOT: u8 = 8;
 const T_VOLUME_ROLLBACK: u8 = 9;
 const T_ALIVE: u8 = 10;
+const T_OWN_SOCKETS: u8 = 11;
 const T_SPAWNED: u8 = 0x81;
 const T_DONE: u8 = 0x82;
 const T_BOUND: u8 = 0x83;
@@ -293,6 +319,7 @@ const T_REFUSED: u8 = 0x84;
 const T_EXITED: u8 = 0x85;
 const T_VOLUME: u8 = 0x86;
 const T_VOLUMES: u8 = 0x87;
+const T_OWN_RULES: u8 = 0x88;
 
 /// A message being written.
 struct Writer(Vec<u8>);
@@ -428,6 +455,7 @@ impl Request {
                 w.len(s.fds.len());
                 w.0.extend_from_slice(&s.fds);
                 w.u8(u8::from(s.unconfined));
+                w.u8(u8::from(s.own_sockets));
             }
             Self::Signal { id, signal } => {
                 w.u8(T_SIGNAL);
@@ -471,6 +499,10 @@ impl Request {
                 w.str(volume);
             }
             Self::Alive => w.u8(T_ALIVE),
+            Self::OwnSockets { app } => {
+                w.u8(T_OWN_SOCKETS);
+                w.str(app);
+            }
         }
         w.0
     }
@@ -507,6 +539,7 @@ impl Request {
                 let n = r.count(MAX_FDS)?;
                 let fds = r.take(n)?.to_vec();
                 let unconfined = r.bool()?;
+                let own_sockets = r.bool()?;
                 Self::Spawn(Spawn {
                     id,
                     app,
@@ -517,6 +550,7 @@ impl Request {
                     binds,
                     fds,
                     unconfined,
+                    own_sockets,
                 })
             }
             T_SIGNAL => Self::Signal {
@@ -550,6 +584,7 @@ impl Request {
                 volume: r.str()?,
             }),
             T_ALIVE => Self::Alive,
+            T_OWN_SOCKETS => Self::OwnSockets { app: r.str()? },
             _ => return None,
         };
         r.end()?;
@@ -617,6 +652,20 @@ impl Reply {
                     w.opt_u64(row.snapshot);
                 }
             }
+            Self::OwnSockets {
+                connect,
+                bind,
+                listen,
+            } => {
+                w.u8(T_OWN_RULES);
+                for list in [connect, bind] {
+                    w.len(list.len());
+                    for rule in list {
+                        w.str(rule);
+                    }
+                }
+                w.u8(u8::from(*listen));
+            }
         }
         w.0
     }
@@ -665,6 +714,19 @@ impl Reply {
                     })
                     .collect::<Option<Vec<_>>>()?;
                 Self::Volumes { parent, rows }
+            }
+            T_OWN_RULES => {
+                let mut list = || {
+                    let n = r.count(MAX_RULES)?;
+                    (0..n).map(|_| r.str()).collect::<Option<Vec<_>>>()
+                };
+                let connect = list()?;
+                let bind = list()?;
+                Self::OwnSockets {
+                    connect,
+                    bind,
+                    listen: r.bool()?,
+                }
             }
             _ => return None,
         };

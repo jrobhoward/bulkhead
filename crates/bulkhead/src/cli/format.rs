@@ -47,6 +47,8 @@ pub fn apps(apps: &[AppSummary]) -> String {
                 },
                 if a.unconfined.is_some() {
                     format!("{} (unconfined)", a.status)
+                } else if a.own_sockets {
+                    format!("{} (own sockets)", a.status)
                 } else {
                     a.status.clone()
                 },
@@ -242,6 +244,13 @@ pub fn detail(d: &AppDetail) -> String {
         out.push(format!(
             "unconfined: {why} (no seccomp, Landlock or capability mode; the host's network)"
         ));
+    }
+    if s.own_sockets {
+        out.push(
+            "own sockets: opens its own, on the host's network, held to the privileged helper's \
+             rules for it"
+                .to_string(),
+        );
     }
     if let Some((count, bytes)) = d.blobs {
         out.push(format!("blobs:     {count}, {bytes} bytes"));

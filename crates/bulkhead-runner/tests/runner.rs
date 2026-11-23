@@ -435,6 +435,53 @@ fn executable____unconfined____files_and_own_sockets_reached() {
     assert_eq!(connect, "ok");
 }
 
+/// `--own-sockets` (ROADMAP AP2), without the helper's fence: the runner's
+/// own fences only. On Linux Landlock lets TCP reach the listed ports
+/// alone, seccomp refuses raw sockets, and `listen` without `--listen`
+/// fails with an error rather than ending the app; files stay fenced. On
+/// FreeBSD capability mode is off, so sockets work; the jail and ipfw
+/// rules that hold them are the helper's.
+#[test]
+fn executable____own_sockets____listed_ports_reached_rest_refused() {
+    let allowed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (a, o) = (allowed.local_addr().unwrap(), other.local_addr().unwrap());
+    let ports = format!("{}", a.port());
+    let mut port = Port::spawn_with(
+        "--executable",
+        &fixtures().0,
+        &[
+            "--own-sockets",
+            "--connect-ports",
+            &ports,
+            "--bind-ports",
+            "any",
+        ],
+    );
+    assert_eq!(port.init(Vec::new()), FromApp::Init(Ok(())));
+
+    let reached = port.command(&format!("connect {a}"));
+    let refused = port.command(&format!("connect {o}"));
+    let udp = port.command(&format!("udp-own {o}"));
+    let raw = port.command("raw");
+    let listen = port.command("listen 127.0.0.1:0");
+    let alive = port.command("self");
+
+    assert_eq!(reached, "ok");
+    assert!(!alive.is_empty(), "the app runs on after a refused listen");
+    if cfg!(target_os = "linux") {
+        assert!(refused.contains("Permission denied"), "{refused}");
+        assert_eq!(udp, "ok", "UDP is the helper's fence alone");
+        assert!(raw.contains("Operation not permitted"), "{raw}");
+        assert!(listen.contains("Operation not permitted"), "{listen}");
+        let hostname = port.command("read /etc/hostname");
+        assert!(hostname.contains("Permission denied"), "{hostname}");
+    } else {
+        assert_eq!(refused, "ok");
+        assert!(raw.starts_with("err:"), "{raw}");
+    }
+}
+
 // FreeBSD's runner refuses plugins: they load by path, which capability
 // mode forbids (`bulkhead-host`'s `native.rs` checks the refusal).
 #[cfg(target_os = "linux")]

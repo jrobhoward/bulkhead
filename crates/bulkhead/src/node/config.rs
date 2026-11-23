@@ -1356,6 +1356,12 @@ pub struct NativeBinding {
     /// (ROADMAP AP4). Needs `[priv]`, whose own configuration must list the
     /// app too. Off by default.
     pub allow_unconfined: bool,
+    /// Let an app open its own sockets when its manifest asks (`own =
+    /// true` in `bulkhead:sockets`) and policy grants `bulkhead:own-sockets`
+    /// to it by name (ROADMAP AP2). Needs `[priv]`, whose own configuration
+    /// lists the app with the rules its sockets are held to. Off by
+    /// default.
+    pub allow_own_sockets: bool,
     /// How long, in microseconds, the node and a native app spin waiting
     /// for each other before they sleep; 0 always sleeps.
     pub spin_us: u64,
@@ -1384,6 +1390,7 @@ impl Default for NativeBinding {
             ping_timeout_ms: 5_000,
             landlock_optional: false,
             allow_unconfined: false,
+            allow_own_sockets: false,
             spin_us: u64::try_from(host.spin.as_micros()).unwrap_or(20),
             sender_spin_us: u64::try_from(host.sender_spin.as_micros()).unwrap_or(50),
         }
@@ -1682,6 +1689,13 @@ impl NodeConfig {
             return Err(NodeError::Invalid(
                 "node config: native.allow_unconfined needs [priv]: an unconfined app runs as \
                  its own user under the privileged helper, never as the node's"
+                    .into(),
+            ));
+        }
+        if n.allow_own_sockets && self.privileges.is_none() {
+            return Err(NodeError::Invalid(
+                "node config: native.allow_own_sockets needs [priv]: the helper holds an app's \
+                 own sockets to the rules in its own configuration"
                     .into(),
             ));
         }

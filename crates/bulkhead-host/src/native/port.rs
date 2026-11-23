@@ -346,6 +346,20 @@ mod process {
                 }
                 launch.args.push("--unconfined".into());
             }
+            // Its own sockets (ROADMAP AP2): where they go is the helper's
+            // fence, from its own configuration; the runner adds Landlock's
+            // TCP ports and seccomp's.
+            if spec.granted.contains(&Capability::OwnSockets) {
+                if config.helper.is_none() {
+                    return Err(format!(
+                        "{} opens its own sockets, which needs the privileged helper ([priv])",
+                        spec.app
+                    ));
+                }
+                launch.args.extend(crate::native::port::own_sockets_args(
+                    spec.services.sockets.scope.as_ref(),
+                ));
+            }
             // A lease's first deadline is in the pipe before the runner
             // starts; the rest follow from a task.
             let lease_pipe = match &lease {
@@ -926,6 +940,7 @@ mod process {
             binds,
             fds: targets,
             unconfined: spec.granted.contains(&Capability::Unconfined),
+            own_sockets: spec.granted.contains(&Capability::OwnSockets),
         };
         let started = helper.spawn(request, fds).await?;
         Ok(HelperProc {
@@ -1191,4 +1206,45 @@ impl Port {
     pub(crate) async fn finish(&mut self) {
         each!(self, p => p.finish().await);
     }
+}
+
+/// The runner's arguments for an app with its own sockets (ROADMAP AP2):
+/// `--own-sockets`, `--listen` if its scope listens, and the TCP ports of
+/// its `connect` and `bind` rules for Landlock (`any` when a rule allows
+/// any port, `none` without rules).
+#[must_use]
+pub fn own_sockets_args(
+    scope: Option<&bulkhead_bundle::manifest::SocketsScope>,
+) -> Vec<std::ffi::OsString> {
+    let ports = |rules: &[bulkhead_bundle::manifest::SocketRule]| -> String {
+        if rules.is_empty() {
+            return "none".into();
+        }
+        let mut parts = Vec::new();
+        for r in rules {
+            match &r.ports {
+                None => return "any".into(),
+                Some(p) if p.start == p.end => parts.push(p.start.to_string()),
+                Some(p) => parts.push(format!("{}-{}", p.start, p.end)),
+            }
+        }
+        parts.join(",")
+    };
+    let mut args: Vec<std::ffi::OsString> = vec!["--own-sockets".into()];
+    let (connect, bind) = scope.map_or_else(
+        || (String::from("none"), String::from("none")),
+        |s| {
+            if s.listen {
+                args.push("--listen".into());
+            }
+            (ports(&s.connect), ports(&s.bind))
+        },
+    );
+    args.extend([
+        "--connect-ports".into(),
+        connect.into(),
+        "--bind-ports".into(),
+        bind.into(),
+    ]);
+    args
 }

@@ -160,28 +160,29 @@ impl OperatorPolicy {
         Ok(policy)
     }
 
-    /// `bulkhead:unconfined` is granted to an app by its name alone (ROADMAP
-    /// AP4): never to every app, nor to whatever a signer signs.
+    /// `bulkhead:unconfined` (ROADMAP AP4) and `bulkhead:own-sockets` (AP2)
+    /// are granted to an app by its name alone: never to every app, nor to
+    /// whatever a signer signs.
     fn check_by_name_only(&self) -> Result<(), BundleError> {
-        let unconfined = |g: &Granted| g.capabilities.contains(&Capability::Unconfined);
-        let mut places = Vec::new();
-        if unconfined(&self.defaults.grant) {
-            places.push("[defaults]".to_string());
-        }
-        for (label, signer) in &self.signers {
-            if unconfined(&signer.grant) {
-                places.push(format!("[signers.{label}]"));
+        for capability in [Capability::Unconfined, Capability::OwnSockets] {
+            let granted = |g: &Granted| g.capabilities.contains(&capability);
+            let mut places = Vec::new();
+            if granted(&self.defaults.grant) {
+                places.push("[defaults]".to_string());
+            }
+            for (label, signer) in &self.signers {
+                if granted(&signer.grant) {
+                    places.push(format!("[signers.{label}]"));
+                }
+            }
+            if !places.is_empty() {
+                return Err(BundleError::Policy(format!(
+                    "{capability} is granted to an app by name only ([apps.<name>]), not in {}",
+                    places.join(", ")
+                )));
             }
         }
-        if places.is_empty() {
-            Ok(())
-        } else {
-            Err(BundleError::Policy(format!(
-                "{} is granted to an app by name only ([apps.<name>]), not in {}",
-                Capability::Unconfined,
-                places.join(", ")
-            )))
-        }
+        Ok(())
     }
 
     /// Read and parse a policy file.

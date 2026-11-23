@@ -9,8 +9,12 @@ use super::*;
 #[test]
 fn seccomp____runner_list____every_call_on_the_helpers() {
     let helper = allowed();
-    let runner = bulkhead_runner::seccomp::allowed();
-    let answered = bulkhead_runner::seccomp::rules(&[1], &[3]).unwrap();
+    // With its own sockets (ROADMAP AP2), the runner lists `bind` and
+    // `listen` too, and answers `listen`.
+    let own = bulkhead_runner::OwnSockets::default();
+    let runner = bulkhead_runner::seccomp::allowed_with(bulkhead_runner::Profile::App, Some(&own));
+    let mut answered = bulkhead_runner::seccomp::rules(&[1], &[3]).unwrap();
+    answered.extend(bulkhead_runner::seccomp::rules_with(&[1], &[], Some(&own)).unwrap());
 
     let missing: Vec<i64> = runner
         .iter()

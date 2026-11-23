@@ -225,7 +225,12 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   covers the runner's list (`bulkhead-runner`'s `seccomp.rs`; the
   ingress's `--profile ingress` is a subset of it, ROADMAP DA2b):
   a call added there goes in the helper's `INSTANCE` too, or
-  `seccomp_tests` fails. `crates/bulkhead-priv-wire`
+  `seccomp_tests` fails (the own-sockets list too, ROADMAP AP2).
+  `sockets.rs` is own sockets' fence (AP2): the rules from the helper's
+  configuration as cgroup BPF programs (generated, no compiler; their
+  tests run them in an interpreter against `allows`), attached in
+  `linux.rs`'s `init` before the helper's filter refuses `bpf`, and as
+  ipfw rules per jail on FreeBSD. `crates/bulkhead-priv-wire`
   is the message format it shares with the node (`forbid(unsafe_code)`,
   fuzzed as `priv_request`); `bulkhead-host`'s `src/native/helper.rs` is
   the node's side. Its tests that start real processes run as root on

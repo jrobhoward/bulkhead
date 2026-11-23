@@ -24,12 +24,15 @@ fn spawn() -> Spawn {
         }],
         fds: vec![1, 2, 3, 4, 5, 6],
         unconfined: false,
+        own_sockets: false,
     }
 }
 
 #[rstest]
 #[case(Request::Spawn(spawn()))]
 #[case(Request::Spawn(Spawn { unconfined: true, ..spawn() }))]
+#[case(Request::Spawn(Spawn { own_sockets: true, ..spawn() }))]
+#[case(Request::OwnSockets { app: "mqtt-bridge".into() })]
 #[case(Request::Signal { id: 3, signal: 9 })]
 #[case(Request::Bind { address: "[::]:443".into() })]
 #[case(Request::Share { app: "orders".into(), bind: Bind { path: "/var/lib/bulkhead/priv/orders".into(), writable: false } })]
@@ -58,6 +61,7 @@ fn Request____encoded____decodes_the_same(#[case] request: Request) {
 #[case(Reply::Volumes { parent: "tank/bulkhead/volumes".into(), rows: Vec::new() })]
 #[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "orders".into(), volume: "data".into(), used: 98304, referenced: 65536, refquota: 64 << 20, mountpoint: "/srv/v/orders/data".into(), mounted: true, snapshot: None }] })]
 #[case(Reply::Volumes { parent: "tank/v".into(), rows: vec![VolumeRow { app: "a".into(), volume: "b".into(), used: 1, referenced: 1, refquota: 1, mountpoint: "/srv/v/a/b".into(), mounted: false, snapshot: Some(1_795_000_000) }] })]
+#[case(Reply::OwnSockets { connect: vec!["10.20.0.0/16:1883".into(), "::1/128".into()], bind: Vec::new(), listen: true })]
 fn Reply____encoded____decodes_the_same(#[case] reply: Reply) {
     let bytes = reply.encode();
 

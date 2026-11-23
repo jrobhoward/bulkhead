@@ -23,6 +23,12 @@
 //! zfs_max_quota = 50GiB                             # the largest quota a volume may have
 //! zfs = /usr/sbin/zfs                               # the zfs command (default /usr/sbin/zfs, /sbin/zfs on FreeBSD)
 //! node_watchdog_s = 30                              # kill a node silent this long (ROADMAP B6); 0: never
+//! own_sockets = mqtt-bridge                         # apps that open their own sockets (ROADMAP AP2)
+//! own_connect.mqtt-bridge = 10.20.0.0/16:1883, 127.0.0.53/32:53  # where each may connect and send: cidr[:port or lo-hi]
+//! own_bind.mqtt-bridge = 0.0.0.0/0:9000-9009        # what each may bind (none without the key)
+//! own_listen = mqtt-bridge                          # of those, apps that may listen
+//! ipfw_rules = 30000-39999                          # FreeBSD: the ipfw rule numbers own sockets use
+//! ipfw = /sbin/ipfw                                 # FreeBSD: the ipfw command
 //! ```
 
 use std::ops::RangeInclusive;
@@ -75,6 +81,35 @@ pub struct Config {
     /// (ROADMAP B6). `None` (`node_watchdog_s = 0`): never. 30 s by
     /// default; at least twice `bulkhead_priv_wire::ALIVE_EVERY_S`.
     pub node_watchdog: Option<std::time::Duration>,
+    /// The apps whose instances open their own sockets (ROADMAP AP2), by
+    /// name, with the rules the kernel holds them to. Root's consent
+    /// beside the node's, and the fence itself: the node cannot change
+    /// it. Empty by default.
+    pub own_sockets: std::collections::BTreeMap<String, OwnSockets>,
+    /// FreeBSD: where own sockets' ipfw rules go; set with any
+    /// [`Config::own_sockets`] there.
+    pub ipfw: Option<IpfwConfig>,
+}
+
+/// An own-sockets app's rules (ROADMAP AP2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OwnSockets {
+    /// Where its sockets may connect and send (`own_connect.<app>`).
+    pub connect: Vec<crate::sockets::Rule>,
+    /// What they may bind (`own_bind.<app>`).
+    pub bind: Vec<crate::sockets::Rule>,
+    /// Whether it may listen (`own_listen`).
+    pub listen: bool,
+}
+
+/// FreeBSD: the ipfw rules own sockets use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpfwConfig {
+    /// The rule numbers the helper may use, each instance a block of them;
+    /// they should come before any rule that passes the host's traffic.
+    pub rules: RangeInclusive<u32>,
+    /// The `ipfw` command, by absolute path.
+    pub program: PathBuf,
 }
 
 /// Where the helper makes apps' ZFS volumes, and their ceiling.
@@ -130,7 +165,7 @@ impl Config {
                 .split_once('=')
                 .ok_or_else(|| format!("line {}: not key = value", n + 1))?;
             let k = k.trim();
-            if !KEYS.contains(&k) {
+            if !KEYS.contains(&k) && !PER_APP.iter().any(|p| k.starts_with(p)) {
                 return Err(format!("line {}: unknown key {k}", n + 1));
             }
             if kv.insert(k.to_string(), v.trim().to_string()).is_some() {
@@ -230,6 +265,12 @@ impl Config {
             },
         }
         .map(std::time::Duration::from_secs);
+        let (own_sockets, ipfw) = own_sockets(&kv, &unconfined)?;
+        if cfg!(target_os = "linux") && !own_sockets.is_empty() && cgroup.is_none() {
+            return Err(
+                "own_sockets needs cgroup: its programs attach to the apps' cgroups".into(),
+            );
+        }
         let pids_max = num("pids_max")?;
         let memory_max = size(get("memory_max")?).ok_or("memory_max is not a size")?;
         if pids_max == 0 || memory_max == 0 {
@@ -267,6 +308,8 @@ impl Config {
             unconfined,
             zfs,
             node_watchdog,
+            own_sockets,
+            ipfw,
         })
     }
 
@@ -292,7 +335,101 @@ impl Config {
     }
 }
 
-const KEYS: [&str; 19] = [
+/// Keys that end with an app's name.
+const PER_APP: [&str; 2] = ["own_connect.", "own_bind."];
+
+/// The own-sockets keys (ROADMAP AP2): `own_sockets`, `own_connect.<app>`
+/// (one per listed app, perhaps empty), `own_bind.<app>`, `own_listen`,
+/// and on FreeBSD `ipfw_rules` and `ipfw`.
+fn own_sockets(
+    kv: &std::collections::BTreeMap<String, String>,
+    unconfined: &[String],
+) -> Result<
+    (
+        std::collections::BTreeMap<String, OwnSockets>,
+        Option<IpfwConfig>,
+    ),
+    String,
+> {
+    use crate::sockets::Rule;
+    let names = |k: &str| -> Result<Vec<String>, String> {
+        kv.get(k).map_or(Ok(Vec::new()), |v| {
+            list(v)
+                .map(|a| {
+                    bulkhead_priv_wire::is_app_name(a)
+                        .then(|| a.to_string())
+                        .ok_or_else(|| format!("{k}: {a} is not an app name"))
+                })
+                .collect()
+        })
+    };
+    let rules = |k: &str| -> Result<Vec<Rule>, String> {
+        kv.get(k).map_or(Ok(Vec::new()), |v| {
+            list(v)
+                .map(|r| Rule::parse(r).map_err(|e| format!("{k}: {e}")))
+                .collect()
+        })
+    };
+    let apps = names("own_sockets")?;
+    let listen = names("own_listen")?;
+    let mut own = std::collections::BTreeMap::new();
+    for app in &apps {
+        if unconfined.contains(app) {
+            return Err(format!(
+                "{app} is unconfined and in own_sockets: an unconfined app opens its own sockets already"
+            ));
+        }
+        let connect = format!("own_connect.{app}");
+        if !kv.contains_key(&connect) {
+            return Err(format!("{connect} is missing (it may be empty)"));
+        }
+        own.insert(
+            app.clone(),
+            OwnSockets {
+                connect: rules(&connect)?,
+                bind: rules(&format!("own_bind.{app}"))?,
+                listen: listen.contains(app),
+            },
+        );
+    }
+    if let Some(stray) = kv
+        .keys()
+        .filter_map(|k| PER_APP.iter().find_map(|p| k.strip_prefix(p)))
+        .chain(listen.iter().map(String::as_str))
+        .find(|a| !own.contains_key(*a))
+    {
+        return Err(format!(
+            "{stray} has own-sockets keys but is not in own_sockets"
+        ));
+    }
+    let ipfw = match kv.get("ipfw_rules") {
+        Some(v) => {
+            let bad = || "ipfw_rules is not a range of rule numbers like 30000-39999".to_string();
+            let (lo, hi) = v.split_once('-').ok_or_else(bad)?;
+            let lo: u32 = lo.trim().parse().map_err(|_| bad())?;
+            let hi: u32 = hi.trim().parse().map_err(|_| bad())?;
+            if lo == 0 || lo > hi || hi > 65534 {
+                return Err(bad());
+            }
+            let program = match kv.get("ipfw") {
+                Some(p) => absolute("ipfw", p)?,
+                None => PathBuf::from("/sbin/ipfw"),
+            };
+            Some(IpfwConfig {
+                rules: lo..=hi,
+                program,
+            })
+        }
+        None if kv.contains_key("ipfw") => return Err("ipfw needs ipfw_rules".into()),
+        None => None,
+    };
+    if cfg!(target_os = "freebsd") && !own.is_empty() && ipfw.is_none() {
+        return Err("own_sockets needs ipfw_rules on FreeBSD".into());
+    }
+    Ok((own, ipfw))
+}
+
+const KEYS: [&str; 23] = [
     "node",
     "node_args",
     "node_uid",
@@ -312,6 +449,10 @@ const KEYS: [&str; 19] = [
     "zfs_max_quota",
     "zfs",
     "node_watchdog_s",
+    "own_sockets",
+    "own_listen",
+    "ipfw_rules",
+    "ipfw",
 ];
 
 fn list(v: &str) -> impl Iterator<Item = &str> {

@@ -8,6 +8,21 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Own sockets (ROADMAP AP2; MANIFEST.md, "Own sockets"): an app whose
+  library opens its own sockets (a Kafka, AMQP or MQTT client) can keep
+  the runner's fences with `own = true` in `bulkhead:sockets`. Its TCP and
+  UDP sockets are held by the kernel to the rules in the privileged
+  helper's own configuration (`own_sockets`, `own_connect.<app>`,
+  `own_bind.<app>`, `own_listen`), which the manifest's must match: on
+  Linux cgroup BPF programs the helper attaches at its start, with
+  Landlock's TCP ports and a seccomp filter on socket types in the runner;
+  on FreeBSD ipfw rules on the instance's jail (`ipfw_rules`), capability
+  mode off. Consent as for `unconfined`: policy grants
+  `bulkhead:own-sockets` by name, node config sets `[native]
+  allow_own_sockets` (needs `[priv]`), and the helper lists the app.
+  `bulkhead list` marks such an app `(own sockets)`; the gauge
+  `bulkhead_own_sockets_apps` counts them. Inbound filtering, and `bind`
+  and `listen` on FreeBSD, are ROADMAP AP2b.
 - Trace context across calls and nodes (ROADMAP O1; OBSERVABILITY.md,
   "Traces"): a message's envelope may carry a W3C trace id and span id.
   The HTTP ingress starts a trace from a client's sampled `traceparent`

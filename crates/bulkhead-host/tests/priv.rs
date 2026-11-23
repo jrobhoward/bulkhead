@@ -248,6 +248,156 @@ async fn helper____unconfined_app_not_listed____refused_by_the_helper() {
     );
 }
 
+/// An app with its own sockets (ROADMAP AP2), as the test helper's
+/// configuration lists `socks`: connect to 127.0.0.1 ports 48880 to 48889,
+/// bind 48890 to 48899, no listen; the manifest's scope the same.
+fn own_sockets(app: &str) -> InstanceSpec {
+    use bulkhead_bundle::manifest::{PortRange, SocketRule, SocketsScope};
+    let rule = |start, end| SocketRule {
+        cidr: "127.0.0.1/32".into(),
+        ports: Some(PortRange { start, end }),
+    };
+    let mut s = spec(app);
+    s.granted.insert(Capability::OwnSockets);
+    s.services.sockets.scope = Some(SocketsScope {
+        connect: vec![rule(48880, 48889)],
+        bind: vec![rule(48890, 48899)],
+        own: true,
+        ..SocketsScope::default()
+    });
+    s
+}
+
+/// A listener on a free port of 48880 to 48889, or `None` (all taken).
+fn listener_in_rules() -> Option<std::net::TcpListener> {
+    (48880..=48889).find_map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
+}
+
+/// An own-sockets instance: its own TCP and UDP sockets reach its rules
+/// and nothing else (Linux: cgroup BPF programs, Landlock's ports;
+/// FreeBSD: ipfw rules on its jail), raw sockets and other files stay
+/// refused, and it runs as its own user. On FreeBSD `bind` and `listen`
+/// are not fenced (ROADMAP AP2b).
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____own_sockets_app____its_rules_reached_the_rest_refused() {
+    let Some(started) = helper("helper____own_sockets_app") else {
+        return;
+    };
+    if !privhelper::own_sockets_here() {
+        eprintln!("skipped: ipfw is not loaded, which own sockets need on FreeBSD");
+        return;
+    }
+    let Some(allowed) = listener_in_rules() else {
+        eprintln!("skipped: ports 48880 to 48889 are all in use");
+        return;
+    };
+    let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (a, o) = (allowed.local_addr().unwrap(), other.local_addr().unwrap());
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, own_sockets("socks")).unwrap();
+
+    let reached = ask(&i, &format!("connect {a}")).await;
+    let refused = ask(&i, &format!("connect {o}")).await;
+    let udp = ask(&i, "udp-own 127.0.0.1:48882").await;
+    let udp_refused = ask(&i, &format!("udp-own {o}")).await;
+    let bind = ask(&i, "bind 127.0.0.1:48891").await;
+    let bind_outside = ask(&i, "bind 127.0.0.1:48950").await;
+    let listen = ask(&i, "listen 127.0.0.1:48892").await;
+    let raw = ask(&i, "raw").await;
+    let hosts = ask(&i, "read /etc/hosts").await;
+    let passwd = ask(&i, "read /etc/passwd").await;
+    let ids = ask(&i, "ids").await;
+
+    assert_eq!(reached, "ok");
+    assert!(refused.starts_with("err:"), "{refused}");
+    assert_eq!(udp, "ok");
+    assert!(udp_refused.starts_with("err:"), "{udp_refused}");
+    assert_eq!(bind, "ok");
+    assert!(raw.starts_with("err:"), "{raw}");
+    assert_eq!(hosts, "ok", "for name lookups");
+    assert!(passwd.starts_with("err:"), "{passwd}");
+    let uid = started.first_uid;
+    assert_eq!(ids, format!("{uid} {uid}"), "its own user");
+    #[cfg(target_os = "linux")]
+    {
+        // Past Landlock's ports, the helper's programs: another address.
+        let elsewhere = ask(&i, &format!("connect 127.0.0.2:{}", a.port())).await;
+        assert!(elsewhere.contains("Operation not permitted"), "{elsewhere}");
+        assert!(
+            udp_refused.contains("Operation not permitted"),
+            "{udp_refused}"
+        );
+        assert!(bind_outside.starts_with("err:"), "{bind_outside}");
+        assert!(listen.contains("Operation not permitted"), "{listen}");
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        assert!(refused.contains("Permission denied"), "{refused}");
+        assert_eq!(bind_outside, "ok", "not fenced on FreeBSD (AP2b)");
+        assert_eq!(listen, "ok", "not fenced on FreeBSD (AP2b)");
+    }
+}
+
+/// The node's grant alone gives no app its own sockets: the helper
+/// refuses one its own configuration does not list.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____own_sockets_app_not_listed____refused_by_the_helper() {
+    let Some(started) = helper("helper____own_sockets_app_not_listed") else {
+        return;
+    };
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+
+    let i = rt.spawn(&app, own_sockets("alpha")).unwrap();
+    let reason = i.wait().await;
+
+    let ExitReason::Crashed(why) = &reason else {
+        panic!("{reason:?}");
+    };
+    assert!(why.contains("does not open its own sockets"), "{why}");
+}
+
+/// A helper started again on a changed configuration replaces the
+/// programs on an app's cgroup, rather than adding to them (which would
+/// allow only what both allow).
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____restarted_with_wider_rules____its_programs_replace_the_old() {
+    let Some(mut started) = helper("helper____restarted_with_wider_rules") else {
+        return;
+    };
+    let Some(allowed) = listener_in_rules() else {
+        eprintln!("skipped: ports 48880 to 48889 are all in use");
+        return;
+    };
+    let a = allowed.local_addr().unwrap();
+    let narrow = (48880..=48889).find(|p| *p != a.port()).unwrap();
+    let wide = "own_connect.socks = 127.0.0.1/32:48880-48889";
+
+    started.restart(|t| t.replace(wide, &format!("own_connect.socks = 127.0.0.1/32:{narrow}")));
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, own_sockets("socks")).unwrap();
+    let under_narrow = ask(&i, &format!("connect {a}")).await;
+    drop(i);
+    drop(rt);
+    started.restart(|t| t.replace(&format!("own_connect.socks = 127.0.0.1/32:{narrow}"), wide));
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, own_sockets("socks")).unwrap();
+    let under_wide = ask(&i, &format!("connect {a}")).await;
+
+    assert!(
+        under_narrow.contains("Operation not permitted"),
+        "{under_narrow}"
+    );
+    assert_eq!(
+        under_wide, "ok",
+        "the narrow program was replaced, not kept beside"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn helper____minimal_root____the_system_hidden() {

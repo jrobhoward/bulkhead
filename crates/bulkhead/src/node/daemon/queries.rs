@@ -92,6 +92,13 @@ impl Node {
                 None => ("stopped".into(), None),
             },
         };
+        // One lock: a second `st()` in the literal below would wait on the
+        // first's guard, which lives to the statement's end.
+        let (unconfined, own_sockets) = self
+            .st()
+            .info
+            .get(name)
+            .map_or((None, false), |i| (i.unconfined.clone(), i.own_sockets));
         AppSummary {
             name: name.to_string(),
             version: app.current.clone(),
@@ -102,7 +109,8 @@ impl Node {
             new_version: app.new_side.as_ref().map(|n| n.version.clone()),
             new_traffic: app.new_side.as_ref().map(|n| n.percent),
             built_in: false,
-            unconfined: self.st().info.get(name).and_then(|i| i.unconfined.clone()),
+            unconfined,
+            own_sockets,
         }
     }
 
@@ -134,6 +142,7 @@ impl Node {
             new_traffic: None,
             built_in: true,
             unconfined: None,
+            own_sockets: false,
         }
     }
 

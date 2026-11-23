@@ -78,6 +78,7 @@ fn scope(connect: &[&str], bind: &[&str], listen: bool, max: u32) -> SocketsScop
         bind: bind.iter().map(|c| rule(c)).collect(),
         listen,
         max_sockets: max,
+        own: false,
     }
 }
 

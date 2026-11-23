@@ -17,6 +17,7 @@ fn summary(name: &str, status: &str) -> AppSummary {
         new_traffic: None,
         built_in: false,
         unconfined: None,
+        own_sockets: false,
     }
 }
 
@@ -472,6 +473,31 @@ fn apps_and_detail____unconfined_app____marked_with_its_reason() {
         status.contains("unconfined: rdkafka opens its own sockets"),
         "{status}"
     );
+}
+
+#[test]
+fn apps_and_detail____own_sockets_app____marked() {
+    let mut bridge = summary("mqtt-bridge", "running");
+    bridge.own_sockets = true;
+    let detail = AppDetail {
+        summary: bridge.clone(),
+        signer: "RWQ".into(),
+        granted: vec!["bulkhead:sockets".into(), "bulkhead:own-sockets".into()],
+        denied: vec![],
+        warnings: vec![],
+        restarts: 0,
+        instance_list: vec![],
+        listeners: vec![],
+        runs_as: "its own user".into(),
+        blobs: None,
+        routes: vec![],
+    };
+
+    let list = apps(&[bridge]);
+    let status = super::detail(&detail);
+
+    assert!(list.contains("running (own sockets)"), "{list}");
+    assert!(status.contains("own sockets: opens its own"), "{status}");
 }
 
 #[test]

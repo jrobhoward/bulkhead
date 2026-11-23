@@ -23,6 +23,14 @@
 //! `/usr/local/lib` and certificate roots under `/usr/share` and
 //! `/usr/local/share`) and `/etc`; the runner leaves capability mode off.
 //!
+//! An own-sockets instance (ROADMAP AP2, its app in `own_sockets`) gets a
+//! jail that inherits the host's addresses too, and copies of
+//! `/etc/resolv.conf`, `hosts` and `nsswitch.conf` in its root; the runner
+//! leaves capability mode off, which refuses `connect` and `bind`. What
+//! its sockets send is held to its rules by ipfw rules matching its jail
+//! ([`crate::sockets::ipfw`]), numbered from the configuration's
+//! `ipfw_rules`, added once the jail exists and deleted with it.
+//!
 //! The helper learns of exits from one kqueue of process descriptors
 //! (`EVFILT_PROCDESC`). A dying jail holds its root for a moment after its
 //! last process (PB5), so a busy unmount is retried from the helper's
@@ -83,6 +91,8 @@ pub struct State {
     jails: PathBuf,
     /// Roots whose unmount found them busy, and since when.
     pending: RefCell<Vec<(Root, Instant)>>,
+    /// The ipfw rule numbers instances hold (start, count).
+    ipfw_used: RefCell<Vec<(u32, u32)>>,
 }
 
 /// An instance's root and what is mounted there, in mount order.
@@ -104,6 +114,8 @@ pub struct Instance {
     jid: i32,
     name: String,
     root: Root,
+    /// Its ipfw rules (start, count), if it opens its own sockets.
+    ipfw: Option<(u32, u32)>,
 }
 
 impl Instance {
@@ -131,11 +143,107 @@ pub fn init(config: &Config) -> Result<State, String> {
     }
     unmount_leftovers(&jails)?;
     devfs_ruleset(config.devfs_ruleset)?;
+    if !config.own_sockets.is_empty() {
+        ipfw_ready(config)?;
+    }
     Ok(State {
         queue: ProcQueue::new().map_err(|e| format!("kqueue: {e}"))?,
         jails,
         pending: RefCell::new(Vec::new()),
+        ipfw_used: RefCell::new(Vec::new()),
     })
+}
+
+/// Run the configuration's `ipfw` with `args`; its standard output.
+fn ipfw(config: &Config, args: &[String]) -> Result<String, String> {
+    let program = config
+        .ipfw
+        .as_ref()
+        .map(|i| i.program.as_path())
+        .ok_or("no ipfw_rules")?;
+    let out = std::process::Command::new(program)
+        .args(args)
+        .env_clear()
+        .env("PATH", "/sbin:/bin:/usr/sbin:/usr/bin")
+        .output()
+        .map_err(|e| format!("{}: {e}", program.display()))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(format!(
+            "ipfw {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// With own sockets: ipfw is loaded (`ipfw list` answers), and rules a
+/// helper that was killed left in `ipfw_rules` are deleted.
+fn ipfw_ready(config: &Config) -> Result<(), String> {
+    let range = config
+        .ipfw
+        .as_ref()
+        .map(|i| i.rules.clone())
+        .ok_or("own_sockets needs ipfw_rules")?;
+    let listing = ipfw(config, &["list".into()]).map_err(|e| {
+        format!(
+            "own_sockets needs ipfw loaded (sysctl net.inet.ip.fw.default_to_accept=1 \
+             or rules that pass the host's traffic, then kldload ipfw): {e}"
+        )
+    })?;
+    let stale = crate::sockets::listed_rules(&listing, &range);
+    if !stale.is_empty() {
+        let mut args = vec!["-q".to_string(), "delete".to_string()];
+        args.extend(stale.iter().map(ToString::to_string));
+        ipfw(config, &args)?;
+    }
+    Ok(())
+}
+
+/// Add own-sockets app `s.app`'s ipfw rules for jail `jid`, in a free
+/// block of numbers; that block.
+fn add_ipfw(config: &Config, st: &State, s: &Spawn, jid: i32) -> Result<(u32, u32), String> {
+    let own = config
+        .own_sockets
+        .get(&s.app)
+        .ok_or_else(|| format!("{} does not open its own sockets", s.app))?;
+    let range = config
+        .ipfw
+        .as_ref()
+        .map(|i| i.rules.clone())
+        .ok_or("no ipfw_rules")?;
+    let count = u32::try_from(crate::sockets::ipfw(jid, 0, &own.connect, &own.bind).len())
+        .map_err(|_| "too many rules")?;
+    let start = crate::sockets::free_block(&range, &st.ipfw_used.borrow(), count)
+        .ok_or("no free ipfw rule numbers left in ipfw_rules")?;
+    st.ipfw_used.borrow_mut().push((start, count));
+    for line in crate::sockets::ipfw(jid, start, &own.connect, &own.bind) {
+        let mut args = vec!["-q".to_string(), "add".to_string()];
+        args.extend(line);
+        if let Err(e) = ipfw(config, &args) {
+            delete_ipfw(config, st, (start, count));
+            return Err(e);
+        }
+    }
+    Ok((start, count))
+}
+
+/// Delete the ipfw rules in `block` and free its numbers.
+fn delete_ipfw(config: &Config, st: &State, (start, count): (u32, u32)) {
+    let mut args = vec!["-q".to_string(), "delete".to_string()];
+    args.extend((start..start + count).map(|n| n.to_string()));
+    // Rules not added yet are reported missing; the rest go.
+    if let Err(e) = ipfw(config, &args)
+        && !e.contains("not found")
+        && !e.contains("No such")
+    {
+        eprintln!(
+            "bulkhead-priv: deleting ipfw rules {start}..{}: {e}",
+            start + count
+        );
+    }
+    st.ipfw_used.borrow_mut().retain(|b| b.0 != start);
 }
 
 /// Unmount, deepest first and forced, what is mounted under `jails` (a
@@ -261,6 +369,7 @@ fn build_root(
     id: u64,
     binds: &[(PathBuf, bool)],
     unconfined: bool,
+    names: bool,
 ) -> io::Result<Root> {
     let system: &[&str] = if unconfined {
         &SYSTEM_UNCONFINED
@@ -315,6 +424,16 @@ fn build_root(
         for (path, writable) in binds {
             root.view(path, *writable)?;
         }
+        if names {
+            // Copies, read at the instance's start, for name lookups.
+            std::fs::create_dir_all(dir.join("etc"))?;
+            for f in ["resolv.conf", "hosts", "nsswitch.conf"] {
+                let host = Path::new("/etc").join(f);
+                if host.is_file() {
+                    std::fs::copy(&host, dir.join("etc").join(f))?;
+                }
+            }
+        }
         Ok::<(), io::Error>(())
     })();
     match built {
@@ -334,11 +453,12 @@ fn jail_name(id: u64) -> String {
 }
 
 /// Create instance `id`'s jail on `root`: persistent until its process
-/// runs, with no network addresses, or the host's if `unconfined`.
-fn create_jail(id: u64, root: &Root, unconfined: bool) -> io::Result<i32> {
+/// runs, with no network addresses, or the host's if `host_network`
+/// (unconfined, or own sockets).
+fn create_jail(id: u64, root: &Root, host_network: bool) -> io::Result<i32> {
     let path = cpath(&root.dir)?;
     let name = jail_name(id);
-    let ip = if unconfined {
+    let ip = if host_network {
         libc::JAIL_SYS_INHERIT
     } else {
         libc::JAIL_SYS_DISABLE
@@ -415,9 +535,9 @@ pub fn spawn(
     exec: Exec,
     fds: Vec<(i32, i32)>,
 ) -> Result<Instance, String> {
-    let mut root = build_root(config, &st.jails, s.id, binds, s.unconfined)
+    let mut root = build_root(config, &st.jails, s.id, binds, s.unconfined, s.own_sockets)
         .map_err(|e| format!("jail root: {e}"))?;
-    let jid = match create_jail(s.id, &root, s.unconfined) {
+    let jid = match create_jail(s.id, &root, s.unconfined || s.own_sockets) {
         Ok(jid) => jid,
         Err(e) => {
             root.unmount(true);
@@ -425,9 +545,13 @@ pub fn spawn(
         }
     };
     let name = jail_name(s.id);
+    let block = std::cell::Cell::new(None);
     let undo = |root: &mut Root| {
         let _ = sys::jail_remove(jid);
         remove_rules(&name);
+        if let Some(b) = block.take() {
+            delete_ipfw(config, st, b);
+        }
         if !root.unmount(false) {
             st.pending.borrow_mut().push((
                 Root {
@@ -453,6 +577,15 @@ pub fn spawn(
         if let Err(e) = added {
             undo(&mut root);
             return Err(format!("rctl {rule}: {e} (is kern.racct.enable=1 set?)"));
+        }
+    }
+    if s.own_sockets {
+        match add_ipfw(config, st, s, jid) {
+            Ok(b) => block.set(Some(b)),
+            Err(e) => {
+                undo(&mut root);
+                return Err(format!("own sockets: {e}"));
+            }
         }
     }
     let pipes = child::error_pipe().and_then(|go| Ok((go, child::error_pipe()?)));
@@ -506,6 +639,7 @@ pub fn spawn(
                 jid,
                 name,
                 root,
+                ipfw: block.get(),
             })
         }
     }
@@ -608,16 +742,20 @@ pub fn memory_limited(_inst: &Instance) -> bool {
 /// Remove what the helper made for an instance that has exited: its jail
 /// (whatever it forked goes with it), its rules, its descriptor, which
 /// reaps it, and its root, retried later while the dying jail holds it.
-pub fn finish(st: &State, inst: Instance) {
+pub fn finish(config: &Config, st: &State, inst: Instance) {
     let Instance {
         pd,
         jid,
         name,
         mut root,
+        ipfw,
         ..
     } = inst;
     let _ = sys::jail_remove(jid);
     remove_rules(&name);
+    if let Some(b) = ipfw {
+        delete_ipfw(config, st, b);
+    }
     drop(pd);
     if !root.unmount(false) {
         st.pending.borrow_mut().push((root, Instant::now()));

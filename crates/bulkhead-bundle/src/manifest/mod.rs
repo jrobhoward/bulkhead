@@ -200,17 +200,34 @@ impl AppSpec {
                 "must say why the app needs to run without the runner's fences",
             );
         }
+        if self.unconfined.is_some() && self.own_sockets() {
+            v.error_at(
+                "capabilities.bulkhead:sockets.own",
+                "an unconfined app opens its own sockets already; leave out one or the other",
+            );
+        }
         self.check_native(v);
     }
 
+    /// Whether the app opens its own sockets (`own = true` in
+    /// `bulkhead:sockets`, ROADMAP AP2).
+    #[must_use]
+    pub fn own_sockets(&self) -> bool {
+        self.capabilities.sockets.as_ref().is_some_and(|s| s.own)
+    }
+
     /// Every capability the app asks the operator for: those its
-    /// `capabilities` section declares, and [`Capability::Unconfined`] with
-    /// an `unconfined` section.
+    /// `capabilities` section declares, [`Capability::Unconfined`] with
+    /// an `unconfined` section, and [`Capability::OwnSockets`] with `own`
+    /// sockets.
     #[must_use]
     pub fn declared(&self) -> Vec<Capability> {
         let mut declared = self.capabilities.declared();
         if self.unconfined.is_some() {
             declared.push(Capability::Unconfined);
+        }
+        if self.own_sockets() {
+            declared.push(Capability::OwnSockets);
         }
         declared
     }

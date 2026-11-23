@@ -11,7 +11,9 @@
 //!   helper's one `poll` sees signals too.
 //! - `close_range`, for a child before it executes.
 //! - Linux: the `SIGSYS` report for the helper's seccomp filter, naming
-//!   the refused call before the helper exits.
+//!   the refused call before the helper exits; `bpf` to load own-sockets
+//!   programs and attach them to an app's cgroup (ROADMAP AP2), at start
+//!   only, before that filter refuses `bpf`.
 //!
 //! A child after `fork` may only make system calls: the functions here
 //! that a child calls ([`exec`], [`exit_now`], [`close_from`]) allocate
@@ -809,4 +811,131 @@ pub fn jail_remove(jid: i32) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// `bpf(2)`'s `BPF_PROG_LOAD` attributes, as far as the helper sets them.
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Default)]
+struct BpfProgLoad {
+    prog_type: u32,
+    insn_cnt: u32,
+    insns: u64,
+    license: u64,
+    log_level: u32,
+    log_size: u32,
+    log_buf: u64,
+    kern_version: u32,
+    prog_flags: u32,
+    prog_name: [u8; 16],
+    prog_ifindex: u32,
+    expected_attach_type: u32,
+}
+
+/// `bpf(2)`'s `BPF_PROG_ATTACH` and `BPF_PROG_DETACH` attributes.
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Default)]
+struct BpfAttach {
+    target_fd: u32,
+    attach_bpf_fd: u32,
+    attach_type: u32,
+    attach_flags: u32,
+}
+
+#[cfg(target_os = "linux")]
+fn bpf<T>(cmd: libc::c_long, attr: &mut T) -> io::Result<libc::c_long> {
+    // SAFETY: `attr` is a valid, initialized prefix of `union bpf_attr`
+    // of its own size for the call's duration; the kernel reads no more
+    // than that size and zero-fills the rest.
+    let r = unsafe { libc::syscall(libc::SYS_bpf, cmd, std::ptr::from_mut(attr), size_of::<T>()) };
+    if r < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(r)
+    }
+}
+
+/// Load a `BPF_PROG_TYPE_CGROUP_SOCK_ADDR` program of `insns` (encoded)
+/// for the cgroup hook `attach_type`, named `name` (up to 15 bytes).
+///
+/// # Errors
+///
+/// The kernel refused it, with the verifier's log.
+#[cfg(target_os = "linux")]
+pub fn bpf_prog_load(insns: &[u64], attach_type: u32, name: &str) -> Result<OwnedFd, String> {
+    const PROG_LOAD: libc::c_long = 5;
+    const CGROUP_SOCK_ADDR: u32 = 18;
+    // The programs call no helper, so the licence string means nothing to
+    // the verifier.
+    let license = c"MIT OR Apache-2.0";
+    let mut log = vec![0u8; 1 << 16];
+    let mut attr = BpfProgLoad {
+        prog_type: CGROUP_SOCK_ADDR,
+        insn_cnt: u32::try_from(insns.len()).map_err(|_| "a program too long".to_string())?,
+        insns: insns.as_ptr() as u64,
+        license: license.as_ptr() as u64,
+        log_level: 1,
+        log_size: u32::try_from(log.len()).unwrap_or(0),
+        log_buf: log.as_mut_ptr() as u64,
+        expected_attach_type: attach_type,
+        ..BpfProgLoad::default()
+    };
+    for (d, b) in attr.prog_name.iter_mut().zip(name.bytes().take(15)) {
+        *d = b;
+    }
+    match bpf(PROG_LOAD, &mut attr) {
+        Ok(fd) => {
+            let fd = RawFd::try_from(fd).map_err(|_| "a descriptor out of range".to_string())?;
+            // SAFETY: the kernel returned a new descriptor, which we own.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+        Err(e) => {
+            let end = log.iter().position(|b| *b == 0).unwrap_or(log.len());
+            Err(format!(
+                "{e}: {}",
+                String::from_utf8_lossy(log.get(..end).unwrap_or_default()).trim()
+            ))
+        }
+    }
+}
+
+/// Attach `prog` to the cgroup `cgroup` at `attach_type`, alone (no
+/// `BPF_F_ALLOW_MULTI`): it replaces a program attached there before, and
+/// no cgroup below may attach its own.
+///
+/// # Errors
+///
+/// The kernel refused it.
+#[cfg(target_os = "linux")]
+pub fn bpf_prog_attach(
+    cgroup: BorrowedFd<'_>,
+    prog: BorrowedFd<'_>,
+    attach_type: u32,
+) -> io::Result<()> {
+    const PROG_ATTACH: libc::c_long = 8;
+    let fd = |f: BorrowedFd<'_>| u32::try_from(f.as_raw_fd()).unwrap_or(u32::MAX);
+    let mut attr = BpfAttach {
+        target_fd: fd(cgroup),
+        attach_bpf_fd: fd(prog),
+        attach_type,
+        attach_flags: 0,
+    };
+    bpf(PROG_ATTACH, &mut attr).map(|_| ())
+}
+
+/// Detach the program attached alone to `cgroup` at `attach_type`.
+///
+/// # Errors
+///
+/// The kernel refused it (`ENOENT`: none was attached).
+#[cfg(target_os = "linux")]
+pub fn bpf_prog_detach(cgroup: BorrowedFd<'_>, attach_type: u32) -> io::Result<()> {
+    const PROG_DETACH: libc::c_long = 9;
+    let mut attr = BpfAttach {
+        target_fd: u32::try_from(cgroup.as_raw_fd()).unwrap_or(u32::MAX),
+        attach_type,
+        ..BpfAttach::default()
+    };
+    bpf(PROG_DETACH, &mut attr).map(|_| ())
 }

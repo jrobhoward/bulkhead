@@ -42,6 +42,7 @@ pub mod seccomp;
 mod serve;
 pub mod share;
 mod socket;
+pub mod sockets;
 mod sys;
 pub mod zfs;
 

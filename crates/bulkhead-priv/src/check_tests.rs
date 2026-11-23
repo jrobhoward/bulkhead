@@ -39,6 +39,7 @@ fn spawn() -> Spawn {
         ],
         fds: vec![1, 2, 3, 4, 5, 6],
         unconfined: false,
+        own_sockets: false,
     }
 }
 
@@ -64,6 +65,10 @@ fn spawn____within_every_bound____accepted() {
 #[case::unconfined_unlisted(|s: &mut Spawn| { s.unconfined = true; s.args.push(UNCONFINED_FLAG.into()); }, "not unconfined in the helper's configuration")]
 #[case::runner_flag_alone(|s: &mut Spawn| s.args.push(UNCONFINED_FLAG.into()), "goes with an unconfined spawn")]
 #[case::spawn_without_flag(|s: &mut Spawn| s.unconfined = true, "goes with an unconfined spawn")]
+#[case::own_unlisted(|s: &mut Spawn| { s.own_sockets = true; s.args.push(OWN_SOCKETS_FLAG.into()); }, "does not open its own sockets")]
+#[case::own_flag_alone(|s: &mut Spawn| s.args.push(OWN_SOCKETS_FLAG.into()), "goes with an own-sockets spawn")]
+#[case::own_without_flag(|s: &mut Spawn| s.own_sockets = true, "goes with an own-sockets spawn")]
+#[case::listen_alone(|s: &mut Spawn| s.args.push(LISTEN_FLAG.into()), "goes with an own-sockets spawn only")]
 fn spawn____one_thing_wrong____refused_saying_what(
     #[case] change: fn(&mut Spawn),
     #[case] says: &str,
@@ -133,4 +138,46 @@ fn signal____number____only_stop_kill_continue(#[case] sig: i32, #[case] ok: boo
 #[case("443", false)]
 fn bind_address____port____allowed_ones_only(#[case] address: &str, #[case] ok: bool) {
     assert_eq!(bind_address(&config(), address).is_ok(), ok);
+}
+
+fn own_config(listen: bool) -> Config {
+    let mut c = config();
+    c.own_sockets.insert(
+        "orders".into(),
+        crate::config::OwnSockets {
+            connect: vec![crate::sockets::Rule::parse("10.0.0.0/8:1883").unwrap()],
+            bind: Vec::new(),
+            listen,
+        },
+    );
+    c
+}
+
+fn own_spawn(listen: bool) -> Spawn {
+    let mut s = spawn();
+    s.own_sockets = true;
+    s.args.push(OWN_SOCKETS_FLAG.into());
+    if listen {
+        s.args.push(LISTEN_FLAG.into());
+    }
+    s
+}
+
+#[test]
+fn spawn____own_sockets_app_listed____accepted_listen_only_if_allowed() {
+    let quiet = super::spawn(&own_config(false), &own_spawn(false), 6);
+    let listening = super::spawn(&own_config(true), &own_spawn(true), 6);
+    let not_allowed = super::spawn(&own_config(false), &own_spawn(true), 6).unwrap_err();
+    let mut both = own_spawn(false);
+    both.unconfined = true;
+    both.args.push(UNCONFINED_FLAG.into());
+    let mut c = own_config(false);
+    c.unconfined = vec!["orders".into()];
+
+    let both = super::spawn(&c, &both, 6).unwrap_err();
+
+    assert_eq!(quiet, Ok(()));
+    assert_eq!(listening, Ok(()));
+    assert!(not_allowed.contains("may not listen"), "{not_allowed}");
+    assert!(both.contains("not both"), "{both}");
 }

@@ -202,3 +202,81 @@ fn parse____node_watchdog_s_shorter_than_two_pings____refused() {
 
     assert!(err.contains("at least 10"), "{err}");
 }
+
+/// FreeBSD needs `ipfw_rules` with own sockets; given here for both.
+const OWN: &str = "
+own_sockets = mqtt-bridge, sink
+own_connect.mqtt-bridge = 10.20.0.0/16:1883, 127.0.0.53/32:53, ::1/128
+own_bind.mqtt-bridge = 0.0.0.0/0:9000-9009
+own_connect.sink =
+own_listen = mqtt-bridge
+ipfw_rules = 30000-39999
+";
+
+#[test]
+fn parse____own_sockets____each_apps_rules() {
+    let c = Config::parse(&format!("{GOOD}{OWN}")).unwrap();
+
+    let bridge = &c.own_sockets["mqtt-bridge"];
+    let sink = &c.own_sockets["sink"];
+    let shown: Vec<String> = bridge.connect.iter().map(ToString::to_string).collect();
+    assert_eq!(shown, ["10.20.0.0/16:1883", "127.0.0.53/32:53", "::1/128"]);
+    assert_eq!(bridge.bind.len(), 1);
+    assert!(bridge.listen);
+    assert!(sink.connect.is_empty() && sink.bind.is_empty() && !sink.listen);
+    let ipfw = c.ipfw.unwrap();
+    assert_eq!(ipfw.rules, 30000..=39999);
+    assert_eq!(ipfw.program, PathBuf::from("/sbin/ipfw"));
+}
+
+/// `ipfw_rules` beside an own-sockets case, as FreeBSD needs.
+const RULES: &str = "ipfw_rules = 30000-39999\n";
+
+#[rstest]
+#[case(RULES, "own_sockets = a\n", "own_connect.a is missing")]
+#[case(
+    RULES,
+    "own_sockets = a\nown_connect.a =\nown_bind.b = 0.0.0.0/0\n",
+    "b has own-sockets keys"
+)]
+#[case(
+    RULES,
+    "own_sockets = a\nown_connect.a =\nown_listen = b\n",
+    "b has own-sockets keys"
+)]
+#[case(
+    RULES,
+    "own_sockets = a\nown_connect.a = 10.0.0.0/33\n",
+    "own_connect.a"
+)]
+#[case(
+    RULES,
+    "own_sockets = a\nown_connect.a =\nunconfined = a\n",
+    "unconfined and in own_sockets"
+)]
+#[case(RULES, "own_sockets = ../a\n", "not an app name")]
+#[case("", "ipfw_rules = 0-10\n", "ipfw_rules")]
+#[case("", "ipfw_rules = 30000-70000\n", "ipfw_rules")]
+#[case("", "ipfw = /sbin/ipfw\n", "ipfw needs ipfw_rules")]
+fn parse____bad_own_sockets____refused(
+    #[case] rules: &str,
+    #[case] extra: &str,
+    #[case] message: &str,
+) {
+    let err = Config::parse(&format!("{GOOD}{rules}{extra}")).unwrap_err();
+
+    assert!(err.contains(message), "{err}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn parse____own_sockets_without_cgroup____refused_on_linux() {
+    let no_cgroup = GOOD.replace(
+        "cgroup = /sys/fs/cgroup/system.slice/bulkhead.service\n",
+        "",
+    );
+
+    let err = Config::parse(&format!("{no_cgroup}{OWN}")).unwrap_err();
+
+    assert!(err.contains("needs cgroup"), "{err}");
+}

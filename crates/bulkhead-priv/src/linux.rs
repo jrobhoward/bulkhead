@@ -22,6 +22,12 @@
 //! `unconfined`) keeps the host's network namespace, and its root holds
 //! the whole of `/etc`, read-only, for its libraries' `resolv.conf`,
 //! `hosts` and certificate roots; the rest is as above.
+//!
+//! An own-sockets instance (ROADMAP AP2, its app in `own_sockets`) keeps
+//! the host's network namespace too, and its root holds `/etc/resolv.conf`,
+//! `hosts` and `nsswitch.conf` for name lookups; the rest is as above. Its
+//! sockets are held to its rules by cgroup BPF programs ([`init`]) on
+//! `<cgroup>/apps/<app>`, which cover every instance below it.
 
 use std::collections::BTreeSet;
 use std::ffi::CString;
@@ -127,6 +133,7 @@ pub fn init(config: &Config) -> Result<State, String> {
     let apps = cgroup.join("apps");
     mkdir(&apps).map_err(|err| e("apps", err))?;
     std::fs::write(apps.join("cgroup.subtree_control"), &on).map_err(|err| e("apps", err))?;
+    own_sockets(config, &apps)?;
     let node_cgroup = open_dir(&node).map_err(|err| e("node", err))?;
     let roots = config.state.join("roots");
     mkdir(&roots).map_err(|err| format!("{}: {err}", roots.display()))?;
@@ -135,6 +142,52 @@ pub fn init(config: &Config) -> Result<State, String> {
         roots,
         node_cgroup,
     })
+}
+
+/// Attach each own-sockets app's programs (ROADMAP AP2) to
+/// `<apps>/<app>`, made if missing, alone at each hook: a program a
+/// helper attached there before is replaced, not stacked. An app no longer
+/// listed has its programs detached. Before the helper's own seccomp
+/// filter, which refuses `bpf`; the node can change none of it.
+fn own_sockets(config: &Config, apps: &Path) -> Result<(), String> {
+    use crate::sockets::{hook, programs};
+    for (app, own) in &config.own_sockets {
+        let dir = app_cgroup(apps, app).map_err(|e| format!("own sockets: {app}'s cgroup: {e}"))?;
+        let fd = open_dir(&dir).map_err(|e| format!("own sockets: {}: {e}", dir.display()))?;
+        for (attach, name, prog) in programs(&own.connect, &own.bind)? {
+            let insns: Vec<u64> = prog.iter().map(|i| i.encode()).collect();
+            let prog = sys::bpf_prog_load(&insns, attach, name)
+                .map_err(|e| format!("own sockets: {app}: loading {name}: {e}"))?;
+            sys::bpf_prog_attach(fd.as_fd(), prog.as_fd(), attach)
+                .map_err(|e| format!("own sockets: {app}: attaching {name}: {e}"))?;
+        }
+    }
+    let listed = std::fs::read_dir(apps).map_err(|e| format!("{}: {e}", apps.display()))?;
+    for entry in listed.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().is_dir() || config.own_sockets.contains_key(&name) {
+            continue;
+        }
+        if let Ok(fd) = open_dir(&entry.path()) {
+            for attach in hook::ALL {
+                // `ENOENT`: none attached, as for most apps.
+                let _ = sys::bpf_prog_detach(fd.as_fd(), attach);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `<apps>/<app>`, made with the controllers `apps` has on below it.
+fn app_cgroup(apps: &Path, app: &str) -> io::Result<PathBuf> {
+    let dir = apps.join(app);
+    if !dir.exists() {
+        mkdir(&dir)?;
+        let on = std::fs::read_to_string(apps.join("cgroup.subtree_control"))?;
+        let on: Vec<String> = on.split_whitespace().map(|c| format!("+{c}")).collect();
+        std::fs::write(dir.join("cgroup.subtree_control"), on.join(" "))?;
+    }
+    Ok(dir)
 }
 
 fn mkdir(path: &Path) -> io::Result<()> {
@@ -209,7 +262,7 @@ pub fn spawn(
         cleanup(None);
         return Err(format!("{}: {e}", root.display()));
     }
-    let plan_root = match root_plan(config, &root, binds, s.unconfined) {
+    let plan_root = match root_plan(config, &root, binds, s.unconfined, s.own_sockets) {
         Ok(p) => p,
         Err(e) => {
             cleanup(Some(&root));
@@ -234,7 +287,7 @@ pub fn spawn(
         },
         err: err_write.as_raw_fd(),
     };
-    let namespaces = if s.unconfined {
+    let namespaces = if s.unconfined || s.own_sockets {
         sys::NAMESPACES & !sys::NETWORK
     } else {
         sys::NAMESPACES
@@ -270,13 +323,7 @@ pub fn spawn(
 /// `<cgroup>/apps/<app>/i<id>` with the spawn's limits, its `cgroup.kill`
 /// given to the node.
 fn make_cgroup(config: &Config, st: &State, s: &Spawn) -> io::Result<PathBuf> {
-    let app = st.cgroup.join("apps").join(&s.app);
-    if !app.exists() {
-        mkdir(&app)?;
-        let on = std::fs::read_to_string(st.cgroup.join("apps").join("cgroup.subtree_control"))?;
-        let on: Vec<String> = on.split_whitespace().map(|c| format!("+{c}")).collect();
-        std::fs::write(app.join("cgroup.subtree_control"), on.join(" "))?;
-    }
+    let app = app_cgroup(&st.cgroup.join("apps"), &s.app)?;
     let leaf = app.join(format!("i{}", s.id));
     std::fs::create_dir(&leaf)?;
     let set = || -> io::Result<()> {
@@ -352,14 +399,18 @@ fn inside(root: &Path, path: &Path) -> PathBuf {
     root.join(path.strip_prefix("/").unwrap_or(path))
 }
 
+/// The files an own-sockets instance's root holds for name lookups.
+const NAMES: [&str; 3] = ["/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"];
+
 /// The steps to build `root` for an instance with `binds` (canonical,
 /// checked paths, and whether each is writable); with the host's `/etc`,
-/// read-only, if `unconfined`.
+/// read-only, if `unconfined`, and its [`NAMES`] if `names` (own sockets).
 fn root_plan(
     config: &Config,
     root: &Path,
     binds: &[(PathBuf, bool)],
     unconfined: bool,
+    names: bool,
 ) -> io::Result<RootPlan> {
     let ro = MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV;
     let mut ops = Vec::new();
@@ -406,15 +457,21 @@ fn root_plan(
             flags: ro,
         });
     }
+    let extra: &[&str] = if names { &NAMES } else { &[] };
     for f in ["/etc/ld.so.cache", "/etc/localtime"]
-        .into_iter()
+        .iter()
+        .chain(extra)
         .filter(|_| !unconfined)
     {
         let host = Path::new(f);
-        if host.is_file() {
+        // `resolv.conf` is often a link (to systemd-resolved's stub): the
+        // file it names is bound at its place.
+        if let Ok(src) = std::fs::canonicalize(host)
+            && src.is_file()
+        {
             ops.push(RootOp::File(c(&inside(root, host))?));
             ops.push(RootOp::Bind {
-                src: c(host)?,
+                src: c(&src)?,
                 dst: c(&inside(root, host))?,
                 flags: ro,
             });
@@ -625,7 +682,7 @@ pub fn memory_limited(inst: &Instance) -> bool {
 }
 
 /// Remove what the helper made for an instance that has exited.
-pub fn finish(_st: &State, inst: Instance) {
+pub fn finish(_config: &Config, _st: &State, inst: Instance) {
     drop(inst.pidfd);
     remove_cgroup(&inst.cgroup);
     let _ = std::fs::remove_dir(&inst.root);

@@ -71,7 +71,49 @@ pub fn spawn(config: &Config, s: &Spawn, passed: usize) -> Result<(), String> {
     }
     fds(&s.fds, passed)?;
     binds(config, s)?;
-    unconfined(config, s)
+    unconfined(config, s)?;
+    own_sockets(config, s)
+}
+
+/// The runner's flag for an app that opens its own sockets (ROADMAP AP2).
+pub const OWN_SOCKETS_FLAG: &str = "--own-sockets";
+
+/// The runner's flag that lets an own-sockets app listen.
+pub const LISTEN_FLAG: &str = "--listen";
+
+/// An own-sockets spawn only for an app this configuration lists in
+/// `own_sockets`, the runner's [`OWN_SOCKETS_FLAG`] only with one, and
+/// its [`LISTEN_FLAG`] only for an app in `own_listen`: the node chooses
+/// none of them alone.
+///
+/// # Errors
+///
+/// Which of them it breaks.
+pub fn own_sockets(config: &Config, s: &Spawn) -> Result<(), String> {
+    let flag = s.args.iter().any(|a| a == OWN_SOCKETS_FLAG);
+    if flag != s.own_sockets {
+        return Err(format!(
+            "the runner's {OWN_SOCKETS_FLAG} goes with an own-sockets spawn, and only with one"
+        ));
+    }
+    if s.own_sockets && s.unconfined {
+        return Err("a spawn is unconfined or opens its own sockets, not both".into());
+    }
+    let listen = s.args.iter().any(|a| a == LISTEN_FLAG);
+    match config.own_sockets.get(&s.app) {
+        None if s.own_sockets => Err(format!(
+            "{} does not open its own sockets in the helper's configuration (own_sockets = ...)",
+            s.app
+        )),
+        Some(own) if listen && !own.listen => Err(format!(
+            "{} may not listen in the helper's configuration (own_listen = ...)",
+            s.app
+        )),
+        _ if listen && !s.own_sockets => Err(format!(
+            "the runner's {LISTEN_FLAG} goes with an own-sockets spawn only"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The runner's flag that leaves its fences off (ROADMAP AP4).

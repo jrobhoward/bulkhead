@@ -904,6 +904,26 @@ impl Runtime {
         }
     }
 
+    /// The rules the privileged helper's own configuration holds `app`'s
+    /// own sockets to (ROADMAP AP2): its `connect` and `bind` rules as
+    /// `cidr[:ports]`, and whether it may listen.
+    ///
+    /// # Errors
+    ///
+    /// No helper, or the helper does not list the app (`own_sockets`), or
+    /// has gone.
+    pub async fn own_sockets_rules(
+        &self,
+        app: &str,
+    ) -> Result<(Vec<String>, Vec<String>, bool), String> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(helper) = &self.inner.config.native.helper {
+            return helper.own_sockets(app).await;
+        }
+        let _ = app;
+        Err("own sockets need the privileged helper ([priv])".into())
+    }
+
     async fn volume_request(&self, request: VolumeRequest) -> Result<PrivReply, String> {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         if let Some(helper) = &self.inner.config.native.helper {

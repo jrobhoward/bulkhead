@@ -124,6 +124,11 @@ fn OperatorPolicy____unconfined_by_app_name____granted_to_that_app_only() {
 }
 
 #[rstest::rstest]
+#[case("[defaults]\ngrant = [\"bulkhead:own-sockets\"]\n", "[defaults]")]
+#[case(
+    "[signers.ci]\nkey = \"RWQ\"\ngrant = [\"bulkhead:own-sockets\"]\n",
+    "[signers.ci]"
+)]
 #[case("[defaults]\ngrant = [\"bulkhead:unconfined\"]\n", "[defaults]")]
 #[case(
     "[signers.ci]\nkey = \"RWQ\"\ngrant = [\"bulkhead:unconfined\"]\n",
@@ -136,6 +141,19 @@ fn OperatorPolicy____unconfined_not_by_name____refused_naming_where(
     let err = OperatorPolicy::from_toml_str(text).unwrap_err().to_string();
 
     assert!(err.contains("by name only") && err.contains(place), "{err}");
+}
+
+#[test]
+fn OperatorPolicy____own_sockets_by_app_name____granted_to_that_app_only() {
+    let policy =
+        OperatorPolicy::from_toml_str("[apps.bridge]\ngrant = [\"bulkhead:own-sockets\"]\n")
+            .unwrap();
+
+    let bridge = policy.granted("bridge", "RWQ");
+    let other = policy.granted("other", "RWQ");
+
+    assert!(bridge.capabilities.contains(&Capability::OwnSockets));
+    assert!(!other.capabilities.contains(&Capability::OwnSockets));
 }
 
 #[test]
