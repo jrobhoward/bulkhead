@@ -28,7 +28,7 @@ cd "$ROOT" || exit 1
 # name | what it measures (ROADMAP item) | environment | command
 BENCHES=(
   "native|native instances: calls, requests from a callback and a sender, casts, calls in flight (baseline for AP1b, O1b)||target/release/examples/native_cost 4"
-  "native-senders|native with 800 idle sender channels per instance (AP1b on this machine)|NATIVE_COST_SENDERS=800|target/release/examples/native_cost 4"
+  "native-senders|native with 8 idle sender channels per instance, 800 in all, as BASELINE's 2026-11-12 (AP1b on this machine)|NATIVE_COST_SENDERS=8|ulimit -n 65536 && target/release/examples/native_cost 4"
   "native-traced|native with every message from the host traced (O1b)|NATIVE_COST_TRACED=1|target/release/examples/native_cost 4"
   "sql|SELECT 1, an update, a transaction, 16 instances at once, through the datasource's driver (DA3b)||target/release/examples/sql_cost"
   "egress|outgoing HTTP and HTTPS, 2 B and 1 MiB bodies, 16 instances at once, through the egress driver (DA4b, PF1)||target/release/examples/egress_cost"
