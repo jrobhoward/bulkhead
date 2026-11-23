@@ -165,7 +165,13 @@ impl Trace {
     /// As a sampled W3C `traceparent` header: `00-<trace>-<span>-01`.
     #[must_use]
     pub fn traceparent(&self) -> String {
-        format!("00-{}-{}-01", hex(&self.trace_id), hex(&self.span_id))
+        let mut out = String::with_capacity(55);
+        out.push_str("00-");
+        out.push_str(&hex(&self.trace_id));
+        out.push('-');
+        out.push_str(&hex(&self.span_id));
+        out.push_str("-01");
+        out
     }
 
     /// A `traceparent` header's trace context, and whether its flags say
@@ -253,8 +259,17 @@ fn getrandom(_buf: &mut [u8]) -> bool {
     false
 }
 
+/// `bytes` as lowercase hex, in one allocation: a `format!` for each byte
+/// took about 4.5 µs for a `traceparent` on the 16-core machine, enough to
+/// push a callback past the node's spin (ROADMAP O1b).
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 0xf)]));
+    }
+    out
 }
 
 fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {

@@ -3360,10 +3360,52 @@ S37's harness (`spikes/s37/scripts/run.sh` with `DRIVER=target/release/bulkhead-
 - **Many streams on one connection cost less CPU per request than as many connections, but are bounded by one thread.** 32 streams use 66 to 82 µs per request against 80 to 92 µs for 32 HTTP/1.1 connections over TLS. One HTTP/2 connection is served by one worker thread, so on 16 cores 32 streams get half of what 32 connections do (46,900 against 96,000). On the Pi, four cores already fill, and they get 83%.
 - **A 1 MiB body over HTTP/2 costs about what it does over HTTP/1.1,** 9.1 against 8.4 ms on 16 cores (PF1).
 
+## 2026-11-23: traced calls without the fixture's formatting (O1b)
+
+**What was found.** Most of what a traced call cost in `native_cost` was its test fixture. For every traced call the fixture formatted the `traceparent` (for its `trace` command), and `protocol::hex` made a `format!` for each byte. That took about 4.5 µs of cold code a call on the 16-core machine, enough to push the callback past the node's 20 µs spin, so the node slept on the bell and woke about 10 µs later.
+
+**How.** Found on the 16-core machine with the 20,000 calls alone, timing the app's side from inside it, under temporary changes reverted after:
+- **Untraced calls:** 18 to 21 µs. Untraced calls forced into CBOR frames: 25.0 µs, the app decoding each frame in 3.2 µs.
+- **Traced calls:** 38 to 46 µs, the fixture's `handle_call` taking 5.1 to 5.4 µs against 0.7 µs. Traced calls without the fixture's formatting: 25.7 µs.
+- **The trace taken off** just before the frame went to the app, the node still holding it: 18 to 22 µs, as untraced.
+
+**The fix.** `hex` now writes into one string, and the fixture formats only when asked. These are the `native_cost 4` runs after it, three rounds each, with `scripts/overnight.sh` (uncontended):
+
+| | call from the host (p50, µs) | call between instances (p50, µs) | casts to one instance (per second) | 64 calls in flight (per second, CPU per call) |
+| --- | --- | --- | --- | --- |
+| 16 cores, untraced | 18.8, 20.3, 20.6 | 48.3, 49.4, 49.9 | 280,418, 339,532, 267,112 | 331,979, 327,058, 369,129 (27.6 to 29.1 µs) |
+| 16 cores, traced | 24.7, 24.7, 24.6 | 68.1, 72.4, 68.8 | 187,120, 200,057, 170,438 | 288,022, 311,971, 281,700 (31.8 to 33.5 µs) |
+| Pi, untraced | 17.9, 18.0, 18.4 | 45.1, 44.7, 45.3 | 419,176, 417,766, 417,138 | 118,207, 117,752, 116,568 (31.0 to 31.4 µs) |
+| Pi, traced | 24.9, 25.5, 25.7 | 63.4, 64.0, 65.8 | 232,321, 233,861, 230,203 | 95,572, 96,457, 95,816 (38.3 to 39.1 µs) |
+
+- **A traced call from the host now costs 4 to 8 µs more than an untraced one,** where it cost 14 to 27 µs (on the Pi, 25 µs against 45 µs before). Between instances it costs 1.4 to 1.5 times as much, where it cost 1.8 to 2.4 times.
+- **Traced casts are unchanged,** 36 to 50% fewer a second on 16 cores and 44 to 45% on the Pi. A cast pipelines, so what it shows is the CBOR frame's own cost, about 1.9 µs a cast on the Pi. Calls in flight do better on the Pi (82,943 to 83,202 a second before, at 44.7 to 45.1 µs of CPU per call).
+- **What is left is the CBOR frame**, which hot tags for traced frames would take off (ROADMAP O1b).
+
+## 2026-11-23: calls from a sender thread (AP1b)
+
+`native_cost 4`, with three rows new to it (ROADMAP AP1b), measured with the fixture's new `call-n` and `calls-n` commands:
+- a call to another instance from a callback;
+- the same call from a sender thread, each the median of 5 runs of 2,000 calls one at a time;
+- 64 calls in flight from one sender thread, spread over 16 instances, the median of 3 runs of 20,000.
+
+Both machines at once, `scripts/overnight.sh`, three rounds, uncontended. "800 idle senders" means `NATIVE_COST_SENDERS=8`.
+
+| | call to another instance, from a callback (µs) | from a sender thread (µs) | 64 in flight from one sender thread (per second) |
+| --- | --- | --- | --- |
+| 16 cores | 9.0, 8.5, 8.4 | 14.7, 14.4, 14.7 | 159,380, 170,197, 168,290 |
+| 16 cores, 800 idle senders | 9.2, 8.4, 9.3 | 14.8, 13.9, 13.9 | 152,396, 169,360, 168,698 |
+| Pi | 5.4, 5.3, 5.4 | 10.7, 10.8, 10.6 | 113,175, 109,932, 102,598 |
+| Pi, 800 idle senders | 5.6, 5.4, 5.3 | 11.1, 10.7, 10.5 | 98,636, 105,407, 106,521 |
+
+- **A sender's call takes about 5.3 µs longer than a callback's on both machines:** 1.6 times as long on 16 cores and twice on the Pi. Its request and its bucket get cost what a callback's do (2026-11-12, and again today), so the difference lies in the call's path: through the channel's node task and back on the channel. Not looked into yet.
+- **One sender thread with 64 calls in flight answers about half of what the host's 64 calls in flight do on 16 cores** (330,000 a second), and close to it on the Pi (116,000). One thread on each side bounds it.
+- **Idle senders change nothing,** again.
+
 ## Not measured yet
 
-- Where one HTTP/2 stream's 50 to 75 µs over an HTTP/1.1 connection goes: the driver or the load client (2026-11-23).
-- Why a traced call one at a time takes about 27 µs longer on the Pi (14 to 18 µs on 16 cores), where a traced cast costs about 1.9 µs more (O1, 2026-11-22; ROADMAP O1b).
+- Why a call from a sender thread takes about 5.3 µs longer than a callback's, on both machines (2026-11-23, ROADMAP AP1b).
+- Where one HTTP/2 stream's 50 to 75 µs over an HTTP/1.1 connection goes inside the driver; the load client's threads account for 5 to 10 µs of it (2026-11-23, ROADMAP PF2).
 - Why the egress driver on one thread read 3 to 15% above its own rows of an hour before on the Pi (2026-11-23).
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).

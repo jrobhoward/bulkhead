@@ -12,7 +12,9 @@
 //! system time over the run, from `/proc`, divided by the calls.
 //!
 //! `NATIVE_COST_SENDERS=N` has every instance hold `N` idle sender
-//! channels (ROADMAP AP1) through the run.
+//! channels (ROADMAP AP1) through the run. A sender thread's requests,
+//! bucket gets and calls are timed beside a callback's, with 64 calls in
+//! flight from one sender (ROADMAP AP1b).
 //!
 //! `NATIVE_COST_TRACED=1` sends every call and cast from the host with a
 //! trace (ROADMAP O1), so what a callback sends is traced too: traced
@@ -199,9 +201,56 @@ async fn open_idle_senders(pool: &[InstanceHandle]) {
 }
 
 /// A request and a bucket get from a thread of the app's own, through a
-/// sender channel (ROADMAP AP1), against the callback's above.
-async fn sender_requests(h: &InstanceHandle) {
+/// sender channel (ROADMAP AP1), against the callback's above; a call to
+/// another instance from each, and calls in flight from one sender
+/// (ROADMAP AP1b) over `others`.
+async fn sender_requests(h: &InstanceHandle, others: &[InstanceHandle]) {
     let sender = ask(h, "sender open").await;
+    let mut pids = Vec::new();
+    for o in others {
+        pids.push(ask(o, "self").await);
+    }
+    for (what, command) in [
+        (
+            "call to another instance from a callback",
+            format!("call-n {} 2000", pids[0]),
+        ),
+        (
+            "call to another instance from a sender thread",
+            format!("sender {sender} call-n {} 2000", pids[0]),
+        ),
+    ] {
+        let mut per = Vec::new();
+        for _ in 0..5 {
+            let got = ask(h, &command).await;
+            per.push(
+                got.parse::<f64>()
+                    .unwrap_or_else(|_| panic!("{command}: {got}"))
+                    / 2_000.0,
+            );
+        }
+        per.sort_by(f64::total_cmp);
+        println!("{what}: {:.1} µs (median of 5 runs of 2,000)", per[2] / 1e3);
+    }
+    let mut rates = Vec::new();
+    for _ in 0..3 {
+        let got = ask(
+            h,
+            &format!("sender {sender} calls-n {} 64 20000", pids.join(",")),
+        )
+        .await;
+        let (ok, ns) = got
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("calls-n: {got}"));
+        assert_eq!(ok, "20000", "calls-n: {got}");
+        rates.push(20_000.0 / (ns.parse::<f64>().unwrap() / 1e9));
+    }
+    rates.sort_by(f64::total_cmp);
+    println!(
+        "64 calls in flight from one sender thread, over {} instances: {:.0} calls/s (median of 3 runs of 20,000)",
+        pids.len(),
+        rates[1]
+    );
     for (what, command) in [
         (
             "request from a sender thread (its own pid)",
@@ -326,7 +375,7 @@ async fn run(workers: usize) {
 
     callback_requests(&pool[0]).await;
     bucket_gets(&pool).await;
-    sender_requests(&pool[0]).await;
+    sender_requests(&pool[0], &pool[1..17]).await;
 
     let casts = 50_000;
     let t = Instant::now();

@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bulkhead_native::app::Ctx;
-use bulkhead_native::protocol::{KvAnswer, KvRequest, MetricKind, Request};
+use bulkhead_native::protocol::{KvAnswer, KvRequest, MetricKind, Pid, Request};
 use bulkhead_native::sender::Sender;
 
 use crate::fixture::{keyed, parse_pid, pid_text, text};
@@ -187,6 +187,18 @@ fn run(s: &mut Sender, cmd: &str) -> String {
             }
             format!("{ok}/{n}")
         }
+        // `call-n PID N`: N calls one at a time, timed in nanoseconds
+        // (ROADMAP AP1b: against the callback's `call-n`).
+        "call-n" => call_n(s, pid(arg(1)), arg(2).parse().unwrap_or(0)),
+        "calls-n" => {
+            let targets: Vec<_> = arg(1).split(',').map(pid).collect();
+            calls_n(
+                s,
+                &targets,
+                arg(2).parse().unwrap_or(1),
+                arg(3).parse().unwrap_or(0),
+            )
+        }
         "kv" => {
             let (bucket, key) = (arg(2).to_string(), arg(3).to_string());
             let answer = match arg(1) {
@@ -242,4 +254,35 @@ fn run(s: &mut Sender, cmd: &str) -> String {
         }
         other => format!("err:unknown sender command {other}"),
     }
+}
+
+/// `n` calls to `to` one at a time: the nanoseconds they took (ROADMAP
+/// AP1b, against the callback's `call-n`).
+fn call_n(s: &mut Sender, to: Pid, n: u32) -> String {
+    let started = Instant::now();
+    for _ in 0..n {
+        if let Err(e) = s.call(to, text("echo x"), 5_000) {
+            return format!("err:{e:?}");
+        }
+    }
+    started.elapsed().as_nanos().to_string()
+}
+
+/// `n` calls over `targets` in turn, `window` in flight at once:
+/// `<answered> <nanoseconds>`.
+fn calls_n(s: &mut Sender, targets: &[Pid], window: usize, n: usize) -> String {
+    let started = Instant::now();
+    let (mut sent, mut ok) = (0, 0);
+    while sent < window.min(n) {
+        s.start_call(targets[sent % targets.len()], text("echo x"), 5_000);
+        sent += 1;
+    }
+    while let Some((_, result)) = s.next_answer() {
+        ok += usize::from(result.is_ok());
+        if sent < n {
+            s.start_call(targets[sent % targets.len()], text("echo x"), 5_000);
+            sent += 1;
+        }
+    }
+    format!("{ok} {}", started.elapsed().as_nanos())
 }

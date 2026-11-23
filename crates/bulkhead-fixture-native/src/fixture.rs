@@ -11,8 +11,8 @@ use bulkhead_native::protocol::{
 
 #[derive(Default)]
 struct Fixture {
-    /// The `traceparent` of the call being handled, if traced (ROADMAP O1).
-    incoming_trace: Option<String>,
+    /// The trace of the call being handled, if traced (ROADMAP O1).
+    incoming_trace: Option<bulkhead_native::protocol::Trace>,
     infos: Vec<String>,
     /// The bodies of the CBOR casts received, as hex.
     cbor_casts: Vec<String>,
@@ -395,6 +395,9 @@ impl Fixture {
                 Ok(reply) => String::from_utf8_lossy(&reply.body).into_owned(),
                 Err(e) => format!("err:{e:?}"),
             },
+            // `n` calls to `pid`, one at a time, timed in nanoseconds
+            // (ROADMAP AP1b: against a sender's `call-n`).
+            "call-n" => call_n(ctx, pid(), tail.parse().unwrap_or(0)),
             "bigcall" => big_call(ctx, pid(), tail.parse().unwrap_or(0)),
             "cast" => {
                 ctx.cast(pid(), text(tail));
@@ -478,7 +481,9 @@ impl Fixture {
                 "ok".into()
             }
             // The traced call's `traceparent`, or `none` (ROADMAP O1).
-            "trace" => self.incoming_trace.clone().unwrap_or_else(|| "none".into()),
+            "trace" => self
+                .incoming_trace
+                .map_or_else(|| "none".into(), |t| t.traceparent()),
             "log-at" => {
                 app::log(level(first), tail);
                 "ok".into()
@@ -682,6 +687,17 @@ impl Fixture {
     }
 }
 
+/// `n` calls to `to`, one at a time: the nanoseconds they took.
+fn call_n(ctx: &mut Ctx, to: Pid, n: u32) -> String {
+    let started = std::time::Instant::now();
+    for _ in 0..n {
+        if let Err(e) = ctx.call(to, text("echo x"), 5_000) {
+            return format!("err:{e:?}");
+        }
+    }
+    started.elapsed().as_nanos().to_string()
+}
+
 unsafe extern "C" {
     #[link_name = "kill"]
     fn libc_kill(pid: i32, sig: i32) -> i32;
@@ -747,7 +763,9 @@ impl App for Fixture {
         }
         // `{"key": ..., "cmd": ...}` from `call-app`: a body a pool can
         // hash, carrying a command.
-        self.incoming_trace = msg.trace.as_deref().map(|t| t.traceparent());
+        // Kept, and formatted only when asked: formatted for every call, it
+        // was most of what a traced call cost in `native_cost` (ROADMAP O1b).
+        self.incoming_trace = msg.trace.as_deref().copied();
         let command = if msg.content_type == "application/json" {
             serde_json::from_slice::<serde_json::Value>(&msg.body)
                 .ok()

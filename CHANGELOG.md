@@ -18,6 +18,11 @@ All notable changes are recorded here. The format follows
   one cost more than they gained (BASELINE.md, 2026-11-23). Each is a
   sender channel under `[limits] senders_max`, which node config checks.
   The SQL driver's counters reach the metrics once a second.
+- A traced call costs 4 to 8 µs more than an untraced one, not 15 to
+  27 µs (ROADMAP O1b): `Trace`'s hex formatting writes one string
+  instead of a `format!` for each byte. In `native_cost`, the test fixture
+  formatting every call's `traceparent` with it pushed the callback past
+  the node's spin. What is left is the CBOR frame a traced message takes.
 - `scripts/overnight.sh`: baselines in rounds on an idle machine and a
   test machine at once (BASELINE.md, 2026-11-23).
 - HTTP/2 in the ingress driver (ROADMAP DA2b): offered by ALPN on every

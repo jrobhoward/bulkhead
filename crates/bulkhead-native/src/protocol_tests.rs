@@ -294,3 +294,25 @@ fn envelope____traced____round_trips_untraced_encodes_as_before() {
         "no trace key when untraced"
     );
 }
+
+#[test]
+fn trace____every_byte_value____lowercase_hex_two_digits_each() {
+    let mut random = [0u8; 24];
+    for (i, b) in random.iter_mut().enumerate() {
+        *b = u8::try_from(i).unwrap() * 11;
+    }
+    let trace = Trace::root_from(random);
+    let want: String = random[..16].iter().map(|b| format!("{b:02x}")).collect();
+
+    assert_eq!(trace.trace_hex(), want);
+    for b in 0..=255u8 {
+        let t = Trace::root_from([b; 24]);
+        assert_eq!(t.trace_hex(), format!("{b:02x}").repeat(16));
+        assert_eq!(
+            Trace::from_traceparent(&t.traceparent())
+                .map(|(t, _)| t)
+                .filter(|_| b != 0),
+            (b != 0).then_some(t)
+        );
+    }
+}
