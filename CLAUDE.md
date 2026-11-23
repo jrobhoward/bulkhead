@@ -226,9 +226,10 @@ Spikes are a separate workspace under `spikes/` with their own lock file. Each
   ingress's `--profile ingress` is a subset of it, ROADMAP DA2b):
   a call added there goes in the helper's `INSTANCE` too, or
   `seccomp_tests` fails (the own-sockets list too, ROADMAP AP2).
-  `sockets.rs` is own sockets' fence (AP2): the rules from the helper's
-  configuration as cgroup BPF programs (generated, no compiler; their
-  tests run them in an interpreter against `allows`), attached in
+  `sockets.rs` is own sockets' fence (AP2, AP2b): the rules from the
+  helper's configuration as seven cgroup BPF programs (connect, send,
+  bind, and ingress; generated, no compiler; their tests run them in an
+  interpreter against `allows` and `delivers`), attached in
   `linux.rs`'s `init` before the helper's filter refuses `bpf`, and as
   ipfw rules per jail on FreeBSD. `crates/bulkhead-priv-wire`
   is the message format it shares with the node (`forbid(unsafe_code)`,

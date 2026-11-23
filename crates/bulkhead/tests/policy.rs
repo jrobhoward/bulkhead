@@ -79,15 +79,17 @@ async fn quarantine____three_policy_kills____stopped_across_a_restart_until_star
     for _ in 0..3 {
         misbehave(&n).await;
     }
+    // The status turns first, the audit record follows: wait for both.
     let mut quarantined = status(&n).await;
+    let mut events = n.events();
     for _ in 0..100 {
-        if quarantined.0 == "quarantined" {
+        if quarantined.0 == "quarantined" && events.iter().any(|e| e == "quarantine") {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
         quarantined = status(&n).await;
+        events = n.events();
     }
-    let events = n.events();
     n.restart().await;
     let after_restart = status(&n).await.0;
     let none_running = running(&n, "rogue").await.is_none();

@@ -21,8 +21,11 @@ All notable changes are recorded here. The format follows
   `bulkhead:own-sockets` by name, node config sets `[native]
   allow_own_sockets` (needs `[priv]`), and the helper lists the app.
   `bulkhead list` marks such an app `(own sockets)`; the gauge
-  `bulkhead_own_sockets_apps` counts them. Inbound filtering, and `bind`
-  and `listen` on FreeBSD, are ROADMAP AP2b.
+  `bulkhead_own_sockets_apps` counts them. What arrives is held to the
+  same rules as for node-made sockets (ROADMAP AP2b): unless the app may
+  listen, UDP only from its `connect` rules (Linux: a `cgroup_skb` ingress
+  program, which also drops IPv6 with extension headers; FreeBSD: ipfw
+  `in jail` rules). `bind` and `listen` on FreeBSD are ROADMAP AP2c.
 - Trace context across calls and nodes (ROADMAP O1; OBSERVABILITY.md,
   "Traces"): a message's envelope may carry a W3C trace id and span id.
   The HTTP ingress starts a trace from a client's sampled `traceparent`

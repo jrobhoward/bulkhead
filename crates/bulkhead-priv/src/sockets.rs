@@ -286,6 +286,22 @@ pub mod op {
     pub const JLT32_K: u8 = 0xa6;
     /// `BPF_JMP | BPF_EXIT`.
     pub const EXIT: u8 = 0x95;
+    /// `BPF_LDX | BPF_MEM | BPF_B`.
+    pub const LDX_B: u8 = 0x71;
+    /// `BPF_LDX | BPF_MEM | BPF_H`.
+    pub const LDX_H: u8 = 0x69;
+    /// `BPF_ALU64 | BPF_ADD | BPF_K`.
+    pub const ADD64_K: u8 = 0x07;
+    /// `BPF_ALU64 | BPF_AND | BPF_K`.
+    pub const AND64_K: u8 = 0x57;
+    /// `BPF_ALU64 | BPF_LSH | BPF_K`.
+    pub const LSH64_K: u8 = 0x67;
+    /// `BPF_JMP | BPF_CALL`: a helper, by number.
+    pub const CALL: u8 = 0x85;
+    /// `BPF_JMP | BPF_JNE | BPF_K`, 64 bits.
+    pub const JNE64_K: u8 = 0x55;
+    /// `BPF_JMP32 | BPF_JEQ | BPF_K`.
+    pub const JEQ32_K: u8 = 0x16;
 }
 
 const OFF_IP4: i16 = 4;
@@ -396,40 +412,12 @@ fn words(net: Net) -> Vec<(u32, u32)> {
         .collect()
 }
 
-/// The program for `family` and `hook` allowing what `rules` allow, as
-/// [`allows`] does. An IPv6 program checks IPv4 rules against
-/// IPv4-mapped addresses, and keeps IPv6 rules off them.
-///
-/// # Errors
-///
-/// A program too long for BPF's 16-bit jumps (thousands of rules).
-pub fn program(rules: &[Rule], family: Family, hook: Hook) -> Result<Vec<Insn>, String> {
-    let guard = hook == Hook::Connect;
-    let mut a = Asm::default();
-    let allow = a.label();
-    let deny = a.label();
-    a.op(op::MOV64_X, CTX, 1, 0, 0);
-    match family {
-        Family::V4 => a.op(op::LDX_W, 2, CTX, OFF_IP4, 0),
-        Family::V6 => {
-            for i in 0..4u8 {
-                a.op(op::LDX_W, 2 + i, CTX, OFF_IP6 + 4 * i16::from(i), 0);
-            }
-        }
-    }
-    a.op(op::LDX_W, PORT, CTX, OFF_PORT, 0);
-    a.op(op::BE16, PORT, 0, 0, 16);
-    if hook == Hook::Bind {
-        // The unspecified address with port 0: allowed without a rule.
-        let ruled = a.label();
-        let words = if family == Family::V4 { 1 } else { 4 };
-        for reg in 2..2 + words {
-            a.jump(op::JNE32_K, reg, 0, ruled);
-        }
-        a.jump(op::JNE32_K, PORT, 0, ruled);
-        a.jump(op::JA, 0, 0, allow);
-        a.here(ruled);
-    }
+/// The rules' checks, for an address in r2 (or r2 to r5 for IPv6) and a
+/// port in host order in r6: a jump to `allow` at the first rule that
+/// matches, past the guard if `guard`; on through otherwise. An IPv6
+/// address checks IPv4 rules as IPv4-mapped, and keeps IPv6 rules off
+/// mapped addresses.
+fn match_rules(a: &mut Asm, rules: &[Rule], family: Family, guard: bool, allow: Label) {
     for r in rules {
         let next = a.label();
         let regs: Vec<u8> = match (family, r.net.is_v4()) {
@@ -472,23 +460,193 @@ pub fn program(rules: &[Rule], family: Family, hook: Hook) -> Result<Vec<Insn>, 
         a.jump(op::JA, 0, 0, allow);
         a.here(next);
     }
-    a.jump(op::JA, 0, 0, deny);
-    // The verifier refuses unreachable instructions: no allow block when
-    // no rule of this family reaches it.
-    if a.reached(allow) {
-        a.here(allow);
-        a.op(op::MOV64_K, 0, 0, 0, 1);
+}
+
+/// `r0 = value; exit` at `label`, if a jump reaches it: the verifier
+/// refuses unreachable instructions.
+fn verdict(a: &mut Asm, label: Label, value: i32) {
+    if a.reached(label) {
+        a.here(label);
+        a.op(op::MOV64_K, 0, 0, 0, value);
         a.op(op::EXIT, 0, 0, 0, 0);
     }
-    a.here(deny);
-    a.op(op::MOV64_K, 0, 0, 0, 0);
-    a.op(op::EXIT, 0, 0, 0, 0);
+}
+
+/// The program for `family` and `hook` allowing what `rules` allow, as
+/// [`allows`] does.
+///
+/// # Errors
+///
+/// A program too long for BPF's 16-bit jumps (thousands of rules).
+pub fn program(rules: &[Rule], family: Family, hook: Hook) -> Result<Vec<Insn>, String> {
+    let mut a = Asm::default();
+    let allow = a.label();
+    let deny = a.label();
+    a.op(op::MOV64_X, CTX, 1, 0, 0);
+    match family {
+        Family::V4 => a.op(op::LDX_W, 2, CTX, OFF_IP4, 0),
+        Family::V6 => {
+            for i in 0..4u8 {
+                a.op(op::LDX_W, 2 + i, CTX, OFF_IP6 + 4 * i16::from(i), 0);
+            }
+        }
+    }
+    a.op(op::LDX_W, PORT, CTX, OFF_PORT, 0);
+    a.op(op::BE16, PORT, 0, 0, 16);
+    if hook == Hook::Bind {
+        // The unspecified address with port 0: allowed without a rule.
+        let ruled = a.label();
+        let words = if family == Family::V4 { 1 } else { 4 };
+        for reg in 2..2 + words {
+            a.jump(op::JNE32_K, reg, 0, ruled);
+        }
+        a.jump(op::JNE32_K, PORT, 0, ruled);
+        a.jump(op::JA, 0, 0, allow);
+        a.here(ruled);
+    }
+    match_rules(&mut a, rules, family, hook == Hook::Connect, allow);
+    a.jump(op::JA, 0, 0, deny);
+    verdict(&mut a, allow, 1);
+    verdict(&mut a, deny, 0);
+    a.finish()
+}
+
+/// What reaches an own-sockets app from outside, as the ingress program
+/// sees it: what the reference [`delivers`] decides on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inbound {
+    /// Neither IPv4 nor IPv6.
+    NotIp,
+    /// An IP or UDP header shorter than it should be.
+    Truncated,
+    /// TCP, or IPv4 carrying anything but UDP.
+    NotUdp,
+    /// IPv6 whose next header is neither TCP nor UDP (an extension header).
+    V6Extension,
+    /// A UDP datagram from this address and port.
+    Udp(IpAddr, u16),
+}
+
+/// Whether an own-sockets app receives `inbound` (ROADMAP AP2b), as the
+/// node delivers datagrams on the sockets it makes: everything if the app
+/// may listen; else UDP only from a `connect` rule's addresses and ports,
+/// past the guard. Other transports pass (replies on its own TCP
+/// connections; it cannot listen), but not IPv6 that hides its transport
+/// behind extension headers. The reference the ingress program is tested
+/// against.
+#[must_use]
+pub fn delivers(connect: &[Rule], listen: bool, inbound: Inbound) -> bool {
+    match inbound {
+        _ if listen => true,
+        Inbound::NotIp | Inbound::NotUdp => true,
+        Inbound::Truncated | Inbound::V6Extension => false,
+        Inbound::Udp(addr, port) => allows(connect, addr, port, Hook::Connect),
+    }
+}
+
+/// `__sk_buff.protocol`: the frame's protocol, network byte order.
+const OFF_SKB_PROTOCOL: i16 = 16;
+/// `bpf_skb_load_bytes`.
+const SKB_LOAD_BYTES: i32 = 26;
+/// On the stack: the IP header at -64, the UDP source port at -72.
+const STACK_HEADER: i16 = -64;
+const STACK_PORT: i16 = -72;
+/// The frame pointer.
+const FP: u8 = 10;
+/// Kept across helper calls (callee-saved): the context, the IPv4
+/// header's length, its source.
+const SKB: u8 = 6;
+const IHL: u8 = 7;
+const SOURCE4: u8 = 8;
+
+/// `bpf_skb_load_bytes(skb, offset, fp + at, len)`, the offset in a
+/// register (`Ok`) or a constant (`Err`); a failure jumps to `fail`.
+fn load_bytes(a: &mut Asm, offset: Result<u8, i32>, at: i16, len: i32, fail: Label) {
+    a.op(op::MOV64_X, 1, SKB, 0, 0);
+    match offset {
+        Ok(reg) => a.op(op::MOV64_X, 2, reg, 0, 0),
+        Err(constant) => a.op(op::MOV64_K, 2, 0, 0, constant),
+    }
+    a.op(op::MOV64_X, 3, FP, 0, 0);
+    a.op(op::ADD64_K, 3, 0, 0, i32::from(at));
+    a.op(op::MOV64_K, 4, 0, 0, len);
+    a.op(op::CALL, 0, 0, 0, SKB_LOAD_BYTES);
+    a.jump(op::JNE64_K, 0, 0, fail);
+}
+
+/// The ingress program (`BPF_PROG_TYPE_CGROUP_SKB` at
+/// `BPF_CGROUP_INET_INGRESS`, ROADMAP AP2b): delivers (1) or drops (0)
+/// what reaches the app's sockets, as [`delivers`] says. It copies the IP
+/// header and the UDP source port with `bpf_skb_load_bytes` (not a
+/// GPL-only helper), then checks the source against `connect` with the
+/// connect programs' code.
+///
+/// # Errors
+///
+/// As [`program`].
+pub fn ingress(connect: &[Rule], listen: bool) -> Result<Vec<Insn>, String> {
+    let mut a = Asm::default();
+    if listen {
+        a.op(op::MOV64_K, 0, 0, 0, 1);
+        a.op(op::EXIT, 0, 0, 0, 0);
+        return a.finish();
+    }
+    let deliver = a.label();
+    let drop = a.label();
+    let v6 = a.label();
+    a.op(op::MOV64_X, SKB, 1, 0, 0);
+    a.op(op::LDX_W, 2, SKB, OFF_SKB_PROTOCOL, 0);
+    // `ETH_P_IPV6` and `ETH_P_IP` in network byte order, as a load gives.
+    a.jump(
+        op::JEQ32_K,
+        2,
+        i32::from(u16::from_ne_bytes([0x86, 0xdd])),
+        v6,
+    );
+    a.jump(
+        op::JNE32_K,
+        2,
+        i32::from(u16::from_ne_bytes([0x08, 0x00])),
+        deliver,
+    );
+    // IPv4: protocol, header length, source.
+    load_bytes(&mut a, Err(0), STACK_HEADER, 20, drop);
+    a.op(op::LDX_B, 2, FP, STACK_HEADER + 9, 0);
+    a.jump(op::JNE32_K, 2, 17, deliver);
+    a.op(op::LDX_B, IHL, FP, STACK_HEADER, 0);
+    a.op(op::AND64_K, IHL, 0, 0, 0xf);
+    a.op(op::LSH64_K, IHL, 0, 0, 2);
+    a.op(op::LDX_W, SOURCE4, FP, STACK_HEADER + 12, 0);
+    load_bytes(&mut a, Ok(IHL), STACK_PORT, 2, drop);
+    a.op(op::LDX_H, PORT, FP, STACK_PORT, 0);
+    a.op(op::BE16, PORT, 0, 0, 16);
+    a.op(op::MOV64_X, 2, SOURCE4, 0, 0);
+    match_rules(&mut a, connect, Family::V4, true, deliver);
+    a.jump(op::JA, 0, 0, drop);
+    // IPv6: the next header, the source.
+    a.here(v6);
+    load_bytes(&mut a, Err(0), STACK_HEADER, 40, drop);
+    a.op(op::LDX_B, 2, FP, STACK_HEADER + 6, 0);
+    a.jump(op::JEQ32_K, 2, 6, deliver);
+    a.jump(op::JNE32_K, 2, 17, drop);
+    load_bytes(&mut a, Err(40), STACK_PORT, 2, drop);
+    a.op(op::LDX_H, PORT, FP, STACK_PORT, 0);
+    a.op(op::BE16, PORT, 0, 0, 16);
+    for i in 0..4u8 {
+        a.op(op::LDX_W, 2 + i, FP, STACK_HEADER + 8 + 4 * i16::from(i), 0);
+    }
+    match_rules(&mut a, connect, Family::V6, true, deliver);
+    a.jump(op::JA, 0, 0, drop);
+    verdict(&mut a, deliver, 1);
+    verdict(&mut a, drop, 0);
     a.finish()
 }
 
 /// The cgroup hooks an own-sockets app's programs attach to, as the
 /// kernel numbers them (`enum bpf_attach_type`).
 pub mod hook {
+    /// `BPF_CGROUP_INET_INGRESS`.
+    pub const INET_INGRESS: u32 = 0;
     /// `BPF_CGROUP_INET4_BIND`.
     pub const INET4_BIND: u32 = 8;
     /// `BPF_CGROUP_INET6_BIND`.
@@ -501,57 +659,77 @@ pub mod hook {
     pub const UDP4_SENDMSG: u32 = 14;
     /// `BPF_CGROUP_UDP6_SENDMSG`.
     pub const UDP6_SENDMSG: u32 = 15;
-    /// All six.
-    pub const ALL: [u32; 6] = [
+    /// All seven.
+    pub const ALL: [u32; 7] = [
         INET4_CONNECT,
         INET6_CONNECT,
         UDP4_SENDMSG,
         UDP6_SENDMSG,
         INET4_BIND,
         INET6_BIND,
+        INET_INGRESS,
     ];
 }
 
-/// A program with its hook and its name.
-pub type Hooked = (u32, &'static str, Vec<Insn>);
+/// The program types (`enum bpf_prog_type`).
+pub mod prog_type {
+    /// `BPF_PROG_TYPE_CGROUP_SKB`.
+    pub const CGROUP_SKB: u32 = 8;
+    /// `BPF_PROG_TYPE_CGROUP_SOCK_ADDR`.
+    pub const CGROUP_SOCK_ADDR: u32 = 18;
+}
 
-/// One program for each of [`hook::ALL`]: connect and unconnected sends
-/// by `connect` with the guard, binds by `bind`.
+/// A program: its type, its hook, its name and its instructions.
+pub type Hooked = (u32, u32, &'static str, Vec<Insn>);
+
+/// One program for each of [`hook::ALL`]: connects and unconnected sends
+/// by `connect` with the guard, binds by `bind`, and what arrives by
+/// `connect` unless the app may `listen`.
 ///
 /// # Errors
 ///
 /// As [`program`].
-pub fn programs(connect: &[Rule], bind: &[Rule]) -> Result<Vec<Hooked>, String> {
+pub fn programs(connect: &[Rule], bind: &[Rule], listen: bool) -> Result<Vec<Hooked>, String> {
+    use prog_type::{CGROUP_SKB, CGROUP_SOCK_ADDR as ADDR};
+    let addr = |hook, name, rules, family, kind| -> Result<Hooked, String> {
+        Ok((ADDR, hook, name, program(rules, family, kind)?))
+    };
     Ok(vec![
-        (
+        addr(
             hook::INET4_CONNECT,
             "own_connect4",
-            program(connect, Family::V4, Hook::Connect)?,
-        ),
-        (
+            connect,
+            Family::V4,
+            Hook::Connect,
+        )?,
+        addr(
             hook::INET6_CONNECT,
             "own_connect6",
-            program(connect, Family::V6, Hook::Connect)?,
-        ),
-        (
+            connect,
+            Family::V6,
+            Hook::Connect,
+        )?,
+        addr(
             hook::UDP4_SENDMSG,
             "own_sendmsg4",
-            program(connect, Family::V4, Hook::Connect)?,
-        ),
-        (
+            connect,
+            Family::V4,
+            Hook::Connect,
+        )?,
+        addr(
             hook::UDP6_SENDMSG,
             "own_sendmsg6",
-            program(connect, Family::V6, Hook::Connect)?,
-        ),
+            connect,
+            Family::V6,
+            Hook::Connect,
+        )?,
+        addr(hook::INET4_BIND, "own_bind4", bind, Family::V4, Hook::Bind)?,
+        addr(hook::INET6_BIND, "own_bind6", bind, Family::V6, Hook::Bind)?,
         (
-            hook::INET4_BIND,
-            "own_bind4",
-            program(bind, Family::V4, Hook::Bind)?,
-        ),
-        (
-            hook::INET6_BIND,
-            "own_bind6",
-            program(bind, Family::V6, Hook::Bind)?,
+            CGROUP_SKB,
+            hook::INET_INGRESS,
+            "own_ingress",
+            ingress(connect, listen)?,
         ),
     ])
 }
@@ -572,48 +750,88 @@ fn first_match(connect: &[Rule]) -> (Vec<Rule>, Vec<Net>, Vec<Rule>) {
 }
 
 /// The ipfw rules for an own-sockets instance in jail `jid`, numbered from
-/// `first`, as arguments to `ipfw -q add`: what the jail's sockets may
-/// send. ipfw stops at the first match, so the guard is order: rules
+/// `first`, as arguments to `ipfw -q add`. Out: what the jail's sockets
+/// may send; ipfw stops at the first match, so the guard is order: rules
 /// inside a guarded range, a deny of each guarded range a broader rule
 /// covers, the broader rules, then a deny of the rest. Replies from the
-/// `bind` rules' ports pass.
+/// `bind` rules' ports pass. In (ROADMAP AP2b): unless the app may
+/// `listen`, UDP only from the `connect` rules, in the same order. Not
+/// TCP: ipfw's `jail` (and `uid`) match looks a TCP packet's socket up
+/// without wildcards, so a listener is never found and a rule on what
+/// reaches one would not apply (ROADMAP AP2c).
 #[must_use]
-pub fn ipfw(jid: i32, first: u32, connect: &[Rule], bind: &[Rule]) -> Vec<Vec<String>> {
+pub fn ipfw(
+    jid: i32,
+    first: u32,
+    connect: &[Rule],
+    bind: &[Rule],
+    listen: bool,
+) -> Vec<Vec<String>> {
     let port = |p: Option<(u16, u16)>| match p {
         None => Vec::new(),
         Some((lo, hi)) if lo == hi => vec![lo.to_string()],
         Some((lo, hi)) => vec![format!("{lo}-{hi}")],
     };
+    // `verb proto from FROM [PORT] to TO [PORT] DIR... jail JID`.
+    let rule = |verb: &str,
+                proto: &str,
+                from: (String, Vec<String>),
+                to: (String, Vec<String>),
+                dir: &[&str]| {
+        let mut l = vec![verb.to_string(), proto.to_string(), "from".into(), from.0];
+        l.extend(from.1);
+        l.extend(["to".to_string(), to.0]);
+        l.extend(to.1);
+        l.extend(dir.iter().map(|d| (*d).to_string()));
+        l.extend(["jail".to_string(), jid.to_string()]);
+        l
+    };
+    let any = || ("any".to_string(), Vec::new());
     let mut lines: Vec<Vec<String>> = Vec::new();
-    let mut add = |verb: &str, from_port: Vec<String>, to: String, to_port: Vec<String>| {
+    let mut out = |verb: &str, from_port: Vec<String>, to: (String, Vec<String>)| {
         for proto in ["tcp", "udp"] {
-            let mut l = vec![
-                verb.to_string(),
-                proto.to_string(),
-                "from".into(),
-                "any".into(),
-            ];
-            l.extend(from_port.iter().cloned());
-            l.extend(["to".to_string(), to.clone()]);
-            l.extend(to_port.iter().cloned());
-            l.extend(["out".to_string(), "jail".to_string(), jid.to_string()]);
-            lines.push(l);
+            lines.push(rule(
+                verb,
+                proto,
+                ("any".into(), from_port.clone()),
+                to.clone(),
+                &["out"],
+            ));
         }
     };
     for b in bind {
-        add("allow", port(b.ports), "any".into(), Vec::new());
+        out("allow", port(b.ports), any());
     }
     let (inside, blocks, broad) = first_match(connect);
     for r in &inside {
-        add("allow", Vec::new(), r.net.to_string(), port(r.ports));
+        out("allow", Vec::new(), (r.net.to_string(), port(r.ports)));
     }
     for s in &blocks {
-        add("deny", Vec::new(), s.to_string(), Vec::new());
+        out("deny", Vec::new(), (s.to_string(), Vec::new()));
     }
     for r in &broad {
-        add("allow", Vec::new(), r.net.to_string(), port(r.ports));
+        out("allow", Vec::new(), (r.net.to_string(), port(r.ports)));
     }
-    add("deny", Vec::new(), "any".into(), Vec::new());
+    out("deny", Vec::new(), any());
+    if !listen {
+        let from = |r: &Rule| {
+            rule(
+                "allow",
+                "udp",
+                (r.net.to_string(), port(r.ports)),
+                any(),
+                &["in"],
+            )
+        };
+        lines.extend(inside.iter().map(from));
+        lines.extend(
+            blocks
+                .iter()
+                .map(|s| rule("deny", "udp", (s.to_string(), Vec::new()), any(), &["in"])),
+        );
+        lines.extend(broad.iter().map(from));
+        lines.push(rule("deny", "udp", any(), any(), &["in"]));
+    }
     lines
         .into_iter()
         .zip(first..)

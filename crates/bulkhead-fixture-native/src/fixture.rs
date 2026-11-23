@@ -25,6 +25,8 @@ struct Fixture {
     fail_save: bool,
     /// Memory `hold` keeps.
     held: Vec<Vec<u8>>,
+    /// Listeners `listen-keep` keeps open (ROADMAP AP2b).
+    listeners: Vec<std::net::TcpListener>,
     /// The SQL transaction `sql-begin` opened.
     tx: Option<u32>,
     /// Streams `tcp-connect` made, by the node's socket number.
@@ -201,6 +203,45 @@ fn sql_text(answer: SqlAnswer) -> String {
 }
 
 impl Fixture {
+    /// Own sockets (ROADMAP AP2, AP2b): sockets of the app's own, not the
+    /// node's.
+    fn own_socket(&mut self, verb: &str, rest: &str) -> String {
+        match verb {
+            // Own sockets (ROADMAP AP2): a UDP datagram from a socket of
+            // the app's own, a bind (UDP: std's TCP bind listens too), a
+            // TCP bind and listen at an address, a raw socket.
+            "udp-own" => {
+                outcome(std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.send_to(b"x", rest)))
+            }
+            "bind" => outcome(std::net::UdpSocket::bind(rest)),
+            "listen" => outcome(std::net::TcpListener::bind(rest)),
+            // Inbound to own sockets (ROADMAP AP2b): a datagram waited for
+            // at a bound address (400 ms, inside a callback's deadline), and a
+            // listener kept open.
+            "udp-wait" => match std::net::UdpSocket::bind(rest).and_then(|s| {
+                s.set_read_timeout(Some(std::time::Duration::from_millis(400)))?;
+                let mut b = [0u8; 64];
+                s.recv_from(&mut b)
+            }) {
+                Ok((n, from)) => format!("got {n} from {from}"),
+                Err(e) => format!("err:{e}"),
+            },
+            "listen-keep" => match std::net::TcpListener::bind(rest) {
+                Ok(l) => {
+                    self.listeners.push(l);
+                    "ok".into()
+                }
+                Err(e) => format!("err:{e}"),
+            },
+            "raw" => outcome(rustix::net::socket(
+                rustix::net::AddressFamily::INET,
+                rustix::net::SocketType::RAW,
+                Some(rustix::net::ipproto::ICMP),
+            )),
+            other => format!("err:{other} is not an own-socket command"),
+        }
+    }
+
     /// Sockets through the node: `udp-bind ADDR` (its socket),
     /// `udp-send S ADDR TEXT`, `udp-recv S` (`FROM TEXT` or `none`),
     /// `net-watch S TAG`; `tcp-connect ADDR` keeps the passed stream (its
@@ -512,19 +553,9 @@ impl Fixture {
             "write" => outcome(std::fs::write(rest, b"x")),
             "fill" => fill_dir(rest),
             "connect" => outcome(std::net::TcpStream::connect(rest)),
-            // Own sockets (ROADMAP AP2): a UDP datagram from a socket of
-            // the app's own, a bind (UDP: std's TCP bind listens too), a
-            // TCP bind and listen at an address, a raw socket.
-            "udp-own" => {
-                outcome(std::net::UdpSocket::bind("0.0.0.0:0").and_then(|s| s.send_to(b"x", rest)))
+            "udp-own" | "bind" | "listen" | "raw" | "udp-wait" | "listen-keep" => {
+                self.own_socket(verb, rest)
             }
-            "bind" => outcome(std::net::UdpSocket::bind(rest)),
-            "listen" => outcome(std::net::TcpListener::bind(rest)),
-            "raw" => outcome(rustix::net::socket(
-                rustix::net::AddressFamily::INET,
-                rustix::net::SocketType::RAW,
-                Some(rustix::net::ipproto::ICMP),
-            )),
             "exec" => outcome(std::process::Command::new("/bin/true").status()),
             #[cfg(target_os = "linux")]
             "io-uring" => {

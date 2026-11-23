@@ -339,6 +339,65 @@ async fn helper____own_sockets_app____its_rules_reached_the_rest_refused() {
     }
 }
 
+/// Datagrams to `to` from `from`, every 50 ms for 2.5 s, from a thread.
+fn send_for_a_while(from: &str, to: &str) -> std::thread::JoinHandle<()> {
+    let sock = std::net::UdpSocket::bind(from).unwrap();
+    let to: std::net::SocketAddr = to.parse().unwrap();
+    std::thread::spawn(move || {
+        for _ in 0..50 {
+            let _ = sock.send_to(b"hello", to);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })
+}
+
+/// What reaches an own-sockets app (ROADMAP AP2b), as for sockets the node
+/// makes: `socks` may not listen, so a datagram arrives only from its
+/// `connect` rules (127.0.0.1, ports 48880 to 48889). On Linux seccomp
+/// refuses its listen, so nothing connects in; on FreeBSD the listen
+/// succeeds and a connection reaches it (ROADMAP AP2c).
+#[tokio::test(flavor = "multi_thread")]
+async fn helper____own_sockets_inbound____udp_from_its_rules_alone() {
+    let Some(started) = helper("helper____own_sockets_inbound") else {
+        return;
+    };
+    if !privhelper::own_sockets_here() {
+        eprintln!("skipped: ipfw is not loaded, which own sockets need on FreeBSD");
+        return;
+    }
+    let rt = runtime(&started);
+    let app = program(&started, &rt);
+    let i = rt.spawn(&app, own_sockets("socks")).unwrap();
+
+    let ruled = send_for_a_while("127.0.0.1:48883", "127.0.0.1:48893");
+    let from_rules = ask(&i, "udp-wait 127.0.0.1:48893").await;
+    ruled.join().unwrap();
+    let stray = send_for_a_while("127.0.0.1:0", "127.0.0.1:48893");
+    let from_elsewhere = ask(&i, "udp-wait 127.0.0.1:48893").await;
+    stray.join().unwrap();
+    let listen = ask(&i, "listen-keep 127.0.0.1:48894").await;
+    let connected = std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:48894".parse().unwrap(),
+        Duration::from_millis(800),
+    );
+
+    assert_eq!(from_rules, "got 5 from 127.0.0.1:48883");
+    assert!(from_elsewhere.starts_with("err:"), "{from_elsewhere}");
+    #[cfg(target_os = "linux")]
+    {
+        assert!(listen.contains("Operation not permitted"), "{listen}");
+        assert!(connected.is_err(), "a connection reached it");
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        assert_eq!(listen, "ok", "not fenced on FreeBSD (ROADMAP AP2c)");
+        assert!(
+            connected.is_ok(),
+            "the gap AP2c closes is gone: update SECURITY.md"
+        );
+    }
+}
+
 /// The node's grant alone gives no app its own sockets: the helper
 /// refuses one its own configuration does not list.
 #[tokio::test(flavor = "multi_thread")]

@@ -154,9 +154,9 @@ fn own_sockets(config: &Config, apps: &Path) -> Result<(), String> {
     for (app, own) in &config.own_sockets {
         let dir = app_cgroup(apps, app).map_err(|e| format!("own sockets: {app}'s cgroup: {e}"))?;
         let fd = open_dir(&dir).map_err(|e| format!("own sockets: {}: {e}", dir.display()))?;
-        for (attach, name, prog) in programs(&own.connect, &own.bind)? {
+        for (prog_type, attach, name, prog) in programs(&own.connect, &own.bind, own.listen)? {
             let insns: Vec<u64> = prog.iter().map(|i| i.encode()).collect();
-            let prog = sys::bpf_prog_load(&insns, attach, name)
+            let prog = sys::bpf_prog_load(&insns, prog_type, attach, name)
                 .map_err(|e| format!("own sockets: {app}: loading {name}: {e}"))?;
             sys::bpf_prog_attach(fd.as_fd(), prog.as_fd(), attach)
                 .map_err(|e| format!("own sockets: {app}: attaching {name}: {e}"))?;

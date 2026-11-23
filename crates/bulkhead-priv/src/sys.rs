@@ -856,22 +856,28 @@ fn bpf<T>(cmd: libc::c_long, attr: &mut T) -> io::Result<libc::c_long> {
     }
 }
 
-/// Load a `BPF_PROG_TYPE_CGROUP_SOCK_ADDR` program of `insns` (encoded)
-/// for the cgroup hook `attach_type`, named `name` (up to 15 bytes).
+/// Load a program of `prog_type` (`BPF_PROG_TYPE_CGROUP_SOCK_ADDR`,
+/// `BPF_PROG_TYPE_CGROUP_SKB`) of `insns` (encoded) for the cgroup hook
+/// `attach_type`, named `name` (up to 15 bytes).
 ///
 /// # Errors
 ///
 /// The kernel refused it, with the verifier's log.
 #[cfg(target_os = "linux")]
-pub fn bpf_prog_load(insns: &[u64], attach_type: u32, name: &str) -> Result<OwnedFd, String> {
+pub fn bpf_prog_load(
+    insns: &[u64],
+    prog_type: u32,
+    attach_type: u32,
+    name: &str,
+) -> Result<OwnedFd, String> {
     const PROG_LOAD: libc::c_long = 5;
-    const CGROUP_SOCK_ADDR: u32 = 18;
-    // The programs call no helper, so the licence string means nothing to
-    // the verifier.
+    // The programs call no GPL-only helper (the ingress one calls
+    // `bpf_skb_load_bytes`), so the licence string means nothing to the
+    // verifier.
     let license = c"MIT OR Apache-2.0";
     let mut log = vec![0u8; 1 << 16];
     let mut attr = BpfProgLoad {
-        prog_type: CGROUP_SOCK_ADDR,
+        prog_type,
         insn_cnt: u32::try_from(insns.len()).map_err(|_| "a program too long".to_string())?,
         insns: insns.as_ptr() as u64,
         license: license.as_ptr() as u64,

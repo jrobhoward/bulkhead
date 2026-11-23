@@ -213,12 +213,13 @@ fn add_ipfw(config: &Config, st: &State, s: &Spawn, jid: i32) -> Result<(u32, u3
         .as_ref()
         .map(|i| i.rules.clone())
         .ok_or("no ipfw_rules")?;
-    let count = u32::try_from(crate::sockets::ipfw(jid, 0, &own.connect, &own.bind).len())
-        .map_err(|_| "too many rules")?;
+    let count =
+        u32::try_from(crate::sockets::ipfw(jid, 0, &own.connect, &own.bind, own.listen).len())
+            .map_err(|_| "too many rules")?;
     let start = crate::sockets::free_block(&range, &st.ipfw_used.borrow(), count)
         .ok_or("no free ipfw rule numbers left in ipfw_rules")?;
     st.ipfw_used.borrow_mut().push((start, count));
-    for line in crate::sockets::ipfw(jid, start, &own.connect, &own.bind) {
+    for line in crate::sockets::ipfw(jid, start, &own.connect, &own.bind, own.listen) {
         let mut args = vec!["-q".to_string(), "add".to_string()];
         args.extend(line);
         if let Err(e) = ipfw(config, &args) {
