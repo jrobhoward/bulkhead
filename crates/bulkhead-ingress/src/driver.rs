@@ -139,7 +139,7 @@ impl App for Ingress {
                 None
             } else {
                 Some(
-                    IngressTls::load(l.tls.clone(), l.client_auth.clone(), SdkFiles)
+                    IngressTls::load_alpn(l.tls.clone(), l.client_auth.clone(), SdkFiles, l.http2)
                         .map_err(|e| format!("listener {}: {e}", l.name))?,
                 )
             };
@@ -360,7 +360,8 @@ async fn accept(
 }
 
 /// Serve one connection: the TLS handshake within the header timeout,
-/// then HTTP/1.1 until it closes.
+/// then HTTP/2 if the client chose it by ALPN, else HTTP/1.1, until it
+/// closes.
 async fn connection(
     handed: Handed,
     listening: &[Arc<Listening>],
@@ -387,7 +388,12 @@ async fn connection(
             match tokio::time::timeout(l.config.header_timeout(), handshake).await {
                 Ok(Ok(s)) => {
                     let client = crate::serve::client_cert(s.get_ref().1.peer_certificates());
-                    http1(s, l.clone(), shared.clone(), sender.clone(), client).await;
+                    // HTTP/2 when the client chose it by ALPN (ROADMAP DA2b).
+                    if s.get_ref().1.alpn_protocol() == Some(b"h2".as_slice()) {
+                        http2(s, l.clone(), shared.clone(), sender.clone(), client).await;
+                    } else {
+                        http1(s, l.clone(), shared.clone(), sender.clone(), client).await;
+                    }
                 }
                 Ok(Err(e)) => bulkhead_sdk::debug!("TLS handshake failed: {e}"),
                 Err(_) => bulkhead_sdk::debug!("TLS handshake timed out"),
@@ -415,6 +421,61 @@ async fn http1<IO>(
     let _ = hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())
         .header_read_timeout(header_timeout)
+        .serve_connection(TokioIo::new(io), service)
+        .await;
+}
+
+/// Runs an HTTP/2 connection's streams on the worker's own thread, in its
+/// `LocalSet`: the worker's sender is not `Send`.
+#[derive(Debug, Clone, Copy)]
+struct LocalExec;
+
+impl<F> hyper::rt::Executor<F> for LocalExec
+where
+    F: std::future::Future + 'static,
+{
+    fn execute(&self, future: F) {
+        tokio::task::spawn_local(future);
+    }
+}
+
+/// The most header bytes an HTTP/2 request may carry.
+const MAX_HEADER_LIST: u32 = 16 << 10;
+/// Each HTTP/2 stream's flow-control window, and the connection's: a body
+/// near a route's limit is not held to the 64 KiB default.
+const STREAM_WINDOW: u32 = 1 << 20;
+const CONNECTION_WINDOW: u32 = 4 << 20;
+
+/// Serve an HTTP/2 connection (ROADMAP DA2b): each stream a request, as
+/// over HTTP/1.1, at most `max_streams` at once; streams a client resets
+/// or errors at once are bounded (the rapid-reset attack, CVE-2023-44487);
+/// a peer silent past the header timeout is dropped.
+async fn http2<IO>(
+    io: IO,
+    l: Arc<Listening>,
+    shared: Arc<Shared>,
+    sender: AsyncSender,
+    client: Option<Arc<ClientCert>>,
+) where
+    IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static,
+{
+    let header_timeout = l.config.header_timeout();
+    let streams = l.config.max_streams.max(1);
+    let service = hyper::service::service_fn(move |req| {
+        let (l, shared, sender, client) =
+            (l.clone(), shared.clone(), sender.clone(), client.clone());
+        async move { Ok::<_, Infallible>(serve(req, &l, &shared, &sender, client.as_deref()).await) }
+    });
+    let _ = hyper::server::conn::http2::Builder::new(LocalExec)
+        .timer(TokioTimer::new())
+        .max_concurrent_streams(streams)
+        .max_header_list_size(MAX_HEADER_LIST)
+        .max_pending_accept_reset_streams(20)
+        .max_local_error_reset_streams(Some(1024))
+        .keep_alive_interval(header_timeout)
+        .keep_alive_timeout(header_timeout)
+        .initial_stream_window_size(STREAM_WINDOW)
+        .initial_connection_window_size(CONNECTION_WINDOW)
         .serve_connection(TokioIo::new(io), service)
         .await;
 }

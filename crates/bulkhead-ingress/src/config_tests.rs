@@ -51,6 +51,8 @@ fn from_args____names_only____the_node_ingress_defaults() {
     assert_eq!(l.max_response, 16 << 20);
     assert_eq!(l.standby, Standby::Refuse);
     assert!(l.tls.is_empty());
+    assert!(l.http2, "HTTP/2 by ALPN on a TLS listener, by default");
+    assert_eq!(l.max_streams, 100);
     assert_eq!(config.listeners[1].standby, Standby::Forward);
 }
 

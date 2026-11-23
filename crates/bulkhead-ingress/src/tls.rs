@@ -92,6 +92,19 @@ struct Inner {
     stamps: Mutex<Vec<Option<SystemTime>>>,
     /// Built again on each reload, for the client CAs.
     acceptor: RwLock<TlsAcceptor>,
+    /// The protocols offered by ALPN ([`alpn`]).
+    alpn: Vec<Vec<u8>>,
+}
+
+/// The protocols a listener offers by ALPN, most preferred first:
+/// HTTP/2 and HTTP/1.1, or HTTP/1.1 alone (ROADMAP DA2b).
+#[must_use]
+pub fn alpn(http2: bool) -> Vec<Vec<u8>> {
+    if http2 {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    }
 }
 
 #[derive(Debug)]
@@ -148,6 +161,7 @@ fn server_config(
     current: &Arc<RwLock<Arc<Loaded>>>,
     files: &dyn Files,
     client: Option<&ClientAuth>,
+    alpn: &[Vec<u8>],
 ) -> Result<ServerConfig, String> {
     let provider = Arc::new(default_provider());
     let builder = ServerConfig::builder_with_provider(provider.clone())
@@ -176,7 +190,7 @@ fn server_config(
         }
     };
     let mut config = builder.with_cert_resolver(Arc::new(Resolver(current.clone())));
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.alpn_protocols = alpn.to_vec();
     Ok(config)
 }
 
@@ -219,8 +233,23 @@ impl IngressTls {
         client: Option<ClientAuth>,
         files: impl Files,
     ) -> Result<Self, String> {
+        Self::load_alpn(entries, client, files, false)
+    }
+
+    /// [`IngressTls::load`], offering HTTP/2 by ALPN too if `http2`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`IngressTls::load`].
+    pub fn load_alpn(
+        entries: Vec<Certificate>,
+        client: Option<ClientAuth>,
+        files: impl Files,
+        http2: bool,
+    ) -> Result<Self, String> {
+        let alpn = alpn(http2);
         let current = Arc::new(RwLock::new(Arc::new(load(&files, &entries)?)));
-        let config = server_config(&current, &files, client.as_ref())?;
+        let config = server_config(&current, &files, client.as_ref(), &alpn)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 stamps: Mutex::new(stamps(&files, &entries, client.as_ref())),
@@ -229,6 +258,7 @@ impl IngressTls {
                 files: Box::new(files),
                 current,
                 acceptor: RwLock::new(TlsAcceptor::from(Arc::new(config))),
+                alpn,
             }),
         })
     }
@@ -244,7 +274,7 @@ impl IngressTls {
         let client = self.inner.client.as_ref();
         let loaded = load(files, &self.inner.entries)?;
         // Built first, so a broken CA file keeps the old set too.
-        let config = server_config(&self.inner.current, files, client)?;
+        let config = server_config(&self.inner.current, files, client, &self.inner.alpn)?;
         *self
             .inner
             .current

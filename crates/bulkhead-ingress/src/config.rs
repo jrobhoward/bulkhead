@@ -87,6 +87,21 @@ pub struct Listener {
     /// Ask HTTPS clients for a certificate from these CAs (ROADMAP DA2b).
     #[serde(default)]
     pub client_auth: Option<ClientAuth>,
+    /// With `tls`: offer HTTP/2 by ALPN, beside HTTP/1.1 (ROADMAP DA2b).
+    #[serde(default = "default_http2")]
+    pub http2: bool,
+    /// Most streams at once on one HTTP/2 connection: requests in flight
+    /// to the apps from it.
+    #[serde(default = "default_max_streams")]
+    pub max_streams: u32,
+}
+
+fn default_http2() -> bool {
+    true
+}
+
+fn default_max_streams() -> u32 {
+    100
 }
 
 /// Client certificates on an HTTPS listener.

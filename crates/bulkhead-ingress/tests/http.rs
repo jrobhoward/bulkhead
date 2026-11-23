@@ -92,7 +92,8 @@ fn start() -> Shared {
         Listen::with("forwarding", json!({ "standby": "forward" })),
         Listen {
             name: "tls",
-            args: json!({ "tls": [web_entry.0, shop_entry.0, rot_entry.0], "tls_reload_s": 1 }),
+            // Two HTTP/2 streams at once (ROADMAP DA2b).
+            args: json!({ "tls": [web_entry.0, shop_entry.0, rot_entry.0], "tls_reload_s": 1, "max_streams": 2 }),
             files: [web_entry.1, shop_entry.1, rot_entry.1].concat(),
         },
     ];
@@ -544,4 +545,147 @@ async fn traceparent____sampled_from_the_client____the_apps_call_continues_it() 
     assert_ne!(sampled.body, client, "a span of the driver's own");
     assert_eq!(not.body, "-");
     assert_eq!(none.body, "-");
+}
+
+type H2Sender = hyper::client::conn::http2::SendRequest<http_body_util::Full<bytes::Bytes>>;
+
+/// A TLS connection to `listener` offering `h2` and `http/1.1` by ALPN,
+/// trusting `trusted`, with SNI `server_name`: the protocol the driver
+/// chose, and with HTTP/2 a sender of requests on that one connection.
+async fn h2(
+    listener: &str,
+    trusted: &[&Vec<u8>],
+    server_name: &str,
+) -> (Vec<u8>, Option<H2Sender>) {
+    let mut roots = rustls::RootCertStore::empty();
+    for der in trusted {
+        roots
+            .add(rustls_pki_types::CertificateDer::from((*der).clone()))
+            .unwrap();
+    }
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let tcp = tokio::net::TcpStream::connect(at(listener)).await.unwrap();
+    let name = rustls_pki_types::ServerName::try_from(server_name.to_string()).unwrap();
+    let stream = connector.connect(name, tcp).await.unwrap();
+    let chosen = stream
+        .get_ref()
+        .1
+        .alpn_protocol()
+        .unwrap_or_default()
+        .to_vec();
+    if chosen != b"h2" {
+        return (chosen, None);
+    }
+    let (sender, conn) = hyper::client::conn::http2::handshake(
+        hyper_util::rt::TokioExecutor::new(),
+        hyper_util::rt::TokioIo::new(stream),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(conn);
+    (chosen, Some(sender))
+}
+
+/// One request on an HTTP/2 connection: status and body.
+async fn h2_request(sender: &mut H2Sender, method: &str, uri: &str, body: &str) -> (u16, String) {
+    use http_body_util::BodyExt;
+    let req = hyper::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("x-tenant", "t1")
+        .body(http_body_util::Full::new(bytes::Bytes::from(
+            body.to_string(),
+        )))
+        .unwrap();
+    sender.ready().await.unwrap();
+    let res = sender.send_request(req).await.unwrap();
+    let status = res.status().as_u16();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// HTTP/2 by ALPN on a TLS listener (ROADMAP DA2b): many requests on one
+/// connection, each a call to the app as over HTTP/1.1, the body limit as
+/// before, and the host from `:authority`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn h2____over_tls____requests_on_one_connection_routed_and_limited() {
+    let sh = shared();
+    let both = [&sh.web_cert, &sh.shop_cert];
+
+    let (chosen, sender) = h2("tls", &both, "web.example").await;
+    let mut sender = sender.expect("HTTP/2 chosen");
+    let mut answers = Vec::new();
+    for i in 0..10 {
+        answers.push(
+            h2_request(
+                &mut sender,
+                "GET",
+                &format!("https://web.example/api/x?n={i}"),
+                "",
+            )
+            .await,
+        );
+    }
+    let too_big = h2_request(
+        &mut sender,
+        "POST",
+        "https://web.example/api/x",
+        &"x".repeat(65),
+    )
+    .await;
+    let by_authority = h2_request(&mut sender, "GET", "https://shop.example/shop/y", "").await;
+    let other_host = h2_request(&mut sender, "GET", "https://other.example/shop/y", "").await;
+
+    assert_eq!(chosen, b"h2");
+    for (i, (status, body)) in answers.iter().enumerate() {
+        assert_eq!(*status, 200, "{body}");
+        assert!(
+            body.starts_with(&format!("GET /api/x?n={i} key=t1")),
+            "{body}"
+        );
+        assert!(body.contains("scheme=https"), "{body}");
+    }
+    assert_eq!(too_big.0, 413, "{}", too_big.1);
+    assert_eq!(by_authority.0, 200, "{}", by_authority.1);
+    assert_eq!(other_host.0, 404);
+}
+
+/// More streams at once than `max_streams` wait their turn once the client
+/// has the server's settings: all answered, none refused. (Streams a client
+/// opens before the settings arrive may be refused with `REFUSED_STREAM`,
+/// which HTTP/2 says to retry.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn h2____streams_over_max_streams____held_back_all_answered() {
+    let sh = shared();
+
+    let (_, sender) = h2("tls", &[&sh.web_cert], "web.example").await;
+    let mut sender = sender.expect("HTTP/2 chosen");
+    let first = h2_request(&mut sender, "GET", "https://web.example/api/x", "").await;
+    let calls = (0..8).map(|i| {
+        let mut sender = sender.clone();
+        tokio::spawn(async move {
+            h2_request(
+                &mut sender,
+                "GET",
+                &format!("https://web.example/api/x?n={i}"),
+                "",
+            )
+            .await
+        })
+    });
+    let mut statuses = Vec::new();
+    for c in calls.collect::<Vec<_>>() {
+        statuses.push(c.await.unwrap().0);
+    }
+
+    assert_eq!(first.0, 200);
+    assert_eq!(statuses, vec![200; 8]);
 }

@@ -47,6 +47,8 @@
 //! max_response = "16MiB"        # larger app replies become 502
 //! tls = [{ cert = "/etc/bulkhead/shop.pem", key = "/etc/bulkhead/shop.key", hosts = ["shop.example"] }]
 //! tls_reload_s = 60             # check the files for changes; also SIGHUP
+//! # http2 = true                # with tls: HTTP/2 by ALPN beside HTTP/1.1
+//! # max_streams = 100           # streams at once on one HTTP/2 connection
 //! # client_ca = "/etc/bulkhead/clients.pem"  # with tls: client certificates
 //! # client_auth = "required"    # or "optional"
 //! # With [failover], what the standby does with a request for a singleton
@@ -1490,6 +1492,14 @@ pub struct HttpBinding {
     /// requests.
     #[serde(default)]
     pub client_auth: Option<ClientAuthMode>,
+    /// With `tls`: offer HTTP/2 by ALPN beside HTTP/1.1 (ROADMAP DA2b);
+    /// true by default. Plain HTTP listeners serve HTTP/1.1 only.
+    #[serde(default = "yes")]
+    pub http2: bool,
+    /// Most streams at once on one HTTP/2 connection, each a request in
+    /// flight to an app; 100 by default, at least 1.
+    #[serde(default = "default_max_streams")]
+    pub max_streams: u32,
     /// With `[failover]`: the partner's address for this listener, as
     /// clients reach it (`scheme://host[:port][/path]`), where `standby =
     /// "redirect"` sends a request for a singleton that runs on the
@@ -1568,6 +1578,10 @@ fn partner_url_ok(url: &str) -> bool {
         && !host.contains('@')
         && rest.bytes().all(|b| b.is_ascii_graphic())
         && !rest.contains(['?', '#'])
+}
+
+fn default_max_streams() -> u32 {
+    100
 }
 
 fn default_tls_reload_s() -> u64 {

@@ -110,3 +110,9 @@ fn reload_if_changed____rewritten_files____new_set_and_broken_files_keep_the_old
     assert!(broken.is_err());
     assert_eq!(kept, after);
 }
+
+#[test]
+fn alpn____http2_on_or_off____h2_first_or_http1_alone() {
+    assert_eq!(super::alpn(true), [b"h2".to_vec(), b"http/1.1".to_vec()]);
+    assert_eq!(super::alpn(false), [b"http/1.1".to_vec()]);
+}

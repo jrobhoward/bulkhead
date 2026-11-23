@@ -192,6 +192,8 @@ pub(super) fn bind(
             "tls": certificates,
             "tls_reload_s": binding.tls_reload_s,
             "client_auth": client_auth,
+            "http2": binding.http2,
+            "max_streams": binding.max_streams.max(1),
         }));
     }
     let profile = bulkhead_host::DriverProfile {

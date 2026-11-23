@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- HTTP/2 in the ingress driver (ROADMAP DA2b): offered by ALPN on every
+  TLS listener (`h2`, then `http/1.1`), `http2 = false` in
+  `[http.<name>]` to turn it off; plain listeners stay HTTP/1.1. Each
+  stream is a request as over HTTP/1.1; `max_streams` (default 100)
+  bounds streams per connection, with hyper's rapid-reset limits and
+  keep-alive pings at the header timeout. OCSP stapling is dropped from
+  the plan: CAs are winding OCSP down.
 - Own sockets (ROADMAP AP2; MANIFEST.md, "Own sockets"): an app whose
   library opens its own sockets (a Kafka, AMQP or MQTT client) can keep
   the runner's fences with `own = true` in `bulkhead:sockets`. Its TCP and

@@ -545,6 +545,8 @@ A bridge to an external Redis or etcd is an app (a service app, or a driver) for
 
 ### HTTP ingress
 
+HTTP/2 since ROADMAP DA2b (2026-11-22): offered by ALPN on TLS listeners, each stream a request as over HTTP/1.1, streams per connection bounded (`max_streams`); no h2c, and no OCSP stapling (CAs are ending OCSP; certificates are short-lived instead).
+
 Decided 2026-10-09, from S15's measurements (on components): the host terminates HTTP and delivers each request to an app as a call, the shape that kept about 75% of native throughput. Since 2026-11-14 (ROADMAP DA2) the host's part runs in a process of its own, the ingress driver, and the node parses no client's bytes; what an app sees is unchanged.
 
 - **Ingress is node-level.** Node config names addresses (`[http.<name>]`), served by the ingress driver's worker threads (as many as the largest `acceptors`); every address serves every app's routes, as a web container or Cowboy does. Apps claim routes in their manifest (`bulkhead:http-routes`'s `routes`: an optional host and a path prefix). The longest prefix wins, matched on path segments, and a route naming the host beats one that does not. A deploy that claims another app's exact host and prefix is refused.

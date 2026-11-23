@@ -3276,6 +3276,7 @@ Between two node processes on the Pi (`cluster-pair`'s two-node rows): a native 
 
 ## Not measured yet
 
+- HTTP/2 through the ingress driver against HTTP/1.1 (ROADMAP DA2b, 2026-11-22): requests per second and CPU per request on one connection with many streams, and against many HTTP/1.1 connections, on both machines.
 - Why a traced call one at a time takes about 27 µs longer on the Pi, where a traced cast costs about 1.9 µs more (O1, 2026-11-22; ROADMAP O1b). Traced messages on the 16-core machine.
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).

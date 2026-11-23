@@ -1230,3 +1230,19 @@ fn NodeConfig____tracing____defaults_and_a_rate_as_millionths() {
     assert!(!set.tracing.accept_traceparent);
     assert!(over.to_string().contains("from 0 to 1"), "{over}");
 }
+
+#[test]
+fn NodeConfig____http2_and_max_streams____on_and_100_by_default() {
+    let plain =
+        NodeConfig::from_toml_str("data_dir = \"/d\"\n[http.main]\naddress = \"127.0.0.1:8080\"\n")
+            .unwrap();
+    let set = NodeConfig::from_toml_str(
+        "data_dir = \"/d\"\n[http.main]\naddress = \"127.0.0.1:8080\"\nhttp2 = false\nmax_streams = 8\n",
+    )
+    .unwrap();
+
+    assert!(plain.http["main"].http2);
+    assert_eq!(plain.http["main"].max_streams, 100);
+    assert!(!set.http["main"].http2);
+    assert_eq!(set.http["main"].max_streams, 8);
+}

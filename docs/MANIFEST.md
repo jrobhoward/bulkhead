@@ -468,6 +468,8 @@ tls = [                                # HTTPS (cargo feature `tls`, on by defau
 tls_reload_s = 60                      # default 60: reload when the files' modification times change (0: only SIGHUP or `bulkhead reload-tls`)
 client_ca = "/etc/bulkhead/clients.pem"  # with tls: ask clients for a certificate from these CAs (PEM); the app gets client_cert
 client_auth = "required"               # with client_ca: "required" (default) or "optional" (served without one)
+http2 = true                           # with tls: HTTP/2 by ALPN beside HTTP/1.1 (default true; plain listeners serve HTTP/1.1 only)
+max_streams = 100                      # streams at once on one HTTP/2 connection, each a request in flight to an app (default 100)
 partner_url = "https://node2.example:8443"  # with [failover]: the partner's listener, as clients reach it
 standby = "redirect"                   # with [failover], a request for a singleton running on the partner:
                                        # "redirect" (307 to partner_url), "forward" (over the cluster to the
