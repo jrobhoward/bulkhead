@@ -10,8 +10,8 @@ All notable changes are recorded here. The format follows
 
 - Large messages cost less (ROADMAP PF1): through the ingress driver a
   1 MiB request takes half the CPU and less than half the time on 16
-  cores, and 64 KiB requests 12 to 15% less CPU (BASELINE.md,
-  2026-11-24). Every native app on Linux with glibc now keeps freed memory
+  cores (a quarter less on a Raspberry Pi 5), and 64 KiB requests 12 to
+  15% less CPU (BASELINE.md, 2026-11-24). Every native app on Linux with glibc now keeps freed memory
   for reuse (mmap and trim thresholds at 32 MiB), so its resident memory
   stays near its peak use; frames are encoded into buffers sized for their
   body and read without zeroing; the SDK's `http::Request` and `Response`

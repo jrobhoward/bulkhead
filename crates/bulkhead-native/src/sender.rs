@@ -44,7 +44,7 @@ pub struct Sender {
     out: Vec<u8>,
     inbuf: Vec<u8>,
     /// Frames written only in part, the first from `queue_at`, while
-    /// writes do not block ([`Sender::set_queued`]).
+    /// writes do not block (`set_queued`, with the `tokio` feature).
     queue: VecDeque<Vec<u8>>,
     queue_at: usize,
     /// Writes queue what does not fit instead of waiting for room.
@@ -653,12 +653,14 @@ impl Sender {
     /// PF1): [`Sender::flush_queue`] writes it as room comes. Only where
     /// the node wakes a writer through the door
     /// ([`AppEnd::door_wakes_writer`]); whether it did.
+    #[cfg(feature = "tokio")]
     pub(crate) fn set_queued(&mut self) -> bool {
         self.queued = self.end.door_wakes_writer();
         self.queued
     }
 
     /// Write what is queued, as far as it fits; whether anything is left.
+    #[cfg(feature = "tokio")]
     pub(crate) fn flush_queue(&mut self) -> bool {
         while let Some(front) = self.queue.front() {
             let written = self.try_write(&front[self.queue_at..]);
