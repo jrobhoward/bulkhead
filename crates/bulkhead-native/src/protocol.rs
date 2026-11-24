@@ -570,6 +570,22 @@ impl ToApp {
     }
 }
 
+impl ToApp {
+    /// The bytes of the largest byte string this frame carries (a
+    /// message's body, an answer's), for [`encode_sized`]; 0 for one with
+    /// none worth sizing for.
+    #[must_use]
+    pub fn size_hint(&self) -> usize {
+        match self {
+            Self::Call { msg, .. } | Self::Cast { msg } => msg.body.len(),
+            Self::Init { args, .. } => args.len(),
+            Self::LoadSnapshot { snapshot, .. } => snapshot.len(),
+            Self::Answer { answer, .. } => answer.size_hint(),
+            _ => 0,
+        }
+    }
+}
+
 impl Info {
     /// As [`ToApp::since`], for the info a `ToApp::Info` carries.
     #[must_use]
@@ -1651,7 +1667,16 @@ impl std::error::Error for FrameError {}
 /// Encode `frame` with its length prefix.
 #[must_use]
 pub fn encode<T: Serialize>(frame: &T) -> Vec<u8> {
-    let mut out = vec![0; 4];
+    encode_sized(frame, 0)
+}
+
+/// [`encode`] into a buffer made for `hint` bytes of payload (a frame's
+/// `size_hint`) and the frame around them, so a large body is written
+/// once rather than into a buffer that regrows (ROADMAP PF1).
+#[must_use]
+pub fn encode_sized<T: Serialize>(frame: &T, hint: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(if hint == 0 { 64 } else { hint + 256 });
+    out.extend_from_slice(&[0; 4]);
     // Writing to a Vec does not fail, and these types always serialize.
     let _ = ciborium::into_writer(frame, &mut out);
     let len = u32::try_from(out.len() - 4).unwrap_or(u32::MAX);
@@ -1726,6 +1751,9 @@ pub fn answer_too_large(answer: &Answer, len: usize) -> Option<Answer> {
 ///
 /// [`FrameError::Decode`] for bytes that are not a `T`.
 pub fn decode<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, FrameError> {
+    // ciborium's own 4 KiB scratch: a scratch the frame's length, to read
+    // each byte string whole, made a 1 MiB body slower, a copy through
+    // memory out of cache where the small one stays in it (ROADMAP PF1).
     ciborium::from_reader(body).map_err(|e| FrameError::Decode(e.to_string()))
 }
 
@@ -1767,6 +1795,50 @@ pub fn read<T: for<'de> Deserialize<'de>>(r: &mut impl Read) -> Result<Option<T>
 pub fn write<T: Serialize>(w: &mut impl Write, frame: &T) -> io::Result<()> {
     w.write_all(&encode(frame))?;
     w.flush()
+}
+
+impl Answer {
+    /// As [`ToApp::size_hint`], for an answer.
+    #[must_use]
+    pub fn size_hint(&self) -> usize {
+        match self {
+            Self::Called(Ok(e)) => e.body.len(),
+            Self::Http(Ok(r)) => r.body.0.len(),
+            Self::Secret(Ok(b)) | Self::Extension(Ok(b)) => b.0.len(),
+            _ => 0,
+        }
+    }
+}
+
+impl FromApp {
+    /// As [`ToApp::size_hint`], for a frame from the app.
+    #[must_use]
+    pub fn size_hint(&self) -> usize {
+        match self {
+            Self::Reply(Some(e)) => e.body.len(),
+            Self::Snapshot(b) => b.0.len(),
+            Self::Request { request, .. } => request.size_hint(),
+            _ => 0,
+        }
+    }
+}
+
+impl Request {
+    /// As [`ToApp::size_hint`], for a request.
+    #[must_use]
+    pub fn size_hint(&self) -> usize {
+        match self {
+            Self::Cast { msg, .. }
+            | Self::CastWait { msg, .. }
+            | Self::Call { msg, .. }
+            | Self::Reply { msg, .. }
+            | Self::SendAfter { msg, .. }
+            | Self::CallApp { msg, .. }
+            | Self::CastApp { msg, .. } => msg.body.len(),
+            Self::Http(r) => r.body.0.len(),
+            _ => 0,
+        }
+    }
 }
 
 /// Byte strings as CBOR byte strings, not arrays.

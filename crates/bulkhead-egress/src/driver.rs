@@ -196,8 +196,11 @@ pub fn add_traceparent(
 /// `answer` as the driver's answer to a call.
 #[must_use]
 pub fn answer_envelope(answer: &Answer) -> Envelope {
-    match Envelope::cbor(answer) {
-        Ok(env) => env.with_schema(EGRESS_SCHEMA),
+    // Made for the body, so a large one is written once (ROADMAP PF1).
+    let size = answer.as_ref().map_or(0, |r| r.body.0.len());
+    let mut body = Vec::with_capacity(size + 512);
+    match ciborium::into_writer(answer, &mut body) {
+        Ok(()) => Envelope::new("application/cbor", body).with_schema(EGRESS_SCHEMA),
         Err(e) => Envelope::text(e.to_string()),
     }
 }

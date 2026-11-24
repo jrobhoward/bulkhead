@@ -3402,12 +3402,41 @@ Both machines at once, `scripts/overnight.sh`, three rounds, uncontended. "800 i
 - **One sender thread with 64 calls in flight answers about half of what the host's 64 calls in flight do on 16 cores** (330,000 a second), and close to it on the Pi (116,000). One thread on each side bounds it.
 - **Idle senders change nothing,** again.
 
+## 2026-11-24: large messages (PF1)
+
+**What was found.** A profile of S37's `POST` of 1 MiB through the ingress driver (the app echoes the body, so 1 MiB goes each way) on the 16-core machine:
+- **About half of the driver's time was in the kernel,** faulting pages in. glibc gave each block over about 128 KiB back on free and trimmed a thread's arena as soon as its top was free, so each large buffer was mapped and faulted again: `_int_free` calling `madvise` took 5.5% of all samples, `realloc` 5%, and the app showed the same.
+- **The rest was copies:** a 1 MiB body was copied about 25 times from the driver to the app, many into buffers that regrew, among them the SDK's HTTP encoding through a `ciborium::Value` holding a copy of the body.
+- **And waits:** after a callback hinted idle, the app slept and woke for each 64 KiB piece of a large frame, and a driver's thread blocked while it wrote a large request into its ring, stopping every connection on that thread.
+
+**The changes.** Every native app keeps freed memory (glibc's mmap and trim thresholds at 32 MiB); frames are encoded into buffers sized for their body and read without zeroing; the SDK serializes HTTP straight from its structs; the rest of a frame is read spinning first; a `sender_async` thread queues what does not fit in its ring (DESIGN.md, "Large messages"). A temporary `mallopt` alone, before the rest, took the 1 MiB `POST` from 8.5 to 11.3 ms of CPU to 6.4 ms on one connection.
+
+**Measured.** The commit before (a worktree of it) and the change, alternating, three rounds each, on the 16-core machine (load 3.4 at the start, no VM running). S37's rows: 5 s each through the ingress driver alone. `egress_cost`: 5,000 requests a row, 500 for 1 MiB. `native_cost`'s new rows (`NATIVE_COST_ROWS=large`): each round the median of 3 runs. The Raspberry Pi 5 could not be reached on the network that day.
+
+| | before | after |
+| --- | --- | --- |
+| S37 `POST` 1 MiB, 1 connection: per second, p50, CPU per request | 112 to 113, 8.85 to 9.00 ms, 10.6 to 10.8 ms | 244 to 253, 3.93 to 4.11 ms, 5.70 to 5.95 ms |
+| S37 `POST` 1 MiB, 32 connections | 430 to 447, 71.5 to 74.2 ms, 19.0 to 20.0 ms | 520 to 526, 54.2 to 58.5 ms, 14.9 to 15.2 ms |
+| S37 `POST` 64 KiB, 1 connection | 2,483 to 2,672, 365 to 394 µs, 478 to 520 µs | 3,010 to 3,607, 267 to 344 µs, 409 to 466 µs |
+| S37 `POST` 64 KiB, 32 connections | 15,098 to 16,274, 1.79 to 1.89 ms, 507 to 522 µs | 17,128 to 17,756, 1.58 to 1.65 ms, 432 to 447 µs |
+| `egress_cost` HTTP `GET` 1 MiB: p50, CPU per request | 4.44 to 7.56 ms, 6.94 to 9.16 ms | 5.31 to 5.66 ms, 7.02 to 7.82 ms |
+| `native_cost` 1 MiB body between instances: time, CPU per call | 1.50 to 1.57 ms, 1.95 to 2.13 ms | 1.34 to 1.46 ms, 2.18 to 2.32 ms |
+| `native_cost` 1 MiB body from the host | 1.1 to 1.2 ms, 1.20 to 1.30 ms | 0.82 to 1.1 ms, 1.40 to 2.02 ms |
+| `native_cost` 64 KiB body between instances | 118 to 133 µs, 211 to 237 µs | 105 to 109 µs, 196 to 200 µs |
+
+- **Through the ingress driver a 1 MiB request costs half the CPU and takes under half the time,** 2.2 times the requests a second on one connection and 1.2 times on 32. 64 KiB requests cost 12 to 15% less CPU.
+- **Egress is unchanged within the row's noise** (its before rows ranged from 4.4 to 7.6 ms). A profile spreads its cost over the test server, loopback TCP, the app and the node; the driver's threads are a small part. PF1's target of halving the driver's added cost there was not met.
+- **Between instances a 1 MiB body was already near S42's floor** (0.9 ms and 1.7 ms of CPU for two crossings on 16 cores) and stays there: 10% less time, up to 10% more CPU, since the reader of a large frame now spins between its pieces. From the host, a 1 MiB call takes up to a quarter less time and up to half more CPU, for the same reason.
+- **64 KiB bodies between instances still take about 110 µs,** six times S42's 14 to 18 µs: a frame just over the ring's 64 KiB crosses in two pieces, each a wait. Not changed here.
+- **Variance:** `native_cost`'s large rows moved by up to 40% between runs of the same binaries on this machine that day, and the 64 KiB row from the host fell into two groups (about 18 µs and 50 to 60 µs) by run, so only differences beyond that are claimed. A scratch buffer as long as the frame for decoding, and keeping the node's input buffer to any size, were tried and dropped on runs of this kind (DESIGN.md, "Large messages").
+
 ## Not measured yet
 
 - Why a call from a sender thread takes about 5.3 µs longer than a callback's, on both machines (2026-11-23, ROADMAP AP1b).
 - Where one HTTP/2 stream's 50 to 75 µs over an HTTP/1.1 connection goes inside the driver; the load client's threads account for 5 to 10 µs of it (2026-11-23, ROADMAP PF2).
 - Why the egress driver on one thread read 3 to 15% above its own rows of an hour before on the Pi (2026-11-23).
-- Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; the rest is the node's handling of large frames (PF1).
+- Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; PF1's changes did not move it beyond the row's noise (2026-11-24).
+- PF1's changes on the Raspberry Pi 5 (2026-11-24: not reachable that day).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 
 - The privileged helper on the 16-core machine (PS1c attributed the Pi's 2.7 µs to the `cpu` controller, which PS6b removed, 2026-11-19).

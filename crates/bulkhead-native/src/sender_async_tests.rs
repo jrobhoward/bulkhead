@@ -6,7 +6,7 @@ use std::os::fd::AsFd;
 use std::time::Duration;
 
 use super::*;
-use crate::channel::{AppEnd, Channel, bell, door, wake_reader};
+use crate::channel::{AppEnd, Channel, bell, door, wake_reader, wake_writer};
 use crate::protocol::FromApp;
 
 /// Play the node: read `n` calls from the app, wait `delay` (the app's
@@ -194,4 +194,142 @@ fn async_sender____casts_queued_and_refused____each_awaits_its_own_answer() {
     let _door = node.join().unwrap();
     assert_eq!(first, Ok(()));
     assert_eq!(second, Err(CastError::Overloaded));
+}
+
+/// What the app sent, as the node read it after `hold` (the ring full
+/// meanwhile): each frame's kind, in order, with a call's body length;
+/// calls answered with their own message. The node wakes the app for room
+/// through its door, as a node does for a writer waiting there.
+fn reading_node(
+    channel: Channel,
+    door_write: std::os::fd::OwnedFd,
+    n: usize,
+    hold: Duration,
+) -> (Vec<String>, std::os::fd::OwnedFd) {
+    std::thread::sleep(hold);
+    let mut buf = Vec::new();
+    let mut seen = Vec::new();
+    let mut chunk = vec![0u8; 65536];
+    while seen.len() < n {
+        let got = channel.to_node().read(&mut chunk).unwrap();
+        buf.extend_from_slice(&chunk[..got]);
+        wake_writer(channel.to_node().writer_waiting(), door_write.as_fd());
+        while buf.len() >= 4 {
+            let len = protocol::frame_len(buf[..4].try_into().unwrap()).unwrap();
+            if buf.len() < 4 + len {
+                break;
+            }
+            match protocol::decode::<FromApp>(&buf[4..4 + len]).unwrap() {
+                FromApp::Request {
+                    id,
+                    request: Request::CallApp { msg, .. },
+                } => {
+                    seen.push(format!("call {}", msg.body.len()));
+                    let frame = protocol::encode(&ToApp::Answer {
+                        id,
+                        answer: Answer::Called(Ok(text("done"))),
+                    });
+                    channel.to_app().write(&frame).unwrap();
+                    wake_reader(channel.to_app().reader_waiting(), door_write.as_fd());
+                }
+                FromApp::Metrics(_) => seen.push("metrics".into()),
+                other => panic!("unexpected: {other:?}"),
+            }
+            buf.drain(..4 + len);
+        }
+        if got == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    (seen, door_write)
+}
+
+#[test]
+fn async_sender____a_call_larger_than_the_ring____the_thread_runs_on_while_it_drains() {
+    let (channel, memfd) = Channel::create().unwrap();
+    let (_bell_read, bell_write) = bell().unwrap();
+    let (door_read, door_write) = door().unwrap();
+    let end = AppEnd::sender(
+        memfd,
+        bell_write,
+        door_read,
+        Spin(Duration::from_micros(50)),
+    )
+    .unwrap();
+    let node = std::thread::spawn(move || {
+        reading_node(channel, door_write, 1, Duration::from_millis(200))
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let local = tokio::task::LocalSet::new();
+
+    let (returned_in, ticks, answer) = local.block_on(&rt, async {
+        let sender = AsyncSender::new(Sender::for_tests(end)).unwrap();
+        tokio::task::spawn_local(sender.clone().pump());
+        // Another task on the thread, ticking while the node reads nothing.
+        let ticker = tokio::task::spawn_local(async {
+            let mut ticks = 0;
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                ticks += 1;
+            }
+            ticks
+        });
+        tokio::task::yield_now().await;
+        let started = std::time::Instant::now();
+        let big = Envelope {
+            body: vec![7; 1 << 20],
+            ..text("")
+        };
+        let call = sender.call_app("app", big, 5_000);
+        let returned_in = started.elapsed();
+        let ticks = tokio::time::timeout(Duration::from_millis(150), ticker)
+            .await
+            .ok()
+            .map(Result::unwrap);
+        (returned_in, ticks, call.await.unwrap().body)
+    });
+
+    let (seen, _door) = node.join().unwrap();
+    assert!(returned_in < Duration::from_millis(50), "{returned_in:?}");
+    assert_eq!(ticks, Some(10));
+    assert_eq!(answer, b"done".to_vec());
+    assert_eq!(seen, vec![format!("call {}", 1 << 20)]);
+}
+
+#[test]
+fn async_sender____frames_after_a_large_one____sent_in_order() {
+    let (channel, memfd) = Channel::create().unwrap();
+    let (_bell_read, bell_write) = bell().unwrap();
+    let (door_read, door_write) = door().unwrap();
+    let end = AppEnd::sender(memfd, bell_write, door_read, Spin(Duration::ZERO)).unwrap();
+    let node =
+        std::thread::spawn(move || reading_node(channel, door_write, 3, Duration::from_millis(50)));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let local = tokio::task::LocalSet::new();
+
+    let answers = local.block_on(&rt, async {
+        let sender = AsyncSender::new(Sender::for_tests(end)).unwrap();
+        tokio::task::spawn_local(sender.clone().pump());
+        let big = Envelope {
+            body: vec![7; 300_000],
+            ..text("")
+        };
+        let first = sender.call_app("app", big, 5_000);
+        sender.metric_add(0, 1.0);
+        let second = sender.call_app("app", text("small"), 5_000);
+        (first.await.unwrap().body, second.await.unwrap().body)
+    });
+
+    let (seen, _door) = node.join().unwrap();
+    assert_eq!(answers, (b"done".to_vec(), b"done".to_vec()));
+    assert_eq!(
+        seen,
+        vec!["call 300000".to_string(), "metrics".into(), "call 5".into()]
+    );
 }

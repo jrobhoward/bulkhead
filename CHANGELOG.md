@@ -8,6 +8,20 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Large messages cost less (ROADMAP PF1): through the ingress driver a
+  1 MiB request takes half the CPU and less than half the time on 16
+  cores, and 64 KiB requests 12 to 15% less CPU (BASELINE.md,
+  2026-11-24). Every native app on Linux with glibc now keeps freed memory
+  for reuse (mmap and trim thresholds at 32 MiB), so its resident memory
+  stays near its peak use; frames are encoded into buffers sized for their
+  body and read without zeroing; the SDK's `http::Request` and `Response`
+  encode without copying the body (same bytes), and
+  `Response::from_reply_owned` takes a reply without copying it; the rest
+  of a frame is read spinning first, whatever the idle hint; and a
+  `sender_async` thread queues what does not fit in its ring instead of
+  blocking every task on the thread until the node reads it, waking for
+  room through its door where the node says it supports that (a
+  `features` word in the channel's header).
 - Worker threads in the SQL and egress drivers (ROADMAP DA3b, DA4b):
   `[datasources.<name>] threads` and `[egress] threads`, each thread with
   a runtime, a sender channel and a pool of its own (SQL's a share of

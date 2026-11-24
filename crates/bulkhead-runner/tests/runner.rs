@@ -81,6 +81,7 @@ fn read_from_app(from: &mut impl Read) -> Option<FromApp> {
 struct FromRunner {
     channel: Arc<Channel>,
     bell: OwnedFd,
+    door: OwnedFd,
 }
 
 impl Read for FromRunner {
@@ -89,7 +90,7 @@ impl Read for FromRunner {
         loop {
             let n = ring.read(buf)?;
             if n > 0 {
-                channel::wake_writer(ring.writer_waiting());
+                channel::wake_writer(ring.writer_waiting(), self.door.as_fd());
                 return Ok(n);
             }
             match rustix::io::read(&self.bell, &mut [0u8; 64]) {
@@ -161,6 +162,7 @@ impl Port {
             from: FromRunner {
                 channel: channel.clone(),
                 bell,
+                door: door.try_clone().unwrap(),
             },
             channel,
             door,

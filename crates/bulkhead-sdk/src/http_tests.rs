@@ -4,6 +4,104 @@
 
 use super::*;
 
+fn text(s: &str) -> Value {
+    Value::Text(s.to_string())
+}
+
+/// `value` as an envelope of `schema`, as `to_envelope` wrote one before
+/// it serialized from the request itself (ROADMAP PF1).
+fn encode_value(value: &Value, schema: &str) -> Envelope {
+    let mut body = Vec::new();
+    ciborium::into_writer(value, &mut body).unwrap();
+    Envelope::new("application/cbor", body).with_schema(schema)
+}
+
+/// A request as a CBOR value, built as `to_envelope` built it before.
+fn request_value(r: &Request) -> Value {
+    let headers = r
+        .headers
+        .iter()
+        .map(|(k, v)| Value::Array(vec![text(k), text(v)]))
+        .collect();
+    let mut map = vec![
+        (text("scheme"), text(&r.scheme)),
+        (text("method"), text(&r.method)),
+        (text("path"), text(&r.path)),
+        (
+            text("query"),
+            r.query.clone().map_or(Value::Null, Value::Text),
+        ),
+        (text("headers"), Value::Array(headers)),
+        (text("body"), Value::Bytes(r.body.clone())),
+    ];
+    if let Some(key) = &r.key {
+        map.push((text("key"), text(key)));
+    }
+    if let Some(c) = &r.client_cert {
+        map.push((
+            text("client_cert"),
+            Value::Map(vec![
+                (text("sha256"), text(&c.sha256)),
+                (text("der"), Value::Bytes(c.der.clone())),
+            ]),
+        ));
+    }
+    Value::Map(map)
+}
+
+#[rstest::rstest]
+#[case::plain(None, None, None)]
+#[case::query_and_key(Some("a=1"), Some("k"), None)]
+#[case::client_cert(None, None, Some(ClientCert { sha256: "ab".into(), der: vec![1, 2, 3] }))]
+fn Request____to_envelope____the_bytes_of_the_value_encoding(
+    #[case] query: Option<&str>,
+    #[case] key: Option<&str>,
+    #[case] client_cert: Option<ClientCert>,
+) {
+    let req = Request {
+        scheme: "https".into(),
+        method: "POST".into(),
+        path: "/orders".into(),
+        query: query.map(str::to_string),
+        headers: vec![("a".into(), "b".into()), ("c".into(), "d".into())],
+        body: vec![7; 70_000],
+        key: key.map(str::to_string),
+        client_cert,
+    };
+
+    let env = req.to_envelope();
+
+    assert_eq!(env, encode_value(&request_value(&req), REQUEST_SCHEMA));
+}
+
+#[test]
+fn Response____to_envelope____the_bytes_of_the_value_encoding() {
+    let r = Response::new(201).header("x-a", "b").body(vec![9; 70_000]);
+    let value = Value::Map(vec![
+        (text("status"), Value::Integer(201.into())),
+        (
+            text("headers"),
+            Value::Array(vec![Value::Array(vec![text("x-a"), text("b")])]),
+        ),
+        (text("body"), Value::Bytes(vec![9; 70_000])),
+    ]);
+
+    let env = r.to_envelope();
+
+    assert_eq!(env, encode_value(&value, RESPONSE_SCHEMA));
+}
+
+#[test]
+fn Response____from_reply_owned_of_another_format____body_moved() {
+    let msg = Envelope::new("text/csv", b"a,b".to_vec());
+
+    let r = Response::from_reply_owned(msg).unwrap();
+
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers, vec![("content-type".into(), "text/csv".into())]);
+    assert_eq!(r.body, b"a,b");
+}
+
 #[test]
 fn Request____envelope____round_trips() {
     let req = Request {
@@ -54,7 +152,7 @@ fn reply(status: Option<Value>, headers: Value) -> Envelope {
     if let Some(s) = status {
         map.push((text("status"), s));
     }
-    encode(&Value::Map(map), RESPONSE_SCHEMA)
+    encode_value(&Value::Map(map), RESPONSE_SCHEMA)
 }
 
 #[test]

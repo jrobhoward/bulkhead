@@ -232,12 +232,19 @@ impl Pool {
                 .filter(|(n, _)| !forbidden(n))
                 .map(|(n, v)| (n.as_str().to_string(), p::Bytes(v.as_bytes().to_vec())))
                 .collect();
+            // One buffer for the declared length (within `max_body`), so a
+            // large body is copied once (ROADMAP PF1).
+            let declared = response
+                .headers()
+                .get(hyper::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
+                .map_or(0, |n| n.min(self.max_body));
             let mut body = Timed {
                 inner: response.into_body(),
                 between,
                 sleep: Box::pin(tokio::time::sleep(between)),
             };
-            let mut bytes = Vec::new();
+            let mut bytes = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
             while let Some(frame) = body.frame().await {
                 if let Ok(data) = frame?.into_data() {
                     if (bytes.len() + data.len()) as u64 > self.max_body {

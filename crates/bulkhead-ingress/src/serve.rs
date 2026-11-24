@@ -183,7 +183,7 @@ async fn handle(
         return status(StatusCode::PAYLOAD_TOO_LARGE, "body too large");
     }
     let (parts, body) = req.into_parts();
-    let body = match read_body(body, route.max_body, listening).await {
+    let body = match read_body(body, route.max_body, declared, listening).await {
         Ok(b) => b,
         Err(reply) => return *reply,
     };
@@ -207,7 +207,7 @@ async fn handle(
                 )
             })
             .collect(),
-        body: body.to_vec(),
+        body,
         key,
         client_cert: client.cloned(),
     };
@@ -252,21 +252,29 @@ fn roll() -> u32 {
 }
 
 /// The body, whole, within `max_body` and the listener's body timeout; a
-/// request with no body arms no timer.
+/// request with no body arms no timer. Read into one buffer, made for the
+/// `declared` length (already checked against `max_body`) when there is
+/// one, so a large body is copied once (ROADMAP PF1).
 async fn read_body(
     body: Incoming,
     max_body: u64,
+    declared: Option<u64>,
     listening: &Listening,
-) -> Result<Bytes, Box<Reply>> {
+) -> Result<Vec<u8>, Box<Reply>> {
     if hyper::body::Body::is_end_stream(&body) {
-        return Ok(Bytes::new());
+        return Ok(Vec::new());
     }
     let limit = usize::try_from(max_body).unwrap_or(usize::MAX);
     let read = async {
-        Limited::new(body, limit)
-            .collect()
-            .await
-            .map(http_body_util::Collected::to_bytes)
+        let size = declared.map_or(0, |n| usize::try_from(n).unwrap_or(0).min(limit));
+        let mut out = Vec::with_capacity(size);
+        let mut body = Limited::new(body, limit);
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame?.into_data() {
+                out.extend_from_slice(&data);
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(out)
     };
     match tokio::time::timeout(listening.config.body_timeout(), read).await {
         Err(_) => Err(Box::new(status(
@@ -327,7 +335,7 @@ fn from_call(result: Result<Envelope, CallError>, max_response: u64) -> Reply {
         Ok(reply) if u64::try_from(reply.body.len()).unwrap_or(u64::MAX) > max_response => {
             status(StatusCode::BAD_GATEWAY, "reply too large")
         }
-        Ok(reply) => match Response::from_reply(&reply.into()) {
+        Ok(reply) => match Response::from_reply_owned(reply.into()) {
             Some(r) => response(r),
             None => status(StatusCode::BAD_GATEWAY, "malformed response from the app"),
         },
@@ -378,6 +386,7 @@ pub fn fuzz_reply(body: &[u8]) -> u16 {
         content_type: "application/cbor".into(),
         schema: Some(bulkhead_sdk::http::RESPONSE_SCHEMA.into()),
         body: body.to_vec(),
+        trace: None,
     };
     Response::from_reply(&msg)
         .map_or(StatusCode::BAD_GATEWAY, |r| response(r).status())

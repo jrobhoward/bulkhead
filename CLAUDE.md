@@ -444,7 +444,9 @@ app's header) when nothing waits behind it and it came longer than the
 spin after the frame before; then neither the app nor the node's task
 spins until the next one. Without it, 100 instances each called now and
 then halved the Pi's calls in flight; waits for an answer within a
-callback always spin (T1b, BASELINE.md, 2026-11-05). Each side of a native
+callback always spin (T1b, BASELINE.md, 2026-11-05), and so does a wait
+for the rest of a frame whose first bytes came (PF1: after an idle hint a
+1 MiB frame otherwise slept and woke for each 64 KiB). Each side of a native
 instance's channel spins for `[native] spin_us` (default 20 µs) before it
 sleeps: a blocking round trip between processes costs two wake-ups of a
 sleeping thread whatever carries the bytes (S30, S32). An app thread

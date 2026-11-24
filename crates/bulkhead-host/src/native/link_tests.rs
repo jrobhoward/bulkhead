@@ -10,7 +10,7 @@ use rstest::rstest;
 
 use bulkhead_native::protocol::{self, FromApp};
 
-use super::{Next, hinted_idle, next_frame, too_new, turn};
+use super::{Next, frame_room, hinted_idle, next_frame, too_new, turn};
 use crate::native::port::Incoming;
 
 #[test]
@@ -138,4 +138,19 @@ fn next_frame____a_body_that_does_not_decode____broken() {
     let next = next_frame(&bytes);
 
     assert!(matches!(next, Next::Broken(_)), "{next:?}");
+}
+
+#[rstest]
+#[case::no_prefix_yet(vec![0, 0], None)]
+#[case::prefix_alone(1_000u32.to_be_bytes().to_vec(), Some(1_000))]
+#[case::part_of_the_body({ let mut v = 1_000u32.to_be_bytes().to_vec(); v.extend([0; 600]); v }, Some(400))]
+#[case::whole_frame_and_more({ let mut v = 4u32.to_be_bytes().to_vec(); v.extend([0; 10]); v }, None)]
+#[case::over_the_largest_frame(u32::MAX.to_be_bytes().to_vec(), None)]
+fn frame_room____what_is_in____the_rest_of_the_frame(
+    #[case] have: Vec<u8>,
+    #[case] want: Option<usize>,
+) {
+    let got = frame_room(&have);
+
+    assert_eq!(got, want);
 }

@@ -18,7 +18,7 @@
 //! sender closes its end of the bell, which ends the node's task for it
 //! and gives its place under the app's `senders_max` back.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 
@@ -43,6 +43,12 @@ pub struct Sender {
     started: HashMap<u64, Option<Result<Envelope, CallError>>>,
     out: Vec<u8>,
     inbuf: Vec<u8>,
+    /// Frames written only in part, the first from `queue_at`, while
+    /// writes do not block ([`Sender::set_queued`]).
+    queue: VecDeque<Vec<u8>>,
+    queue_at: usize,
+    /// Writes queue what does not fit instead of waiting for room.
+    queued: bool,
     /// Not `Sync`: one thread at a time.
     _one_thread: PhantomData<std::cell::Cell<()>>,
 }
@@ -69,6 +75,9 @@ impl Sender {
             started: HashMap::new(),
             out: Vec::new(),
             inbuf: Vec::new(),
+            queue: VecDeque::new(),
+            queue_at: 0,
+            queued: false,
             _one_thread: PhantomData,
         })
     }
@@ -83,6 +92,9 @@ impl Sender {
             started: HashMap::new(),
             out: Vec::new(),
             inbuf: Vec::new(),
+            queue: VecDeque::new(),
+            queue_at: 0,
+            queued: false,
             _one_thread: PhantomData,
         }
     }
@@ -579,22 +591,87 @@ impl Sender {
         if crate::hot::write_from_app(&mut out, frame).is_some() {
             self.write(&out);
         } else {
-            let bytes = protocol::encode(frame);
+            let bytes = protocol::encode_sized(frame, frame.size_hint());
             if refuse_over_limit && protocol::over_limit(&bytes) {
                 result = Err(bytes.len() - 4);
             } else {
-                self.write(&bytes);
+                self.write_owned(bytes);
             }
         }
         self.out = out;
         result
     }
 
-    fn write(&self, bytes: &[u8]) {
+    /// Write `bytes`, a buffer the caller keeps: blocking until there is
+    /// room, or queued in a copy of what does not fit.
+    fn write(&mut self, bytes: &[u8]) {
+        if !self.queued {
+            self.write_blocking(bytes);
+        } else if !self.queue.is_empty() {
+            self.queue.push_back(bytes.to_vec());
+        } else {
+            let written = self.try_write(bytes);
+            if written < bytes.len() {
+                self.queue.push_back(bytes[written..].to_vec());
+                self.queue_at = 0;
+            }
+        }
+    }
+
+    /// Write `bytes`, an encoded frame: as [`Sender::write`], what does
+    /// not fit queued in the same buffer.
+    fn write_owned(&mut self, bytes: Vec<u8>) {
+        if !self.queued {
+            self.write_blocking(&bytes);
+        } else if !self.queue.is_empty() {
+            self.queue.push_back(bytes);
+        } else {
+            let written = self.try_write(&bytes);
+            if written < bytes.len() {
+                self.queue.push_back(bytes);
+                self.queue_at = written;
+            }
+        }
+    }
+
+    fn try_write(&self, bytes: &[u8]) -> usize {
+        self.end.try_write_to_node(bytes).unwrap_or_else(|_| {
+            // The node broke the ring; it ends this process.
+            gone()
+        })
+    }
+
+    fn write_blocking(&self, bytes: &[u8]) {
         if ToNode(&self.end).write_all(bytes).is_err() {
             // The node broke the ring; it ends this process.
             gone();
         }
+    }
+
+    /// Have writes queue what does not fit in the ring instead of waiting
+    /// for room, for a thread that must not block (`sender_async`, ROADMAP
+    /// PF1): [`Sender::flush_queue`] writes it as room comes. Only where
+    /// the node wakes a writer through the door
+    /// ([`AppEnd::door_wakes_writer`]); whether it did.
+    pub(crate) fn set_queued(&mut self) -> bool {
+        self.queued = self.end.door_wakes_writer();
+        self.queued
+    }
+
+    /// Write what is queued, as far as it fits; whether anything is left.
+    pub(crate) fn flush_queue(&mut self) -> bool {
+        while let Some(front) = self.queue.front() {
+            let written = self.try_write(&front[self.queue_at..]);
+            if written == 0 {
+                return true;
+            }
+            self.queue_at += written;
+            if self.queue_at == front.len() {
+                self.queue.pop_front();
+                self.queue_at = 0;
+            }
+        }
+        false
     }
 
     /// The next frame from the node; its end means the node stopped this

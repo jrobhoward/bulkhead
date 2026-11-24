@@ -14,7 +14,9 @@
 //! `NATIVE_COST_SENDERS=N` has every instance hold `N` idle sender
 //! channels (ROADMAP AP1) through the run. A sender thread's requests,
 //! bucket gets and calls are timed beside a callback's, with 64 calls in
-//! flight from one sender (ROADMAP AP1b).
+//! flight from one sender (ROADMAP AP1b). Calls carrying 64 KiB and 1 MiB
+//! bodies, from the host and between instances, are timed with their CPU
+//! (ROADMAP PF1); `NATIVE_COST_ROWS=large` runs those rows alone.
 //!
 //! `NATIVE_COST_TRACED=1` sends every call and cast from the host with a
 //! trace (ROADMAP O1), so what a callback sends is traced too: traced
@@ -275,6 +277,86 @@ async fn sender_requests(h: &InstanceHandle, others: &[InstanceHandle]) {
     ask(h, &format!("sender drop {sender}")).await;
 }
 
+/// Calls from the host, one at a time, and calls between instances
+/// through it.
+async fn host_calls(pool: &[InstanceHandle]) {
+    let mut rng = Lcg(7);
+    let mut one = Vec::new();
+    for _ in 0..20_000 {
+        let h = &pool[rng.next(INSTANCES)];
+        let t = Instant::now();
+        ask(h, "echo x").await;
+        one.push(t.elapsed());
+    }
+    println!("call from the host, one at a time: {}", percentiles(one));
+
+    let mut relay = Vec::new();
+    for _ in 0..10_000 {
+        let i = rng.next(INSTANCES);
+        let to = pool[(i + 1 + rng.next(INSTANCES - 1)) % INSTANCES].pid();
+        let t = Instant::now();
+        let r = ask(
+            &pool[i],
+            &format!("call {}.{}.{} echo x", to.node, to.id, to.incarnation),
+        )
+        .await;
+        assert_eq!(r, "x");
+        relay.push(t.elapsed());
+    }
+    println!(
+        "call between instances (through the host): {}",
+        percentiles(relay)
+    );
+}
+
+/// Large bodies (ROADMAP PF1), one call at a time, answered with their
+/// length: from the host to an instance (one crossing of the rings), and
+/// from one instance to another (two, as S42's floor measured), with
+/// the CPU per call of the node and the app processes.
+async fn large_bodies(pool: &[InstanceHandle]) {
+    let to = pool[1].pid();
+    for kib in [64usize, 1024] {
+        let n = if kib > 64 { 500 } else { 5_000 };
+        let body = vec![b'x'; kib << 10];
+        let cpu0 = cpu_seconds();
+        let mut times = Vec::new();
+        for _ in 0..n {
+            let msg = Envelope::new("application/octet-stream", body.clone());
+            let t = Instant::now();
+            let reply = pool[1].call(msg, LONG).await.unwrap();
+            times.push(t.elapsed());
+            assert_eq!(reply.body, (kib << 10).to_string().as_bytes());
+        }
+        let cpu = (cpu_seconds() - cpu0) / n as f64;
+        println!(
+            "{kib} KiB body from the host: {}, {:.0} µs CPU per call",
+            percentiles(times),
+            cpu * 1e6
+        );
+        let mut per = Vec::new();
+        let cpu0 = cpu_seconds();
+        for _ in 0..5 {
+            let command = format!(
+                "bigcall-n {}.{}.{} {kib} {n}",
+                to.node, to.id, to.incarnation
+            );
+            let got = ask(&pool[0], &command).await;
+            per.push(
+                got.parse::<f64>()
+                    .unwrap_or_else(|_| panic!("{command}: {got}"))
+                    / n as f64,
+            );
+        }
+        let cpu = (cpu_seconds() - cpu0) / (5 * n) as f64;
+        per.sort_by(f64::total_cmp);
+        println!(
+            "{kib} KiB body between instances: {:.1} µs (median of 5 runs of {n}), {:.0} µs CPU per call",
+            per[2] / 1e3,
+            cpu * 1e6
+        );
+    }
+}
+
 /// Nanoseconds per get of key `t` from `bucket` in a callback: the
 /// median of 5 runs of 20,000.
 async fn gets(h: &InstanceHandle, bucket: &str) -> f64 {
@@ -343,39 +425,18 @@ async fn run(workers: usize) {
         pool.push(h);
     }
     println!("start, to the first reply: {}", percentiles(starts));
+    if std::env::var("NATIVE_COST_ROWS").as_deref() == Ok("large") {
+        large_bodies(&pool).await;
+        return;
+    }
     open_idle_senders(&pool).await;
 
-    let mut rng = Lcg(7);
-    let mut one = Vec::new();
-    for _ in 0..20_000 {
-        let h = &pool[rng.next(INSTANCES)];
-        let t = Instant::now();
-        ask(h, "echo x").await;
-        one.push(t.elapsed());
-    }
-    println!("call from the host, one at a time: {}", percentiles(one));
-
-    let mut relay = Vec::new();
-    for _ in 0..10_000 {
-        let i = rng.next(INSTANCES);
-        let to = pool[(i + 1 + rng.next(INSTANCES - 1)) % INSTANCES].pid();
-        let t = Instant::now();
-        let r = ask(
-            &pool[i],
-            &format!("call {}.{}.{} echo x", to.node, to.id, to.incarnation),
-        )
-        .await;
-        assert_eq!(r, "x");
-        relay.push(t.elapsed());
-    }
-    println!(
-        "call between instances (through the host): {}",
-        percentiles(relay)
-    );
+    host_calls(&pool).await;
 
     callback_requests(&pool[0]).await;
     bucket_gets(&pool).await;
     sender_requests(&pool[0], &pool[1..17]).await;
+    large_bodies(&pool).await;
 
     let casts = 50_000;
     let t = Instant::now();

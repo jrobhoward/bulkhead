@@ -17,6 +17,7 @@ path = "src/main.rs"
 bulkhead-sdk = { workspace = true }
 bulkhead-native = { workspace = true, features = ["app", "tokio"] }
 bytes = { workspace = true }
+ciborium = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-rustls = { workspace = true }
@@ -33,7 +34,6 @@ tower-service = { workspace = true }
 # Its integration tests run it as the node does, on a runtime of their own.
 bulkhead-bundle = { workspace = true }
 bulkhead-host = { workspace = true, features = ["egress"] }
-ciborium = { workspace = true }
 rcgen = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "io-util"] }

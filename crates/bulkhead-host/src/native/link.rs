@@ -18,6 +18,7 @@
 //! then neither the task nor the app spins until the next one (ROADMAP
 //! T1b).
 
+use std::collections::VecDeque;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -109,6 +110,13 @@ fn to_app_name(frame: &ToApp) -> &'static str {
 /// The largest hot-frame buffer a port keeps between frames.
 const KEPT_BUFFER: usize = 1 << 20;
 
+/// The largest input buffer a port keeps between frames: room for a
+/// frame carrying a 1 MiB body. Made again for each frame, a 1 MiB body
+/// between instances took about 15% longer (ROADMAP PF1); kept whatever
+/// its size, one 16 MiB message held 16 MiB of the node's memory for the
+/// instance's life.
+const KEPT_INPUT: usize = 2 << 20;
+
 thread_local! {
     /// Yields of native instances' waits on this thread (T9).
     static TURNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -176,6 +184,16 @@ pub(crate) fn next_frame(have: &[u8]) -> Next {
     }
 }
 
+/// The bytes still to come of the frame `have` starts, once its length
+/// prefix is in: room to reserve so the input grows once for a large
+/// frame. `None` before the prefix, or for a length the frame check will
+/// refuse.
+pub(crate) fn frame_room(have: &[u8]) -> Option<usize> {
+    let prefix = <[u8; 4]>::try_from(have.get(..4)?).ok()?;
+    let len = protocol::frame_len(prefix).ok()?;
+    (4 + len).checked_sub(have.len())
+}
+
 /// [`next_frame`] over `bytes` as the link reads them, frame after frame
 /// until one is incomplete or broken: the bytes consumed, and whether it
 /// broke. For the `ring_reader` fuzz target only.
@@ -214,9 +232,10 @@ pub(crate) struct Link {
     /// The app's end of the bell is closed: it has gone.
     exited: bool,
     input: Input,
-    /// Bytes for the app that did not fit in its ring yet, from
-    /// `pending_at`.
-    pending: Vec<u8>,
+    /// Frames for the app that did not fit in its ring yet, in order, the
+    /// first from `pending_at`: each kept in the buffer it was encoded
+    /// into rather than copied (ROADMAP PF1).
+    pending: VecDeque<Vec<u8>>,
     /// A hot frame being written, kept between frames (T7).
     out: Vec<u8>,
     pending_at: usize,
@@ -266,7 +285,7 @@ impl Link {
                 start: 0,
                 done: false,
             },
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             pending_at: 0,
             out: Vec::new(),
             closed: false,
@@ -312,10 +331,10 @@ impl Link {
         if bulkhead_native::hot::write_to_app_at(&mut out, frame, self.version).is_some() {
             self.send_bytes(&out);
         } else {
-            let bytes = protocol::encode(frame);
+            let bytes = protocol::encode_sized(frame, frame.size_hint());
             match over_limit_instead(frame, &bytes) {
-                Some(instead) => self.send_bytes(&protocol::encode(&instead)),
-                None => self.send_bytes(&bytes),
+                Some(instead) => self.send_owned(protocol::encode(&instead)),
+                None => self.send_owned(bytes),
             }
         }
         if out.capacity() <= KEPT_BUFFER {
@@ -339,7 +358,7 @@ impl Link {
             answer: Answer::Kv(Ok(KvAnswer::Unit)),
         };
         match over_limit_instead(&answer, &out) {
-            Some(instead) => self.send_bytes(&protocol::encode(&instead)),
+            Some(instead) => self.send_owned(protocol::encode(&instead)),
             None => self.send_bytes(&out),
         }
         // A large value's buffer is not kept for the instance's life.
@@ -348,43 +367,80 @@ impl Link {
         }
     }
 
+    /// Send `bytes`, a buffer the caller keeps (a hot frame's): what does
+    /// not fit now is copied to wait.
     fn send_bytes(&mut self, bytes: &[u8]) {
-        self.active = Instant::now();
-        if self.pending_at < self.pending.len() {
-            self.pending.extend_from_slice(bytes);
+        if !self.pending.is_empty() {
+            self.pending.push_back(bytes.to_vec());
             self.flush();
             return;
         }
-        let ring = self.channel.to_app();
-        let written = match ring.write(bytes) {
-            Ok(n) => n,
-            Err(e) => return self.corrupt(e),
-        };
-        channel::wake_reader(ring.reader_waiting(), self.door.as_fd());
-        if written < bytes.len() {
-            self.pending.clear();
-            self.pending.extend_from_slice(&bytes[written..]);
+        if let Some(written) = self.write_ring(bytes)
+            && written < bytes.len()
+        {
+            self.pending.push_back(bytes[written..].to_vec());
             self.pending_at = 0;
         }
     }
 
-    /// Write what waits for the app's ring, as far as it fits.
-    fn flush(&mut self) {
-        if self.pending_at == self.pending.len() {
+    /// Send `bytes`, an encoded frame: what does not fit now waits in
+    /// the same buffer.
+    fn send_owned(&mut self, bytes: Vec<u8>) {
+        if !self.pending.is_empty() {
+            self.pending.push_back(bytes);
+            self.flush();
             return;
         }
+        if let Some(written) = self.write_ring(&bytes)
+            && written < bytes.len()
+        {
+            self.pending.push_back(bytes);
+            self.pending_at = written;
+        }
+    }
+
+    /// Write as much of `bytes` into the app's ring as fits, nothing
+    /// waiting before it; how much did. `None` once the ring broke.
+    fn write_ring(&mut self, bytes: &[u8]) -> Option<usize> {
+        self.active = Instant::now();
         let ring = self.channel.to_app();
-        match ring.write(&self.pending[self.pending_at..]) {
-            Ok(0) => {}
-            Ok(n) => {
-                self.pending_at += n;
-                channel::wake_reader(ring.reader_waiting(), self.door.as_fd());
-                if self.pending_at == self.pending.len() {
-                    self.pending.clear();
-                    self.pending_at = 0;
+        let written = match ring.write(bytes) {
+            Ok(n) => n,
+            Err(e) => {
+                self.corrupt(e);
+                return None;
+            }
+        };
+        channel::wake_reader(ring.reader_waiting(), self.door.as_fd());
+        Some(written)
+    }
+
+    /// Write what waits for the app's ring, as far as it fits. Bytes
+    /// going out count as activity, so the wait keeps spinning while a
+    /// large frame drains into the ring (ROADMAP PF1).
+    fn flush(&mut self) {
+        let ring = self.channel.to_app();
+        let mut wrote = false;
+        while let Some(front) = self.pending.front() {
+            match ring.write(&front[self.pending_at..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    wrote = true;
+                    self.pending_at += n;
+                    if self.pending_at == front.len() {
+                        self.pending.pop_front();
+                        self.pending_at = 0;
+                    }
+                }
+                Err(e) => {
+                    self.corrupt(e);
+                    return;
                 }
             }
-            Err(e) => self.corrupt(e),
+        }
+        if wrote {
+            self.active = Instant::now();
+            channel::wake_reader(ring.reader_waiting(), self.door.as_fd());
         }
     }
 
@@ -456,31 +512,32 @@ impl Link {
         }
     }
 
-    /// What the app sent, appended to the input; how many bytes.
+    /// What the app sent, appended to the input; how many bytes. The
+    /// buffer grows once to a frame's length when its prefix is in, and
+    /// is not zeroed first (ROADMAP PF1); one past [`KEPT_INPUT`] is not
+    /// kept once read.
     fn read(&mut self) -> Result<usize, channel::Corrupt> {
         let ring = self.channel.to_node();
         let input = &mut self.input;
         if input.start > 0 && input.start == input.buf.len() {
             input.buf.clear();
             input.start = 0;
+            if input.buf.capacity() > KEPT_INPUT {
+                input.buf = Vec::with_capacity(RING_CAP);
+            }
         } else if input.start > RING_CAP {
             input.buf.drain(..input.start);
             input.start = 0;
         }
-        // Only what is there: growing the buffer zeroes it.
-        let available = ring.available()?;
-        if available == 0 {
-            return Ok(0);
+        if let Some(want) = frame_room(&input.buf[input.start..]) {
+            input.buf.reserve(want);
         }
-        let len = input.buf.len();
-        input.buf.resize(len + available, 0);
-        let n = ring.read(&mut input.buf[len..]);
-        input.buf.truncate(len + *n.as_ref().unwrap_or(&0));
-        if n.as_ref().is_ok_and(|n| *n > 0) {
+        let n = ring.read_into(&mut input.buf, usize::MAX)?;
+        if n > 0 {
             // The app may wait for the room just made.
-            channel::wake_writer(ring.writer_waiting());
+            channel::wake_writer(ring.writer_waiting(), self.door.as_fd());
         }
-        n
+        Ok(n)
     }
 
     /// Wait for the app: spinning (yielding to the runtime's other
@@ -502,7 +559,7 @@ impl Link {
                 return;
             }
         }
-        let waiting_room = self.pending_at < self.pending.len();
+        let waiting_room = !self.pending.is_empty();
         let (to_node, to_app) = (self.channel.to_node(), self.channel.to_app());
         to_node.reader_waiting().store(1, Ordering::SeqCst);
         if waiting_room {
@@ -537,7 +594,7 @@ impl Link {
     /// searching, and the search ends by waking a parked worker that
     /// finds nothing (ROADMAP T9).
     fn watch(&self) -> bool {
-        let waiting_room = self.pending_at < self.pending.len();
+        let waiting_room = !self.pending.is_empty();
         let (to_node, to_app) = (self.channel.to_node(), self.channel.to_app());
         let until = (Instant::now() + WATCH_SLICE).min(self.active + self.spin);
         loop {

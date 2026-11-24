@@ -48,6 +48,9 @@ fn read_guest(guest: &str) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The content type of a bulk body (`bigcall-n`), answered with its length.
+pub(crate) const BULK: &str = "application/octet-stream";
+
 pub(crate) fn text(s: impl Into<String>) -> Envelope {
     Envelope::new("text/plain", s.into().into_bytes())
 }
@@ -399,6 +402,7 @@ impl Fixture {
             // (ROADMAP AP1b: against a sender's `call-n`).
             "call-n" => call_n(ctx, pid(), tail.parse().unwrap_or(0)),
             "bigcall" => big_call(ctx, pid(), tail.parse().unwrap_or(0)),
+            "bigcall-n" => big_call_n(ctx, pid(), tail),
             "cast" => {
                 ctx.cast(pid(), text(tail));
                 "ok".into()
@@ -761,6 +765,11 @@ impl App for Fixture {
             reply.schema = msg.schema;
             return Some(reply);
         }
+        // A bulk body (`bigcall-n`), answered with its length and not
+        // read: what PF1 measures is the node's part.
+        if msg.content_type == BULK {
+            return Some(text(msg.body.len().to_string()));
+        }
         // `{"key": ..., "cmd": ...}` from `call-app`: a body a pool can
         // hash, carrying a command.
         // Kept, and formatted only when asked: formatted for every call, it
@@ -903,6 +912,24 @@ fn big_call(ctx: &mut Ctx, to: Pid, mib: usize) -> String {
         Ok(reply) => String::from_utf8_lossy(&reply.body).into_owned(),
         Err(e) => format!("err:{e:?}"),
     }
+}
+
+/// `bigcall-n PID KIB N`: `N` calls to `to`, one at a time, each with a
+/// body of `KIB` KiB that the callee answers with its length (ROADMAP
+/// PF1); the nanoseconds they took.
+fn big_call_n(ctx: &mut Ctx, to: Pid, args: &str) -> String {
+    let mut words = args.split(' ').map(|w| w.parse::<usize>().unwrap_or(0));
+    let (kib, n) = (words.next().unwrap_or(0), words.next().unwrap_or(0));
+    let started = std::time::Instant::now();
+    for _ in 0..n {
+        let body = Envelope::new(BULK, vec![b'x'; kib << 10]);
+        match ctx.call(to, body, 5_000) {
+            Ok(reply) if reply.body == (kib << 10).to_string().as_bytes() => {}
+            Ok(reply) => return format!("err:{}", String::from_utf8_lossy(&reply.body)),
+            Err(e) => return format!("err:{e:?}"),
+        }
+    }
+    started.elapsed().as_nanos().to_string()
 }
 
 /// `kv OP BUCKET ...`: the keyvalue requests, answered as text (`err:` and

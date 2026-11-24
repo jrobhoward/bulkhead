@@ -57,11 +57,19 @@
 //! | 256 | `closed` (u32): 1 once the writer will write no more | the writer |
 //! | 320 | `idle_hint` (u32), in the ring to the app: 1 when the node expects no callback soon | the node |
 //! | 384 | `refused_call` (u32), in the ring to the node: 1 plus the number of the system call the app's filter refused, as the app ends | the app |
+//! | 448 | `features` (u32), in the ring to the node: what this node's end does, [`DOOR_WAKES_WRITER`] | the node, at [`Channel::create`] |
 //!
 //! Positions only grow; a byte at position `p` is at `HEADER + p % RING_CAP`.
 //! A side that finds the other's word set after writing (or reading)
 //! clears it and wakes the other: a wake on that word for the app,
-//! a byte on the bell for the node. Neither side trusts the positions the
+//! a byte on the bell for the node. An app's writer that waits on its
+//! door rather than the word (`sender_async`, ROADMAP PF1) sets
+//! `writer_waiting` to [`WAKE_THROUGH_DOOR`] instead, and the node wakes it
+//! with a byte on the door, where the node says it does
+//! ([`DOOR_WAKES_WRITER`]; a channel an older node made reads 0 there).
+//! A reader in the middle of a frame spins before it sleeps whatever the
+//! idle hint says ([`AppEnd::read_rest_from_node`]): the rest of the frame
+//! follows at once. Neither side trusts the positions the
 //! other writes: [`Ring::read`] and [`Ring::write`] refuse a ring holding
 //! more than [`RING_CAP`] bytes ([`Corrupt`]), every copy stays inside the
 //! data area, and the node decodes frames only from its own copy. The
@@ -123,7 +131,15 @@ const WRITER_WAITING: usize = 192;
 const CLOSED: usize = 256;
 const IDLE_HINT: usize = 320;
 const REFUSED_CALL: usize = 384;
+const FEATURES: usize = 448;
 
+/// A bit of the `features` word: the node wakes a writer that set
+/// `writer_waiting` to [`WAKE_THROUGH_DOOR`] with a byte on its door
+/// (ROADMAP PF1).
+pub const DOOR_WAKES_WRITER: u32 = 1;
+/// The `writer_waiting` of an app's writer waiting on its door for room,
+/// not on the word.
+pub const WAKE_THROUGH_DOOR: u32 = 2;
 /// The other side broke the ring's rules: more queued than the ring
 /// holds. The node ends such an app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,7 +194,12 @@ impl Channel {
                 | rustix::fs::SealFlags::GROW
                 | rustix::fs::SealFlags::SEAL,
         )?;
-        Ok((Self::map(fd.as_fd())?, fd))
+        let channel = Self::map(fd.as_fd())?;
+        channel
+            .to_node()
+            .word32(FEATURES)
+            .store(DOOR_WAKES_WRITER, Ordering::SeqCst);
+        Ok((channel, fd))
     }
 
     /// The channel the node handed this app at `fd`.
@@ -288,10 +309,19 @@ impl Ring<'_> {
         self.word32(REFUSED_CALL)
     }
 
-    /// 1 while the writer waits for room.
+    /// 1 while the writer waits for room, [`WAKE_THROUGH_DOOR`] while an
+    /// app's writer waits on its door instead.
     #[must_use]
     pub fn writer_waiting(&self) -> &AtomicU32 {
         self.word32(WRITER_WAITING)
+    }
+
+    /// What the node's end of the channel does (the ring to the node
+    /// only): [`DOOR_WAKES_WRITER`], or 0 from an older node. Written by
+    /// the node; only a hint to the app.
+    #[must_use]
+    pub fn features(&self) -> u32 {
+        self.word32(FEATURES).load(Ordering::Acquire)
     }
 
     /// Bytes queued, checked against the ring's size.
@@ -376,6 +406,31 @@ impl Ring<'_> {
         Ok(n)
     }
 
+    /// Read up to `max` bytes onto the end of `out`, into its spare
+    /// capacity, without zeroing it first; how many came.
+    ///
+    /// # Errors
+    ///
+    /// [`Corrupt`] if the writer's position is impossible.
+    pub fn read_into(&self, out: &mut Vec<u8>, max: usize) -> Result<usize, Corrupt> {
+        let head = self.word64(HEAD).load(Ordering::Relaxed);
+        let n = max.min(self.queued()?);
+        if n > 0 {
+            out.reserve(n);
+            let len = out.len();
+            // SAFETY: `reserve` made room for `n` bytes past `len`.
+            let at = unsafe { out.as_mut_ptr().add(len) };
+            self.copy(head, at, n, false);
+            // SAFETY: `copy` wrote all `n` bytes after `len`, within the
+            // capacity reserved.
+            unsafe { out.set_len(len + n) };
+            self.word64(HEAD)
+                .store(head.wrapping_add(n as u64), Ordering::Release);
+            fence(Ordering::SeqCst);
+        }
+        Ok(n)
+    }
+
     /// Copy `n` bytes (at most [`RING_CAP`]) between `at` in the ring and
     /// `other`, wrapping at the end of the data area.
     ///
@@ -426,10 +481,19 @@ pub fn wake_reader(word: &AtomicU32, door: BorrowedFd<'_>) {
 }
 
 /// Wake the app's thread waiting for room, if `word` (the ring to the
-/// node's `writer_waiting`) says it sleeps.
-pub fn wake_writer(word: &AtomicU32) {
-    if take_waiting(word) {
-        word_wake(word);
+/// node's `writer_waiting`) says it sleeps: on the word, or through its
+/// `door` for a writer that waits there ([`WAKE_THROUGH_DOOR`]).
+pub fn wake_writer(word: &AtomicU32, door: BorrowedFd<'_>) {
+    if word.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    match word.swap(0, Ordering::SeqCst) {
+        1 => word_wake(word),
+        WAKE_THROUGH_DOOR => {
+            // Full, the door already wakes the app.
+            let _ = rustix::io::write(door, &[1]);
+        }
+        _ => {}
     }
 }
 
@@ -916,6 +980,23 @@ impl AppEnd {
     ///
     /// The node broke the ring.
     pub fn read_from_node(&self, out: &mut [u8]) -> io::Result<usize> {
+        self.read_waiting(out, true)
+    }
+
+    /// [`AppEnd::read_from_node`] for the rest of a frame whose first
+    /// bytes came: it spins before it sleeps whatever the node's idle hint
+    /// says, since the node is writing the rest now (ROADMAP PF1). After an
+    /// idle callback a 1 MiB frame otherwise slept and woke for each
+    /// 64 KiB.
+    ///
+    /// # Errors
+    ///
+    /// The node broke the ring.
+    pub fn read_rest_from_node(&self, out: &mut [u8]) -> io::Result<usize> {
+        self.read_waiting(out, false)
+    }
+
+    fn read_waiting(&self, out: &mut [u8], may_idle: bool) -> io::Result<usize> {
         let ring = self.channel.to_app();
         loop {
             let n = ring.read(out)?;
@@ -928,7 +1009,8 @@ impl AppEnd {
             if ring.is_closed() && !ring.is_readable() {
                 return Ok(0);
             }
-            let idle = self.between.load(Ordering::Relaxed)
+            let idle = may_idle
+                && self.between.load(Ordering::Relaxed)
                 && ring.idle_hint().load(Ordering::SeqCst) == 1;
             let spin = if idle {
                 Spin(Duration::ZERO)
@@ -963,6 +1045,27 @@ impl AppEnd {
         let ring = self.channel.to_app();
         let n = ring.read(out)?;
         if n > 0 || out.is_empty() {
+            if take_waiting(ring.writer_waiting()) {
+                self.ring_bell();
+            }
+            return Ok(Some(n));
+        }
+        if ring.is_closed() && !ring.is_readable() {
+            return Ok(Some(0));
+        }
+        Ok(None)
+    }
+
+    /// [`AppEnd::try_read_from_node`] onto the end of `out`, into its
+    /// spare capacity without zeroing it first ([`Ring::read_into`]).
+    ///
+    /// # Errors
+    ///
+    /// The node broke the ring.
+    pub fn try_read_into_from_node(&self, out: &mut Vec<u8>) -> io::Result<Option<usize>> {
+        let ring = self.channel.to_app();
+        let n = ring.read_into(out, usize::MAX)?;
+        if n > 0 {
             if take_waiting(ring.writer_waiting()) {
                 self.ring_bell();
             }
@@ -1012,6 +1115,59 @@ impl AppEnd {
     #[must_use]
     pub fn door(&self) -> BorrowedFd<'_> {
         self.door.as_fd()
+    }
+
+    /// Write as much of `bytes` to the node as fits now, waking the node
+    /// if it sleeps; how much did (0 when the ring is full).
+    ///
+    /// # Errors
+    ///
+    /// The node broke the ring.
+    pub fn try_write_to_node(&self, bytes: &[u8]) -> io::Result<usize> {
+        let ring = self.channel.to_node();
+        let n = ring.write(bytes)?;
+        if n > 0 && take_waiting(ring.reader_waiting()) {
+            self.ring_bell();
+        }
+        Ok(n)
+    }
+
+    /// Whether the node wakes a writer waiting on the door
+    /// ([`DOOR_WAKES_WRITER`]): if not, an app's writer must block on the
+    /// word as [`AppEnd::write_to_node`] does.
+    #[must_use]
+    pub fn door_wakes_writer(&self) -> bool {
+        self.channel.to_node().features() & DOOR_WAKES_WRITER != 0
+    }
+
+    /// Whether the ring to the node has room.
+    #[must_use]
+    pub fn has_room_to_node(&self) -> bool {
+        self.channel.to_node().has_room()
+    }
+
+    /// Say this side waits on [`AppEnd::door`] for room in the ring to the
+    /// node ([`WAKE_THROUGH_DOOR`]), where [`AppEnd::door_wakes_writer`]:
+    /// `false`, and nothing said, when there is room already.
+    #[must_use]
+    pub fn arm_writer(&self) -> bool {
+        let ring = self.channel.to_node();
+        ring.writer_waiting()
+            .store(WAKE_THROUGH_DOOR, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if ring.has_room() {
+            ring.writer_waiting().store(0, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
+    /// Take back [`AppEnd::arm_writer`] after the wait.
+    pub fn disarm_writer(&self) {
+        self.channel
+            .to_node()
+            .writer_waiting()
+            .store(0, Ordering::SeqCst);
     }
 
     /// Write some of `bytes` to the node, blocking until there is room.

@@ -316,3 +316,44 @@ fn trace____every_byte_value____lowercase_hex_two_digits_each() {
         );
     }
 }
+
+fn bulk(n: usize) -> Envelope {
+    Envelope::new("application/octet-stream", vec![9; n])
+}
+
+#[rstest]
+#[case::call(ToApp::Call { call_ref: 3, msg: bulk(70_000) }, 70_000)]
+#[case::cast(ToApp::Cast { msg: bulk(5) }, 5)]
+#[case::called(ToApp::Answer { id: 1, answer: Answer::Called(Ok(bulk(100_000))) }, 100_000)]
+#[case::ping(ToApp::Ping { id: 1 }, 0)]
+fn to_app_size_hint____frames____their_largest_body(#[case] frame: ToApp, #[case] hint: usize) {
+    let got = frame.size_hint();
+
+    assert_eq!(got, hint);
+}
+
+#[rstest]
+#[case::reply(FromApp::Reply(Some(bulk(70_000))), 70_000)]
+#[case::call_app(FromApp::Request { id: 1, request: Request::CallApp { app: "a".into(), msg: bulk(200_000), timeout_ms: 1, partner: false } }, 200_000)]
+#[case::done(FromApp::Done, 0)]
+fn from_app_size_hint____frames____their_largest_body(#[case] frame: FromApp, #[case] hint: usize) {
+    let got = frame.size_hint();
+
+    assert_eq!(got, hint);
+}
+
+#[rstest]
+#[case::no_hint(0)]
+#[case::the_body(1 << 20)]
+#[case::too_small(10)]
+fn encode_sized____any_hint____the_bytes_encode_gives(#[case] hint: usize) {
+    let frame = ToApp::Call {
+        call_ref: 3,
+        msg: bulk(1 << 20),
+    };
+
+    let sized = encode_sized(&frame, hint);
+
+    assert_eq!(sized, encode(&frame));
+    assert_eq!(decode::<ToApp>(&sized[4..]).unwrap(), frame);
+}

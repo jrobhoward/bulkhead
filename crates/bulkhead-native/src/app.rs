@@ -175,7 +175,7 @@ fn try_send(frame: &FromApp, refuse_over_limit: bool) -> Result<(), usize> {
             Some(())
         });
         if hot.is_none() {
-            let bytes = protocol::encode(frame);
+            let bytes = protocol::encode_sized(frame, frame.size_hint());
             if refuse_over_limit && protocol::over_limit(&bytes) {
                 return Err(bytes.len() - 4);
             }
@@ -244,6 +244,41 @@ fn with_conn<R>(f: impl FnOnce(&mut Conn) -> R) -> R {
         Some(conn) => f(conn),
         None => protocol_error("a request from a thread that does not run the callbacks"),
     })
+}
+
+/// Most bytes glibc's allocator hands out from its arenas rather than a
+/// mapping of their own, and keeps free at the top of an arena before
+/// giving them back: 32 MiB, above the largest frame
+/// ([`protocol::MAX_FRAME`]).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const KEPT_BY_MALLOC: i32 = 32 << 20;
+
+/// Have glibc keep freed memory for the next allocation (ROADMAP PF1). By
+/// default it maps each block over about 128 KiB on its own and gives it
+/// back on free, and trims a thread's arena as soon as its top is free, so
+/// every large message faulted its pages in again: a 1 MiB request through
+/// the ingress driver spent most of its time in page faults and
+/// `madvise`. An app now keeps up to its peak use; what it frees is
+/// reused. FreeBSD's allocator (jemalloc) decays freed pages on its own.
+fn keep_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        // glibc's `mallopt` parameters.
+        const M_TRIM_THRESHOLD: i32 = -1;
+        const M_MMAP_THRESHOLD: i32 = -3;
+        unsafe extern "C" {
+            fn mallopt(param: i32, value: i32) -> i32;
+        }
+        // SAFETY: `mallopt` only sets the allocator's parameters, before
+        // this process starts its other threads.
+        let ok = unsafe {
+            mallopt(M_MMAP_THRESHOLD, KEPT_BY_MALLOC) == 1
+                && mallopt(M_TRIM_THRESHOLD, KEPT_BY_MALLOC) == 1
+        };
+        if !ok {
+            eprintln!("bulkhead-native: the allocator's thresholds were refused");
+        }
+    }
 }
 
 /// The node's next frame, answering pings on the way; the end of the
@@ -342,10 +377,23 @@ fn read_frame(end: &AppEnd, conn: &mut Conn) -> Result<bool, protocol::FrameErro
     if conn.inbuf.len() < len {
         conn.inbuf.resize(len, 0);
     }
-    from.read_exact(&mut conn.inbuf[..len])
-        .map_err(FrameError::Io)?;
+    // The rest of the frame follows at once: it is read spinning first,
+    // whatever the node's idle hint said (ROADMAP PF1).
+    read_rest(end, &mut conn.inbuf[..len]).map_err(FrameError::Io)?;
     conn.in_len = len;
     Ok(true)
+}
+
+/// Fill `out` with the rest of a frame ([`AppEnd::read_rest_from_node`]).
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn read_rest(end: &AppEnd, mut out: &mut [u8]) -> io::Result<()> {
+    while !out.is_empty() {
+        match end.read_rest_from_node(out)? {
+            0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+            n => out = &mut out[n..],
+        }
+    }
+    Ok(())
 }
 
 /// Map a published bucket's new snapshot in place of the one before. One
@@ -1717,6 +1765,7 @@ fn watch_refused_calls() {
 
 /// Serve `A` to the node over its channel until the node stops it.
 pub fn serve<A: App>() -> ExitCode {
+    keep_freed_memory();
     // Not dumpable again: the runner made itself so, but `execve` resets
     // it for a readable program. Without this a crash went through the
     // system's core handler (the node saw the exit 0.1 to 0.3 s late,

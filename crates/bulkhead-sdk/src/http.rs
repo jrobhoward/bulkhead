@@ -63,10 +63,6 @@ pub struct ClientCert {
     pub der: Vec<u8>,
 }
 
-fn text(s: &str) -> Value {
-    Value::Text(s.to_string())
-}
-
 fn field<'a>(map: &'a [(Value, Value)], name: &str) -> Option<&'a Value> {
     map.iter()
         .find(|(k, _)| k.as_text() == Some(name))
@@ -97,7 +93,8 @@ impl Request {
         if msg.schema.as_deref() != Some(REQUEST_SCHEMA) {
             return None;
         }
-        let value: Value = ciborium::from_reader(msg.body.as_slice()).ok()?;
+        let mut value = decode(&msg.body)?;
+        let body = take_bytes(&mut value, "body");
         let map = value.as_map()?;
         let get_text = |name| {
             field(map, name)
@@ -110,10 +107,7 @@ impl Request {
             path: get_text("path")?,
             query: get_text("query"),
             headers: pairs(field(map, "headers")),
-            body: field(map, "body")
-                .and_then(Value::as_bytes)
-                .cloned()
-                .unwrap_or_default(),
+            body,
             key: get_text("key"),
             client_cert: field(map, "client_cert")
                 .and_then(Value::as_map)
@@ -152,46 +146,94 @@ impl Request {
             .map(|(_, v)| v)
     }
 
-    /// The request as an envelope, as the node sends it (for tests).
+    /// The request as an envelope, as the ingress sends it: a CBOR map,
+    /// written from the request without copying its body first (ROADMAP
+    /// PF1).
     #[must_use]
     pub fn to_envelope(&self) -> Envelope {
-        let headers = self
-            .headers
-            .iter()
-            .map(|(k, v)| Value::Array(vec![text(k), text(v)]))
-            .collect();
-        let mut map = vec![
-            (text("scheme"), text(&self.scheme)),
-            (text("method"), text(&self.method)),
-            (text("path"), text(&self.path)),
-            (
-                text("query"),
-                self.query.clone().map_or(Value::Null, Value::Text),
-            ),
-            (text("headers"), Value::Array(headers)),
-            (text("body"), Value::Bytes(self.body.clone())),
-        ];
-        if let Some(key) = &self.key {
-            map.push((text("key"), text(key)));
-        }
-        if let Some(c) = &self.client_cert {
-            map.push((
-                text("client_cert"),
-                Value::Map(vec![
-                    (text("sha256"), text(&c.sha256)),
-                    (text("der"), Value::Bytes(c.der.clone())),
-                ]),
-            ));
-        }
-        encode(&Value::Map(map), REQUEST_SCHEMA)
+        let wire = RequestWire {
+            scheme: &self.scheme,
+            method: &self.method,
+            path: &self.path,
+            query: self.query.as_deref(),
+            headers: &self.headers,
+            body: &self.body,
+            key: self.key.as_deref(),
+            client_cert: self.client_cert.as_ref().map(|c| CertWire {
+                sha256: &c.sha256,
+                der: &c.der,
+            }),
+        };
+        encode(&wire, self.body.len(), REQUEST_SCHEMA)
     }
 }
 
-fn encode(value: &Value, schema: &str) -> Envelope {
-    let mut body = Vec::new();
-    // Writing a CBOR value to a Vec cannot fail.
-    let _ = ciborium::into_writer(value, &mut body);
-    Envelope::new("application/cbor", body).with_schema(schema)
+/// A request as its envelope carries it: the keys and their order are the
+/// format (GUEST_FORMATS.md, "HTTP").
+#[derive(Serialize)]
+struct RequestWire<'a> {
+    scheme: &'a str,
+    method: &'a str,
+    path: &'a str,
+    query: Option<&'a str>,
+    headers: &'a [(String, String)],
+    #[serde(serialize_with = "byte_string")]
+    body: &'a [u8],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_cert: Option<CertWire<'a>>,
+}
+
+#[derive(Serialize)]
+struct CertWire<'a> {
+    sha256: &'a str,
+    #[serde(serialize_with = "byte_string")]
+    der: &'a [u8],
+}
+
+/// A response as its envelope carries it.
+#[derive(Serialize)]
+struct ResponseWire<'a> {
+    status: u16,
+    headers: &'a [(String, String)],
+    #[serde(serialize_with = "byte_string")]
+    body: &'a [u8],
+}
+
+/// Bytes as a CBOR byte string.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `serialize_with` passes a reference.
+fn byte_string<S: serde::Serializer>(v: &&[u8], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bytes(v)
+}
+
+/// `value` in CBOR as an envelope of `schema`, in a buffer made for its
+/// `body` bytes and the rest.
+fn encode<T: Serialize>(value: &T, body: usize, schema: &str) -> Envelope {
+    let mut out = Vec::with_capacity(body + 512);
+    // Writing to a Vec cannot fail, and these types always serialize.
+    let _ = ciborium::into_writer(value, &mut out);
+    Envelope::new("application/cbor", out).with_schema(schema)
+}
+
+/// A request's or response's CBOR.
+fn decode(body: &[u8]) -> Option<Value> {
+    ciborium::from_reader(body).ok()
+}
+
+/// The byte string at `name` in the map `value`, moved out of it (empty
+/// for none).
+fn take_bytes(value: &mut Value, name: &str) -> Vec<u8> {
+    let Value::Map(map) = value else {
+        return Vec::new();
+    };
+    map.iter_mut()
+        .find(|(k, _)| k.as_text() == Some(name))
+        .and_then(|(_, v)| match v {
+            Value::Bytes(b) => Some(std::mem::take(b)),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// An HTTP response.
@@ -253,17 +295,12 @@ impl Response {
     /// The response as the envelope the node expects.
     #[must_use]
     pub fn to_envelope(&self) -> Envelope {
-        let headers = self
-            .headers
-            .iter()
-            .map(|(k, v)| Value::Array(vec![text(k), text(v)]))
-            .collect();
-        let map = vec![
-            (text("status"), Value::Integer(self.status.into())),
-            (text("headers"), Value::Array(headers)),
-            (text("body"), Value::Bytes(self.body.clone())),
-        ];
-        encode(&Value::Map(map), RESPONSE_SCHEMA)
+        let wire = ResponseWire {
+            status: self.status,
+            headers: &self.headers,
+            body: &self.body,
+        };
+        encode(&wire, self.body.len(), RESPONSE_SCHEMA)
     }
 
     /// The response an envelope carries, if it is one (for tests).
@@ -272,17 +309,15 @@ impl Response {
         if msg.schema.as_deref() != Some(RESPONSE_SCHEMA) {
             return None;
         }
-        let value: Value = ciborium::from_reader(msg.body.as_slice()).ok()?;
+        let mut value = decode(&msg.body)?;
+        let body = take_bytes(&mut value, "body");
         let map = value.as_map()?;
         Some(Self {
             status: field(map, "status")
                 .and_then(Value::as_integer)
                 .and_then(|i| u16::try_from(i).ok())?,
             headers: pairs(field(map, "headers")),
-            body: field(map, "body")
-                .and_then(Value::as_bytes)
-                .cloned()
-                .unwrap_or_default(),
+            body,
         })
     }
 }
@@ -306,7 +341,28 @@ impl Response {
                     .body(msg.body.clone()),
             );
         }
-        let value: Value = ciborium::from_reader(msg.body.as_slice()).ok()?;
+        Self::from_reply_format(&msg.body)
+    }
+
+    /// [`Response::from_reply`], taking the reply: a body not in the
+    /// response format is moved, not copied (ROADMAP PF1).
+    #[must_use]
+    pub fn from_reply_owned(msg: Envelope) -> Option<Self> {
+        if msg.schema.as_deref() != Some(RESPONSE_SCHEMA) {
+            return Some(
+                Self::new(200)
+                    .header("content-type", msg.content_type)
+                    .body(msg.body),
+            );
+        }
+        Self::from_reply_format(&msg.body)
+    }
+
+    /// A reply in the response format, its body moved out of the decoded
+    /// map.
+    fn from_reply_format(body: &[u8]) -> Option<Self> {
+        let mut value = decode(body)?;
+        let body = take_bytes(&mut value, "body");
         let map = value.as_map()?;
         let status = field(map, "status")
             .and_then(Value::as_integer)
@@ -328,10 +384,7 @@ impl Response {
         Some(Self {
             status,
             headers,
-            body: field(map, "body")
-                .and_then(Value::as_bytes)
-                .cloned()
-                .unwrap_or_default(),
+            body,
         })
     }
 }

@@ -226,7 +226,7 @@ fn app_end____node_writes_more_than_the_ring____app_reads_it_all(#[case] spin: D
 #[case::spinning(Duration::from_micros(20))]
 #[case::sleeping(Duration::ZERO)]
 fn app_end____app_writes_more_than_the_ring____node_reads_it_all(#[case] spin: Duration) {
-    let (app, _bell, _door) = app_end(spin);
+    let (app, _bell, door) = app_end(spin);
     let data = pattern(4 * RING_CAP + 17);
     let writer = {
         let (app, data) = (app.clone(), data.clone());
@@ -241,7 +241,7 @@ fn app_end____app_writes_more_than_the_ring____node_reads_it_all(#[case] spin: D
     while got.len() < data.len() {
         let n = ring.read(&mut buf).unwrap();
         got.extend_from_slice(&buf[..n]);
-        wake_writer(ring.writer_waiting());
+        wake_writer(ring.writer_waiting(), door.as_fd());
         if n == 0 {
             std::thread::yield_now();
         }
@@ -417,4 +417,151 @@ fn app_end____waiting_for_a_callback_without_the_hint____spins_first() {
 #[test]
 fn app_end____waiting_for_an_answer_after_an_idle_hint____spins_first() {
     assert!(!sleeps_at_once(true, false));
+}
+
+#[test]
+fn ring_read_into____across_the_wrap____appends_after_what_was_there() {
+    let (channel, _fd) = Channel::create().unwrap();
+    let ring = channel.to_app();
+    ring.write(&pattern(RING_CAP - 100)).unwrap();
+    ring.read(&mut vec![0; RING_CAP - 100]).unwrap();
+    let data = pattern(5_000);
+    ring.write(&data).unwrap();
+    let mut out = b"kept".to_vec();
+
+    let n = ring.read_into(&mut out, usize::MAX).unwrap();
+
+    assert_eq!(n, data.len());
+    assert_eq!(&out[..4], b"kept");
+    assert_eq!(&out[4..], &data[..]);
+    assert!(!ring.is_readable());
+}
+
+#[test]
+fn ring_read_into____at_most_max____rest_left() {
+    let (channel, _fd) = Channel::create().unwrap();
+    let ring = channel.to_app();
+    ring.write(b"0123456789").unwrap();
+    let mut out = Vec::new();
+
+    let n = ring.read_into(&mut out, 4).unwrap();
+
+    assert_eq!((n, out.as_slice()), (4, &b"0123"[..]));
+    assert_eq!(ring.available(), Ok(6));
+}
+
+#[test]
+fn ring_read_into____writer_claims_more_than_the_ring_holds____corrupt_and_nothing_added() {
+    let (channel, _fd) = Channel::create().unwrap();
+    let ring = channel.to_node();
+    ring.word64(TAIL)
+        .store(RING_CAP as u64 + 1, Ordering::Release);
+    let mut out = b"kept".to_vec();
+
+    let read = ring.read_into(&mut out, usize::MAX);
+
+    assert_eq!(read, Err(Corrupt));
+    assert_eq!(out, b"kept");
+}
+
+#[test]
+fn create____features____the_node_wakes_writers_through_the_door() {
+    let (channel, _fd) = Channel::create().unwrap();
+
+    let features = channel.to_node().features();
+
+    assert_eq!(features & DOOR_WAKES_WRITER, DOOR_WAKES_WRITER);
+}
+
+#[test]
+fn app_end_door_wakes_writer____a_channel_from_an_older_node____false() {
+    let (app, _bell, _door) = app_end(DEFAULT_SPIN);
+    let before = app.door_wakes_writer();
+    app.channel
+        .to_node()
+        .word32(FEATURES)
+        .store(0, Ordering::SeqCst);
+
+    let after = app.door_wakes_writer();
+
+    assert!(before);
+    assert!(!after);
+}
+
+#[test]
+fn wake_writer____app_waits_on_its_door_for_room____a_byte_on_the_door() {
+    let (app, _bell, door) = app_end(DEFAULT_SPIN);
+    let ring = app.channel.to_node();
+    ring.write(&pattern(RING_CAP)).unwrap();
+    let armed = app.arm_writer();
+    ring.read(&mut [0; 16]).unwrap();
+
+    wake_writer(ring.writer_waiting(), door.as_fd());
+
+    rustix::fs::fcntl_setfl(app.door(), rustix::fs::OFlags::NONBLOCK).unwrap();
+    let got = rustix::io::read(app.door(), &mut [0; 8]);
+    assert!(armed);
+    assert_eq!(got, Ok(1));
+    assert_eq!(ring.writer_waiting().load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn app_end_arm_writer____room_already____false_and_nothing_said() {
+    let (app, _bell, _door) = app_end(DEFAULT_SPIN);
+
+    let armed = app.arm_writer();
+
+    assert!(!armed);
+    assert_eq!(
+        app.channel
+            .to_node()
+            .writer_waiting()
+            .load(Ordering::SeqCst),
+        0
+    );
+}
+
+#[test]
+fn app_end_try_write_to_node____ring_full____writes_what_fits_then_nothing() {
+    let (app, _bell, _door) = app_end(DEFAULT_SPIN);
+    let data = pattern(RING_CAP + 10);
+
+    let first = app.try_write_to_node(&data).unwrap();
+    let second = app.try_write_to_node(&data[first..]).unwrap();
+
+    assert_eq!((first, second), (RING_CAP, 0));
+    assert!(!app.has_room_to_node());
+}
+
+/// As [`sleeps_at_once`], for the rest of a frame: whether the reader
+/// goes to sleep within 2 s, between callbacks after an idle hint.
+fn rest_sleeps_at_once() -> bool {
+    let (app, _bell, door) = app_end(Duration::from_secs(10));
+    let ring = app.channel.to_app();
+    ring.idle_hint().store(1, Ordering::SeqCst);
+    app.set_between(true);
+    let reader = {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0; 8];
+            app.read_rest_from_node(&mut buf).unwrap()
+        })
+    };
+    let started = std::time::Instant::now();
+    while ring.reader_waiting().load(Ordering::SeqCst) == 0
+        && started.elapsed() < Duration::from_millis(200)
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let asleep = ring.reader_waiting().load(Ordering::SeqCst) == 1;
+
+    ring.write(b"frame").unwrap();
+    wake_reader(ring.reader_waiting(), door.as_fd());
+    assert_eq!(reader.join().unwrap(), 5);
+    asleep
+}
+
+#[test]
+fn app_end_read_rest_from_node____after_an_idle_hint____spins_first() {
+    assert!(!rest_sleeps_at_once());
 }

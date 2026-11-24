@@ -13,6 +13,13 @@
 //! as [`crate::channel::Spin::block_until`] waits on it in a blocking
 //! read.
 //!
+//! A frame that does not fit in the ring is not waited for: what does not
+//! fit is queued, and the pump writes it as the node makes room, waking on
+//! the door for room as for answers (ROADMAP PF1). A 1 MiB request through
+//! a 64 KiB ring otherwise held the thread, and every connection on it,
+//! until the node had read it. Against a node that does not wake writers
+//! through the door, writes block as before.
+//!
 //! One thread only (`!Send`): a current-thread runtime, a `LocalSet`.
 
 use std::cell::RefCell;
@@ -32,8 +39,11 @@ use crate::channel::Spin;
 use crate::protocol::{self, Answer, CallError, CastError, Envelope, Pid, Request, ToApp};
 use crate::sender::{Sender, gone, protocol_error, unexpected_frame};
 
-/// The bytes read from the ring at a time.
+/// The room `partial` starts with: a ring's worth.
 const CHUNK: usize = 64 << 10;
+/// The longest `partial` kept between answers: room for one carrying a
+/// 1 MiB body.
+const KEPT_PARTIAL: usize = 2 << 20;
 
 /// A sender channel whose calls are awaited (spike S41).
 #[derive(Debug, Clone)]
@@ -64,12 +74,11 @@ struct Core {
 #[derive(Debug)]
 struct State {
     sender: Sender,
-    /// Bytes read from the ring from `start` on, not decoded yet.
+    /// Bytes read from the ring from `start` on, not decoded yet: read
+    /// into its spare capacity, never zeroed first (zeroing a 64 KiB chunk
+    /// at each look cost a sixth of a driver's CPU on a Raspberry Pi 5,
+    /// S41).
     partial: Vec<u8>,
-    /// Where the ring is read into, zeroed once: growing `partial` by a
-    /// zeroed chunk at each look cost a 64 KiB `memset` per look, a
-    /// sixth of a driver's CPU on a Raspberry Pi 5 (S41).
-    chunk: Box<[u8]>,
     start: usize,
     /// Calls in flight by id.
     slots: HashMap<u64, Slot>,
@@ -90,7 +99,8 @@ impl AsyncSender {
     ///
     /// The door could not be made non-blocking or registered with the
     /// current runtime's reactor (call within a runtime).
-    pub fn new(sender: Sender) -> io::Result<Self> {
+    pub fn new(mut sender: Sender) -> io::Result<Self> {
+        sender.set_queued();
         let door = sender.end.door();
         rustix::fs::fcntl_setfl(door, rustix::fs::OFlags::NONBLOCK)?;
         // SAFETY: the door is the sender's open descriptor, and the sender
@@ -106,7 +116,6 @@ impl AsyncSender {
                 state: RefCell::new(State {
                     sender,
                     partial: Vec::with_capacity(CHUNK),
-                    chunk: vec![0; CHUNK].into_boxed_slice(),
                     start: 0,
                     slots: HashMap::new(),
                 }),
@@ -283,6 +292,8 @@ impl AsyncSender {
             .borrow_mut()
             .sender
             .metric_add(metric, delta);
+        // Queued behind a large frame, it goes when the pump writes.
+        self.core.work.notify_one();
     }
 
     /// Calls in flight.
@@ -296,19 +307,20 @@ impl AsyncSender {
     pub async fn pump(self) {
         let core = self.core;
         loop {
-            let waiting = {
+            let (waiting, queued) = {
                 let mut state = core.state.borrow_mut();
+                let queued = state.sender.flush_queue();
                 state.drain();
-                state.unanswered()
+                (state.unanswered(), queued)
             };
-            if !waiting {
+            if !waiting && !queued {
                 core.work.notified().await;
                 continue;
             }
-            if !core.spin.is_zero() && spin(&core).await {
+            if !core.spin.is_zero() && spin(&core, queued).await {
                 continue;
             }
-            if !core.state.borrow().sender.end.arm_reader() {
+            if !arm(&core, waiting, queued) {
                 continue;
             }
             match core.door.readable().await {
@@ -325,18 +337,46 @@ impl AsyncSender {
                 }
                 Err(e) => protocol_error(&format!("door: {e}")),
             }
-            core.state.borrow().sender.end.disarm_reader();
+            let state = core.state.borrow();
+            state.sender.end.disarm_reader();
+            state.sender.end.disarm_writer();
         }
     }
 }
 
+/// Say the pump sleeps until the door wakes it: for an answer while one
+/// is `waiting`, for room while frames are `queued`. `false`, and nothing
+/// said, when there is something to do already.
+fn arm(core: &Core, waiting: bool, queued: bool) -> bool {
+    let state = core.state.borrow();
+    let end = &state.sender.end;
+    if waiting && !end.arm_reader() {
+        return false;
+    }
+    if queued && !end.arm_writer() {
+        end.disarm_reader();
+        return false;
+    }
+    true
+}
+
+/// The bytes still to come of the frame `have` starts, once its length
+/// prefix is in; `None` before it, or for a length the frame check will
+/// refuse.
+fn frame_room(have: &[u8]) -> Option<usize> {
+    let prefix = <[u8; 4]>::try_from(have.get(..4)?).ok()?;
+    let len = protocol::frame_len(prefix).ok()?;
+    (4 + len).checked_sub(have.len())
+}
+
 /// Spin for the budget, yielding to the thread's other tasks; whether the
-/// node wrote meanwhile.
-async fn spin(core: &Core) -> bool {
+/// node wrote meanwhile, or made room for what is `queued`.
+async fn spin(core: &Core, queued: bool) -> bool {
     let start = Instant::now();
     while start.elapsed() < core.spin {
         tokio::task::yield_now().await;
-        if core.state.borrow().sender.end.is_readable() {
+        let state = core.state.borrow();
+        if state.sender.end.is_readable() || queued && state.sender.end.has_room_to_node() {
             return true;
         }
     }
@@ -365,13 +405,24 @@ impl State {
             while let Some(frame) = self.take_frame() {
                 self.answer(frame);
             }
-            if self.start > 0 && self.start * 2 >= self.partial.len() {
+            if self.start > 0 && self.start == self.partial.len() {
+                self.partial.clear();
+                self.start = 0;
+                // A large answer's buffer is not kept for the thread's life.
+                if self.partial.capacity() > KEPT_PARTIAL {
+                    self.partial = Vec::with_capacity(CHUNK);
+                }
+            } else if self.start > 0 && self.start * 2 >= self.partial.len() {
                 self.partial.drain(..self.start);
                 self.start = 0;
             }
-            match self.sender.end.try_read_from_node(&mut self.chunk) {
+            // A large frame's whole length at once, once its prefix is in.
+            if let Some(want) = frame_room(&self.partial[self.start..]) {
+                self.partial.reserve(want);
+            }
+            match self.sender.end.try_read_into_from_node(&mut self.partial) {
                 Ok(Some(0)) => gone(),
-                Ok(Some(n)) => self.partial.extend_from_slice(&self.chunk[..n]),
+                Ok(Some(_)) => {}
                 Ok(None) => return,
                 Err(e) => protocol_error(&e.to_string()),
             }
