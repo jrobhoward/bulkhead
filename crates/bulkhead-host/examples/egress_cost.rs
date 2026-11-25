@@ -50,6 +50,8 @@ use http_body_util::Full;
 const LONG: Duration = Duration::from_secs(60);
 
 fn main() {
+    // As `bulkhead node` does (ROADMAP PF1b).
+    let _ = bulkhead_native::memory::keep_freed_memory(bulkhead_native::memory::FOR_NODE);
     let n: usize = std::env::args()
         .nth(1)
         .map_or(5_000, |a| a.parse().expect("requests: a number"));

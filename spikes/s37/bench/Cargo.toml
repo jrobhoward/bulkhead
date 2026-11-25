@@ -7,6 +7,8 @@ publish = false
 [dependencies]
 bulkhead-bundle = { path = "../../../crates/bulkhead-bundle" }
 bulkhead-host = { path = "../../../crates/bulkhead-host" }
+# The node's malloc thresholds, as `bulkhead node` sets them (ROADMAP PF1b).
+bulkhead-native = { path = "../../../crates/bulkhead-native" }
 # The node's former ingress (src/node_ingress.rs), S37's baseline.
 bytes = "1"
 ciborium = "0.2"

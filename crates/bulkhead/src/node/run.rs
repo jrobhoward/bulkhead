@@ -20,6 +20,11 @@ use super::{LogFormat, LogRing, Node, NodeConfig, RingLayer};
 /// A bad configuration, a node that cannot open (see [`Node::open`]),
 /// or an admin socket that cannot be served.
 pub fn run(config: &Path) -> anyhow::Result<()> {
+    // Before any thread starts: freed buffers under 4 MiB are reused
+    // rather than faulted in again (`memory::FOR_NODE`, ROADMAP PF1b),
+    // unless the unit's environment sets glibc's thresholds itself
+    // (OPERATIONS.md).
+    let kept = bulkhead_native::memory::keep_freed_memory(bulkhead_native::memory::FOR_NODE);
     let config = NodeConfig::from_file(config)?;
     fence(config.debuggable)?;
     let ring = LogRing::new(10_000);
@@ -55,6 +60,15 @@ pub fn run(config: &Path) -> anyhow::Result<()> {
                 .with_filter(filter_fn(|meta| meta.target() == RingLayer::TARGET)),
         )
         .init();
+    match kept {
+        bulkhead_native::memory::Kept::Environment => {
+            tracing::info!("glibc's malloc thresholds come from the environment");
+        }
+        bulkhead_native::memory::Kept::Refused => {
+            tracing::warn!("glibc refused the malloc thresholds")
+        }
+        _ => {}
+    }
     if let Err(error) = bulkhead_host::probe_registration() {
         tracing::warn!(%error, "probes not registered: tracers will not see this node's until it restarts");
     }

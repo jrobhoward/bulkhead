@@ -22,6 +22,7 @@ default = ["node", "http", "tls", "sql", "egress", "probes"]
 # no optional capability: no HTTP ingress, no probes, no Modbus.
 node = [
     "dep:bulkhead-host",
+    "dep:bulkhead-native",
     "dep:bulkhead-priv-wire",
     "dep:ring",
     "dep:tracing",
@@ -61,6 +62,8 @@ ring = { workspace = true, optional = true }
 bulkhead-bundle = { workspace = true }
 bulkhead-keys = { workspace = true }
 bulkhead-host = { workspace = true, optional = true }
+# The node's malloc thresholds at its start (ROADMAP PF1b).
+bulkhead-native = { workspace = true, optional = true }
 bulkhead-priv-wire = { workspace = true, optional = true }
 rustbridge-bundle = { workspace = true }
 rustyline = { workspace = true }

@@ -3449,13 +3449,64 @@ Both machines at once, `scripts/overnight.sh`, three rounds, uncontended. "800 i
 - **A 64 KiB body between instances takes 35 to 38 µs on the Pi,** against about 110 µs on 16 cores: the second piece's wait that costs the 16-core machine (PF1b) costs the Pi little, as its wakes have no C-state tail.
 - **Today's before rows are above 2026-11-23's** for the 1 MiB `POST` on one connection (14.3 to 14.9 ms of CPU against 11.7 to 12.1); not looked into.
 
+## 2026-11-24: the node keeps freed memory (PF1b)
+
+**What was found.** A profile of `native_cost`'s large rows on the Raspberry Pi 5 (`perf record -a`): the node's threads took half of all samples, and half of theirs were in the kernel, zeroing pages (`clear_page`), faulting them in (`el0_da`) and unmapping them (`zap_present_ptes`); the rest mostly `memcpy`. PF1 had the apps keep freed memory and left the node on glibc's defaults. With the thresholds raised for the node through `GLIBC_TUNABLES`, a 1 MiB body between instances took 1.7 ms against 2.7.
+
+**The change.** `bulkhead node` sets glibc's thresholds at start (`bulkhead_native::memory::FOR_NODE`): blocks under 4 MiB come from the arenas, and each arena keeps up to 8 MiB free at its top. The benchmark harnesses (`native_cost`, `egress_cost`, `sql_cost`, S37's node) set the same. A trim threshold of 4 MiB set from code gained a third to two thirds of what 8 MiB did, by run: `strace` counted about 1,200 `madvise(MADV_DONTNEED)` calls of 4 MiB from one of the node's threads in one run of the rows. Set through the environment, 4 MiB had looked as good as 32, so the sweep was redone through `mallopt` (one run each, twice):
+
+| node's thresholds (mmap, trim) | 1 MiB from the host | 1 MiB between instances |
+| --- | --- | --- |
+| glibc's defaults | 1.3 ms, 2.02 to 2.10 ms CPU | 2.84 to 2.98 ms, 3.82 to 4.08 ms CPU |
+| 4 MiB, 4 MiB | 0.91 to 1.2 ms, 1.50 to 1.96 ms | 2.02 to 2.58 ms, 2.84 to 3.60 ms |
+| 4 MiB, 8 MiB | 0.79 to 0.80 ms, 1.28 ms | 1.64 to 1.71 ms, 2.30 to 2.39 ms |
+| 4 MiB, 16 MiB | 0.74 to 0.78 ms, 1.22 to 1.24 ms | 1.61 to 1.69 ms, 2.26 to 2.36 ms |
+| 32 MiB, 32 MiB | 0.80 ms, 1.26 to 1.28 ms | 1.65 to 1.72 ms, 2.30 to 2.34 ms |
+
+**Measured.** The commit before and the change, alternating, three rounds each, as PF1's rows. On the Raspberry Pi 5 (load 0.44 at the start):
+
+| | before | after |
+| --- | --- | --- |
+| `native_cost` 1 MiB body between instances: time, CPU per call | 2.46 to 2.69 ms, 3.46 to 3.75 ms | 1.64 to 1.71 ms, 2.29 to 2.38 ms |
+| `native_cost` 1 MiB body from the host | 1.3 ms, 2.12 ms | 0.77 to 0.78 ms, 1.24 to 1.26 ms |
+| S37 `POST` 1 MiB, 1 connection: per second, p50, CPU per request | 121 to 122, 8.16 to 8.36 ms, 10.5 to 10.6 ms | 139 to 141, 7.08 to 7.22 ms, 8.92 to 9.12 ms |
+| S37 `POST` 1 MiB, 32 connections | 106 to 108, 285 to 292 ms, 31.9 to 32.6 ms | 109 to 110, 281 to 293 ms, 31.5 to 31.6 ms |
+| `egress_cost` HTTP `GET` 1 MiB: p50, CPU per request | 6.36 to 6.59 ms, 8.78 to 9.08 ms | 5.65 to 5.83 ms, 7.74 to 7.94 ms |
+
+- **A 1 MiB body between instances takes a third less time and CPU,** and from the host 40% less; it stays 4.2 to 4.4 times S42's floor (0.39 ms), the rest mostly copies.
+- **Through the drivers:** 14% less CPU for a 1 MiB `POST` on one connection, 11 to 12% for an egress `GET` of 1 MiB; 32 connections gain little, where the driver's own threads and the load client bound the row.
+- **The small rows** (64 KiB between instances, 2-byte egress requests, 64 KiB `POST`s) are unchanged within their noise.
+
+On the 16-core machine, with the change's first form (trim threshold 4 MiB, before the sweep above raised it to 8), three rounds alternating before another job loaded the machine; not rerun at 8 MiB:
+
+| | before | after (4 MiB, 4 MiB) |
+| --- | --- | --- |
+| `native_cost` 1 MiB body between instances | 1.39 to 1.44 ms | 1.14 to 1.17 ms |
+| `native_cost` 1 MiB body from the host | 0.93 to 1.1 ms | 0.56 to 0.57 ms |
+| `egress_cost` HTTP `GET` 1 MiB: p50, CPU per request, per second | 4.73 to 5.68 ms, 6.36 to 8.00 ms, 175 to 207 | 3.32 to 3.67 ms, 5.20 to 5.54 ms, 276 to 300 |
+
+- **Egress 1 MiB is back near the node's own pool before DA4** (3.4 ms p50, 2026-11-15): the 1.6 to 2.8 ms the driver added, which PF1 left unchanged, is within this row's noise of none, so PF1's target of halving it is met here. Most of it was the node's page faults, not the driver.
+- **S37's `POST` rows are unchanged** on this machine.
+
+The DR node's memory (ROADMAP DR3b), an hour each of `bulkhead-soak dr --seed 2411 --slow-writes` on the 16-core machine, one after another while another job loaded it (load 8 to 11, which does not bear on memory); all three passed. The DR node's resident memory every 10 minutes, MiB:
+
+| | after warm-up | 10 min | 20 | 30 | 40 | 50 | 60 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| before (glibc's defaults) | 28.4 | 38.7 | 39.7 | 43.7 | 45.5 | 49.2 | 51.1 |
+| the node's thresholds | 30.1 | 39.2 | 40.1 | 43.6 | 45.6 | 45.7 | 47.7 |
+| the node's thresholds, `MALLOC_ARENA_MAX=2` | 25.7 | 26.9 | 29.1 | 29.6 | 29.8 | 30.0 | 30.2 |
+
+- **The node's thresholds leave the growth as it was** (17.5 MiB against 22.7, one run each): it comes from the number of arenas glibc keeps (a new one when threads contend, up to eight per core), each holding its own free memory.
+- **Two arenas hold it to 4.5 MiB in the hour,** with no thresholds in the environment, so the node's own stay in force.
+- **What two arenas cost,** on the Raspberry Pi 5 (the change built, `MALLOC_ARENA_MAX=2` set and not, alternating, three rounds; apps start with an environment of their own, so only the node had it): `native_cost`, `egress_cost` and S37's `POST` rows within their noise, except 64 calls in flight from one sender thread, 72,690 to 94,847 calls a second against 92,323 to 103,046. Not measured on the 16-core machine.
+
 ## Not measured yet
 
 - Why a call from a sender thread takes about 5.3 µs longer than a callback's, on both machines (2026-11-23, ROADMAP AP1b).
 - Where one HTTP/2 stream's 50 to 75 µs over an HTTP/1.1 connection goes inside the driver; the load client's threads account for 5 to 10 µs of it (2026-11-23, ROADMAP PF2).
 - Why the egress driver on one thread read 3 to 15% above its own rows of an hour before on the Pi (2026-11-23).
 - Where the 1.6 to 2.8 ms a 1 MiB egress response costs more through its driver goes (DA4): S42 puts the rings' share at 0.4 to 0.9 ms; PF1's changes did not move it beyond the row's noise (2026-11-24).
-- Why a 1 MiB body between instances on the Raspberry Pi 5 takes 2.5 to 2.8 ms, seven times S42's floor of 0.39 ms for the same two crossings (2026-11-24, ROADMAP PF1b).
+- Why glibc's trim threshold of 4 MiB set through `GLIBC_TUNABLES` kept the node's pages where the same set through `mallopt` did not (2026-11-24, PF1b).
 - One blob read by several apps against the same bytes sent to each through the rings, and blobs on huge pages (S42).
 
 - The privileged helper on the 16-core machine (PS1c attributed the Pi's 2.7 µs to the `cpu` controller, which PS6b removed, 2026-11-19).

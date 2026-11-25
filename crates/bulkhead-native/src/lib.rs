@@ -8,6 +8,7 @@
 //! - [`hot`]: the most frequent of them in fixed layouts, beside CBOR.
 //! - [`snapshot`]: a published bucket's snapshot, which apps map and read.
 //! - [`preopens`]: where a native app finds its preopened directories.
+//! - [`memory`]: how much freed memory glibc keeps, for apps and the node.
 //! - `channel` (feature `channel`, Linux and FreeBSD): the shared-memory
 //!   rings they travel over, and the socket descriptors are passed on.
 //! - `freebsd` (feature `channel`, FreeBSD): system calls rustix lacks.
@@ -20,6 +21,7 @@
 
 pub mod driver;
 pub mod hot;
+pub mod memory;
 pub mod preopens;
 pub mod protocol;
 pub mod snapshot;

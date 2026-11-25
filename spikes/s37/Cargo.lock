@@ -1121,6 +1121,7 @@ version = "0.0.0"
 dependencies = [
  "bulkhead-bundle",
  "bulkhead-host",
+ "bulkhead-native",
  "bytes",
  "ciborium",
  "http-body-util",

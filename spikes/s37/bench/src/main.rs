@@ -56,6 +56,8 @@ fn manifest(name: &str, spec: serde_json::Value) -> AppManifest {
 }
 
 fn node(args: &[String]) {
+    // As `bulkhead node` does (ROADMAP PF1b).
+    let _ = bulkhead_native::memory::keep_freed_memory(bulkhead_native::memory::FOR_NODE);
     let runner = PathBuf::from(&args[0]);
     let app = PathBuf::from(&args[1]);
     let driver = PathBuf::from(&args[2]);

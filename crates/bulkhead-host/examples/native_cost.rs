@@ -54,6 +54,8 @@ fn release(name: &str) -> PathBuf {
 }
 
 fn main() {
+    // As `bulkhead node` does (ROADMAP PF1b).
+    let _ = bulkhead_native::memory::keep_freed_memory(bulkhead_native::memory::FOR_NODE);
     let workers: usize = std::env::args()
         .nth(1)
         .map_or(4, |a| a.parse().expect("workers"));

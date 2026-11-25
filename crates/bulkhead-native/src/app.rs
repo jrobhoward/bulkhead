@@ -246,38 +246,12 @@ fn with_conn<R>(f: impl FnOnce(&mut Conn) -> R) -> R {
     })
 }
 
-/// Most bytes glibc's allocator hands out from its arenas rather than a
-/// mapping of their own, and keeps free at the top of an arena before
-/// giving them back: 32 MiB, above the largest frame
-/// ([`protocol::MAX_FRAME`]).
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-const KEPT_BY_MALLOC: i32 = 32 << 20;
-
-/// Have glibc keep freed memory for the next allocation (ROADMAP PF1). By
-/// default it maps each block over about 128 KiB on its own and gives it
-/// back on free, and trims a thread's arena as soon as its top is free, so
-/// every large message faulted its pages in again: a 1 MiB request through
-/// the ingress driver spent most of its time in page faults and
-/// `madvise`. An app now keeps up to its peak use; what it frees is
-/// reused. FreeBSD's allocator (jemalloc) decays freed pages on its own.
+/// Have glibc keep freed memory for the next allocation, up to
+/// [`crate::memory::FOR_APP`] (ROADMAP PF1): an app keeps up to its peak use, and
+/// what it frees is reused rather than faulted in again.
 fn keep_freed_memory() {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    {
-        // glibc's `mallopt` parameters.
-        const M_TRIM_THRESHOLD: i32 = -1;
-        const M_MMAP_THRESHOLD: i32 = -3;
-        unsafe extern "C" {
-            fn mallopt(param: i32, value: i32) -> i32;
-        }
-        // SAFETY: `mallopt` only sets the allocator's parameters, before
-        // this process starts its other threads.
-        let ok = unsafe {
-            mallopt(M_MMAP_THRESHOLD, KEPT_BY_MALLOC) == 1
-                && mallopt(M_TRIM_THRESHOLD, KEPT_BY_MALLOC) == 1
-        };
-        if !ok {
-            eprintln!("bulkhead-native: the allocator's thresholds were refused");
-        }
+    if crate::memory::keep_freed_memory(crate::memory::FOR_APP) == crate::memory::Kept::Refused {
+        eprintln!("bulkhead-native: the allocator's thresholds were refused");
     }
 }
 

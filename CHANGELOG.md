@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- The node keeps freed memory too (ROADMAP PF1b): `bulkhead node` sets
+  glibc's mmap threshold to 4 MiB and its trim threshold to 8 MiB at start,
+  so its resident memory stays nearer its peak use and a 1 MiB body
+  between instances takes a third less time and CPU on a Raspberry Pi 5
+  (BASELINE.md, 2026-11-24). `MALLOC_MMAP_THRESHOLD_`,
+  `MALLOC_TRIM_THRESHOLD_` or a `GLIBC_TUNABLES` threshold in the node's
+  environment is left as set.
 - Large messages cost less (ROADMAP PF1): through the ingress driver a
   1 MiB request takes half the CPU and less than half the time on 16
   cores (a quarter less on a Raspberry Pi 5), and 64 KiB requests 12 to
